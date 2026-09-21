@@ -233,9 +233,7 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
         });
 
         const responseContent = response.choices[0]?.message?.content;
-        const responseText = typeof responseContent === "string"
-          ? responseContent
-          : responseContent?.map((part: any) => part.type === "text" ? part.text : "").join("") || "";
+        const responseText = typeof responseContent === "string" ? responseContent : "";
         const jsonText = responseText.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
         const parsed = JSON.parse(jsonText);
         if (Array.isArray(parsed.words)) {
