@@ -550,6 +550,7 @@ export function CaptionEditor({ videoFile, onBack, initialTemplate, initialProje
         }
         formData.append('filename', videoFile.name);
         formData.append('quality', options?.qualityLevel || 'ultra');
+        formData.append('fps', String(options?.fps || 30));
         if (videoRef.current?.duration) {
           formData.append('duration', String(videoRef.current.duration));
         }

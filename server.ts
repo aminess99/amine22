@@ -429,6 +429,10 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
       }
 
       const quality = req.body.quality || 'ultra';
+      const requestedFps = Number(req.body.fps);
+      const fps = Number.isFinite(requestedFps) && requestedFps >= 24 && requestedFps <= 60
+        ? Math.round(requestedFps)
+        : 30;
       let x264Preset = 'fast';
       let crf = '16';
       let audioBitrate = '320k';
@@ -447,7 +451,7 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
         audioBitrate = '192k';
       }
 
-      console.log(`Remuxing client canvas video for session: ${videoId} with quality: ${quality} (CRF ${crf}, preset ${x264Preset}, audio ${audioBitrate})`);
+      console.log(`Remuxing WYSIWYG video for session: ${videoId} at ${fps}fps with quality: ${quality} (CRF ${crf}, preset ${x264Preset}, audio ${audioBitrate})`);
 
       // 1. Probe exact duration of original video/audio so we never cut off any seconds
       let exactDuration = 0;
@@ -483,13 +487,19 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
         const outputOpts = [
           '-map 0:v:0',
           '-map 1:a:0?',
+          '-fflags +genpts',
+          '-vsync cfr',
+          `-r ${fps}`,
           '-c:v libx264',
           `-preset ${x264Preset}`,
           `-crf ${crf}`,
           '-pix_fmt yuv420p',
           '-c:a aac',
           `-b:a ${audioBitrate}`,
+          '-af aresample=async=1:first_pts=0',
+          ...(exactDuration > 0 ? ['-t', String(exactDuration)] : []),
           '-shortest',
+          '-avoid_negative_ts make_zero',
           '-movflags +faststart'
         ];
 
@@ -501,12 +511,16 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
         const outputOpts = [
           '-map 0:v:0',
           '-map 0:a:0?',
+          '-fflags +genpts',
+          '-vsync cfr',
+          `-r ${fps}`,
           '-c:v libx264',
           `-preset ${x264Preset}`,
           `-crf ${crf}`,
           '-pix_fmt yuv420p',
           '-c:a aac',
           `-b:a ${audioBitrate}`,
+          '-af aresample=async=1:first_pts=0',
           '-movflags +faststart'
         ];
 
