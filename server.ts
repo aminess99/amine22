@@ -481,6 +481,36 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
       console.log(`Target exact duration for export: ${exactDuration}s`);
 
       const command = ffmpeg(tempCanvasVideo);
+      let videoSyncFilter: string | null = null;
+
+      if (audioSourcePath && fs.existsSync(audioSourcePath)) {
+        try {
+          const streamStarts = await new Promise<{ video: number; audio: number }>((resolve) => {
+            ffmpeg.ffprobe(tempCanvasVideo, (videoErr, videoMetadata) => {
+              ffmpeg.ffprobe(audioSourcePath!, (audioErr, audioMetadata) => {
+                const videoStream = videoMetadata?.streams?.find((stream) => stream.codec_type === 'video');
+                const audioStream = audioMetadata?.streams?.find((stream) => stream.codec_type === 'audio');
+                resolve({
+                  video: !videoErr && videoStream?.start_time != null ? Number(videoStream.start_time) : 0,
+                  audio: !audioErr && audioStream?.start_time != null ? Number(audioStream.start_time) : 0,
+                });
+              });
+            });
+          });
+
+          const startDelta = streamStarts.video - streamStarts.audio;
+          // MediaRecorder can add a small video timestamp offset. Move only the
+          // rendered video when it starts later so the original audio stays pristine.
+          if (startDelta > 0.005) {
+            videoSyncFilter = `setpts=PTS-${startDelta.toFixed(6)}/TB`;
+            console.log(`Aligning rendered video ${Math.round(startDelta * 1000)}ms earlier to match original audio.`);
+          } else if (Math.abs(startDelta) > 0.005) {
+            console.log(`Audio/video start delta is ${Math.round(startDelta * 1000)}ms; preserving original audio timing.`);
+          }
+        } catch (syncProbeErr) {
+          console.warn("Could not measure audio/video start delta:", syncProbeErr);
+        }
+      }
 
       if (audioSourcePath && fs.existsSync(audioSourcePath)) {
         // Mux video from client canvas (0:v) + original pristine audio (1:a)
@@ -490,6 +520,7 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
           '-fflags +genpts',
           '-vsync cfr',
           `-r ${fps}`,
+          ...(videoSyncFilter ? ['-vf', videoSyncFilter] : []),
           '-c:v libx264',
           `-preset ${x264Preset}`,
           `-crf ${crf}`,
