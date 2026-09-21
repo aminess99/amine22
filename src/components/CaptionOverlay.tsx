@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
-import React, { useMemo } from 'react';
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '../lib/utils';
 import { CaptionSegment, CaptionWord, EditorSettings } from '../types';
 import { getWordEmoji } from '../lib/emojiMatcher';
@@ -55,6 +55,49 @@ export function CaptionOverlay({
     return segments.find(s => effectiveTime >= s.start - 0.15 && effectiveTime <= s.end + 0.35);
   }, [segments, effectiveTime]);
 
+  const safeAreaRef = useRef<HTMLDivElement>(null);
+  const fitContentRef = useRef<HTMLDivElement>(null);
+  const [captionScale, setCaptionScale] = useState(1);
+
+  // Keep the complete caption group on one visual line when the preview is
+  // small. Scale the group as a whole instead of letting individual words
+  // wrap into an unintended stacked layout.
+  useLayoutEffect(() => {
+    if (!activeSegment) {
+      setCaptionScale(1);
+      return;
+    }
+
+    const safeArea = safeAreaRef.current;
+    const fitContent = fitContentRef.current;
+    if (!safeArea || !fitContent) return;
+
+    const measure = () => {
+      const safeWidth = safeArea.getBoundingClientRect().width;
+      const styles = window.getComputedStyle(safeArea);
+      const horizontalPadding =
+        parseFloat(styles.paddingLeft || '0') + parseFloat(styles.paddingRight || '0');
+      const availableWidth = Math.max(1, safeWidth - horizontalPadding);
+      const naturalWidth = Math.max(1, fitContent.scrollWidth);
+      const nextScale = Math.min(1, availableWidth / naturalWidth);
+
+      setCaptionScale(prev => Math.abs(prev - nextScale) < 0.002 ? prev : nextScale);
+    };
+
+    measure();
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(measure)
+      : null;
+    resizeObserver?.observe(safeArea);
+    resizeObserver?.observe(fitContent);
+    window.addEventListener('resize', measure);
+
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [activeSegment?.id, settings.template, settings.fontFamily, settings.fontSize, segments.length]);
+
   if (!activeSegment) return null;
 
   // Calculate vertical position (percent from top)
@@ -68,6 +111,7 @@ export function CaptionOverlay({
       style={{ fontFamily: `"${settings.fontFamily || 'Cairo'}", sans-serif` }}
     >
       <div 
+        ref={safeAreaRef}
         className="w-full flex justify-center absolute left-0 right-0 px-3 sm:px-8 transition-transform duration-75"
         style={{
           top: `${currentPercent}%`,
@@ -76,12 +120,20 @@ export function CaptionOverlay({
       >
         <AnimatePresence mode="popLayout">
           <motion.div
+            ref={fitContentRef}
             key={activeSegment.id}
             initial={{ opacity: 0, y: 6, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -6, scale: 0.98 }}
             transition={{ duration: 0.12 }}
-            className="w-full flex justify-center cursor-grab active:cursor-grabbing pointer-events-auto select-none"
+            className="caption-fit-content w-full flex justify-center cursor-grab active:cursor-grabbing pointer-events-auto select-none"
+            style={{
+              width: 'max-content',
+              maxWidth: 'none',
+              flex: '0 0 auto',
+              transform: `scale(${captionScale})`,
+              transformOrigin: 'center center',
+            }}
             drag={Boolean(onPositionChange) ? "y" : false}
             dragConstraints={{ top: -220, bottom: 220 }}
             dragElastic={0.2}

@@ -69,6 +69,18 @@
 [class~="border-cyan-400"] { border: 1px solid #22d3ee; }
 [class~="shadow-2xl"] { box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.45); }
 
+.caption-fit-content .w-full {
+  width: max-content !important;
+}
+
+.caption-fit-content[class*="max-w-"] {
+  max-width: none !important;
+}
+
+.caption-fit-content .flex-wrap {
+  flex-wrap: nowrap !important;
+}
+
 @font-face {
   font-family: "Cairo";
   src: url("/fonts/Cairo.ttf") format("truetype");

@@ -112,3 +112,17 @@
   }
 }
 
+/* Keep caption words together when the video preview is displayed small.
+   The group scales as a unit instead of wrapping each word into its own row. */
+.caption-fit-content .w-full {
+  width: max-content !important;
+}
+
+.caption-fit-content[class*="max-w-"] {
+  max-width: none !important;
+}
+
+.caption-fit-content .flex-wrap {
+  flex-wrap: nowrap !important;
+}
+
