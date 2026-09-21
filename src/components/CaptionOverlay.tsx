@@ -25,15 +25,11 @@ export function getActiveWordIndex(words: CaptionWord[], effectiveTime: number, 
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
     const wStart = w.start;
-    const nextStart = i < words.length - 1 ? words[i + 1].start : w.end;
+    const wEnd = Math.max(wStart, w.end);
 
-    if (effectiveTime >= wStart && effectiveTime < nextStart) {
+    if (effectiveTime >= wStart && effectiveTime < wEnd) {
       return i;
     }
-  }
-
-  if (effectiveTime >= words[words.length - 1].start && effectiveTime < words[words.length - 1].end) {
-    return words.length - 1;
   }
 
   return -1;

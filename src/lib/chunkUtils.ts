@@ -45,28 +45,19 @@ export function rechunkSegments(
 }
 
 /**
- * Smart Auto-Align Timestamps:
- * Eliminates artificial pauses between words, ensures continuous smooth transitions,
- * and fixes Whisper timestamp drift for 100% speech-to-text synchronization.
+ * Normalizes word timestamps without adding a synthetic lead or shifting the
+ * transcript ahead of the audio. The original word timing remains authoritative.
  */
 export function autoAlignTimestamps(
   segments: CaptionSegment[],
-  leadOffset: number = -0.06
+  leadOffset: number = 0
 ): CaptionSegment[] {
   if (!segments || segments.length === 0) return [];
 
   return segments.map((seg) => {
-    const alignedWords: CaptionWord[] = seg.words.map((w, idx, arr) => {
+    const alignedWords: CaptionWord[] = seg.words.map((w) => {
       let start = Math.max(0, Number((w.start + leadOffset).toFixed(3)));
-      let end = Math.max(start + 0.18, Number((w.end + leadOffset).toFixed(3)));
-
-      // If next word exists in same segment and gap is less than 0.35s, bridge gap smoothly
-      if (idx < arr.length - 1) {
-        const nextStart = Math.max(0, Number((arr[idx + 1].start + leadOffset).toFixed(3)));
-        if (nextStart > start && nextStart - end <= 0.35) {
-          end = nextStart;
-        }
-      }
+      const end = Math.max(start + 0.05, Number((w.end + leadOffset).toFixed(3)));
 
       return {
         ...w,
