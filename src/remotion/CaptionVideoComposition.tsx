@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   AbsoluteFill,
   OffthreadVideo,
@@ -8,7 +8,8 @@ import {
   useVideoConfig,
 } from "remotion";
 import { CaptionSegment, EditorSettings } from "../types";
-import { drawCaptionsOnCanvas } from "../lib/canvasCaptionRenderer";
+import { CaptionOverlay } from "../components/CaptionOverlay";
+import "./captionOverlay.css";
 
 export interface CaptionVideoProps {
   videoUrl: string;
@@ -27,58 +28,62 @@ export const CaptionVideoComposition: React.FC<CaptionVideoProps> = ({
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const hasReleasedInitialRender = useRef(false);
   const [renderHandle] = useState(() => delayRender("Waiting for caption canvas"));
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     let cancelled = false;
 
-    const drawFrame = () => {
-      if (cancelled || !canvasRef.current) return;
+    const fontFiles: Record<string, string> = {
+      Cairo: "Cairo.ttf",
+      Tajawal: "Tajawal.ttf",
+      Almarai: "Almarai.ttf",
+      Rubik: "Rubik.ttf",
+      Anton: "Anton.ttf",
+      Montserrat: "Montserrat.ttf",
+      "Playfair Display": "PlayfairDisplay.ttf",
+      Cinzel: "Cinzel.ttf",
+      Inter: "Inter.ttf",
+      Roboto: "Roboto.ttf",
+      "Space Mono": "Space Mono.ttf",
+    };
 
-      const canvas = canvasRef.current;
-      const context = canvas.getContext("2d", {
-        alpha: true,
-        desynchronized: false,
-      });
+    const loadSelectedFont = async () => {
+      const fontFamily = (settings.fontFamily || "Cairo").trim();
+      const fontFile = fontFiles[fontFamily];
 
-      if (!context) {
-        if (!hasReleasedInitialRender.current) {
-          hasReleasedInitialRender.current = true;
-          continueRender(renderHandle);
+      if (fontFile && typeof FontFace !== "undefined") {
+        try {
+          const existingFont = Array.from(document.fonts).find(
+            (font) => font.family === fontFamily,
+          );
+          if (!existingFont) {
+            const font = new FontFace(
+              fontFamily,
+              `url("/fonts/${encodeURIComponent(fontFile)}")`,
+              { weight: "100 900" },
+            );
+            await font.load();
+            document.fonts.add(font);
+          }
+        } catch (fontError) {
+          console.warn(`Could not load Remotion font ${fontFamily}:`, fontError);
         }
-        return;
       }
 
-      canvas.width = width;
-      canvas.height = height;
-      context.clearRect(0, 0, width, height);
-      drawCaptionsOnCanvas(
-        context,
-        segments,
-        frame / fps,
-        settings,
-        width,
-        height,
-      );
-
-      if (!hasReleasedInitialRender.current) {
-        hasReleasedInitialRender.current = true;
+      await document.fonts.ready;
+      if (!cancelled) {
         continueRender(renderHandle);
       }
     };
 
-    if (document.fonts?.ready) {
-      document.fonts.ready.then(drawFrame).catch(drawFrame);
-    } else {
-      drawFrame();
-    }
+    loadSelectedFont().catch(() => {
+      if (!cancelled) continueRender(renderHandle);
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [frame, fps, height, renderHandle, segments, settings, width]);
+  }, [renderHandle, settings.fontFamily]);
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
@@ -92,15 +97,10 @@ export const CaptionVideoComposition: React.FC<CaptionVideoProps> = ({
           objectFit: "fill",
         }}
       />
-      <canvas
-        ref={canvasRef}
-        style={{
-          position: "absolute",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-          pointerEvents: "none",
-        }}
+      <CaptionOverlay
+        segments={segments}
+        currentTime={frame / fps}
+        settings={settings}
       />
     </AbsoluteFill>
   );

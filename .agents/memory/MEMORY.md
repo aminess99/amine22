@@ -1,0 +1,1 @@
+- [Shared caption renderer](shared-caption-renderer.md) — preview and Remotion export must use one caption component and font-loading contract.
