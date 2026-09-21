@@ -3,6 +3,10 @@ import { CaptionSegment, CaptionWord } from '../types';
 /**
  * Re-groups all caption segments into customized chunk sizes
  * (e.g. 1 word per chunk for TikTok fast pacing, 2-3 words, or 5-8 words).
+ *
+ * Caption groups are inferred from punctuation and meaningful pauses. A final
+ * one-word orphan is rebalanced with the previous group whenever possible,
+ * without merging words across an inferred sentence boundary.
  */
 export function rechunkSegments(
   segments: CaptionSegment[],
@@ -23,22 +27,68 @@ export function rechunkSegments(
   // Sort by start timestamp
   allWords.sort((a, b) => a.start - b.start);
 
-  const newSegments: CaptionSegment[] = [];
   const chunkSize = Math.max(1, wordsPerChunk);
+  const newSegments: CaptionSegment[] = [];
 
-  for (let i = 0; i < allWords.length; i += chunkSize) {
-    const chunkWords = allWords.slice(i, i + chunkSize);
-    if (chunkWords.length === 0) continue;
+  const isSentenceEnding = (text: string) => /[.!?؟。！？]\s*$/.test(text.trim());
+  const isBoundary = (previous: CaptionWord, current: CaptionWord) => {
+    const pauseDuration = Math.max(0, current.start - previous.end);
+    return isSentenceEnding(previous.text) || previous.text.includes('\n') || pauseDuration >= 0.45;
+  };
 
-    const start = chunkWords[0].start;
-    const end = chunkWords[chunkWords.length - 1].end;
+  const sentenceGroups: CaptionWord[][] = [];
+  let currentGroup: CaptionWord[] = [];
 
-    newSegments.push({
-      id: `chunk_${i}_${Math.random().toString(36).substring(7)}`,
-      start,
-      end,
-      words: chunkWords,
-    });
+  for (const word of allWords) {
+    const previousWord = currentGroup[currentGroup.length - 1];
+    if (previousWord && isBoundary(previousWord, word)) {
+      sentenceGroups.push(currentGroup);
+      currentGroup = [];
+    }
+    currentGroup.push(word);
+  }
+  if (currentGroup.length > 0) {
+    sentenceGroups.push(currentGroup);
+  }
+
+  const getChunkSizes = (totalWords: number): number[] => {
+    if (totalWords <= chunkSize) return [totalWords];
+
+    const sizes: number[] = [];
+    let remaining = totalWords;
+
+    while (remaining > 0) {
+      if (remaining === 1 && sizes.length > 0 && sizes[sizes.length - 1] > 1) {
+        sizes[sizes.length - 1] -= 1;
+        sizes.push(2);
+        remaining = 0;
+        break;
+      }
+
+      const size = Math.min(chunkSize, remaining);
+      sizes.push(size);
+      remaining -= size;
+    }
+
+    return sizes;
+  };
+
+  for (const group of sentenceGroups) {
+    const chunkSizes = getChunkSizes(group.length);
+    let cursor = 0;
+
+    for (const size of chunkSizes) {
+      const chunkWords = group.slice(cursor, cursor + size);
+      cursor += size;
+      if (chunkWords.length === 0) continue;
+
+      newSegments.push({
+        id: `chunk_${newSegments.length}_${Math.random().toString(36).substring(7)}`,
+        start: chunkWords[0].start,
+        end: chunkWords[chunkWords.length - 1].end,
+        words: chunkWords,
+      });
+    }
   }
 
   return newSegments;
