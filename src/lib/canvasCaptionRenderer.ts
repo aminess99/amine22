@@ -35,19 +35,19 @@ function drawRoundRect(
  */
 function getActiveWordIndex(words: CaptionWord[], effectiveTime: number, segmentStart: number): number {
   if (!words || words.length === 0) return -1;
-  if (effectiveTime < segmentStart - 0.06) return -1;
+  if (effectiveTime < segmentStart) return -1;
 
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
-    const wStart = w.start - 0.05; // 50ms natural acoustic lead
-    const nextStart = i < words.length - 1 ? words[i + 1].start - 0.05 : w.end + 0.25;
+    const wStart = w.start;
+    const nextStart = i < words.length - 1 ? words[i + 1].start : w.end;
 
     if (effectiveTime >= wStart && effectiveTime < nextStart) {
       return i;
     }
   }
 
-  if (effectiveTime >= words[words.length - 1].start - 0.05) {
+  if (effectiveTime >= words[words.length - 1].start && effectiveTime < words[words.length - 1].end) {
     return words.length - 1;
   }
 
