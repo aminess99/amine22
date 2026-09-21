@@ -2,7 +2,6 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import multer from "multer";
 import OpenAI from "openai";
-import { GoogleGenAI, Type } from "@google/genai";
 import fs from "fs";
 import path from "path";
 import dotenv from "dotenv";
@@ -39,17 +38,17 @@ try {
 // Safe derivation of directory path for both tsx (ESM) and esbuild CJS bundle
 const currentDirname = typeof __dirname !== "undefined" ? __dirname : process.cwd();
 
-// Shared Gemini AI Client instance
-const getGeminiClient = () => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey === "MY_GEMINI_API_KEY") return null;
-  return new GoogleGenAI({
+// OpenRouter uses the OpenAI-compatible API and keeps provider/model selection configurable.
+const getOpenRouterClient = () => {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey || apiKey === "MY_OPENROUTER_API_KEY") return null;
+  return new OpenAI({
     apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      }
-    }
+    baseURL: "https://openrouter.ai/api/v1",
+    defaultHeaders: {
+      "HTTP-Referer": process.env.APP_URL || "https://replit.com",
+      "X-Title": "AI Video Captioner",
+    },
   });
 };
 
@@ -157,13 +156,11 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
         return res.status(400).json({ error: "لم يتم تقديم ملف فيديو." });
       }
 
-      const geminiClient = getGeminiClient();
-      const openAiKey = process.env.OPENAI_API_KEY;
-      const hasOpenAi = openAiKey && openAiKey !== "MY_OPENAI_API_KEY";
+      const openRouterClient = getOpenRouterClient();
 
-      if (!geminiClient && !hasOpenAi) {
+      if (!openRouterClient) {
         return res.status(400).json({
-          error: "مفتاح الذكاء الاصطناعي غير متوفر. يرجى التأكد من ضبط GEMINI_API_KEY أو OPENAI_API_KEY في الإعدادات."
+          error: "مفتاح OpenRouter غير متوفر. يرجى ضبط OPENROUTER_API_KEY في إعدادات Secrets."
         });
       }
 
@@ -207,110 +204,55 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
         : storedVideoPath;
 
       let extractedWords: Array<{ word: string; start: number; end: number }> = [];
-      let creditsDepleted = false;
+      try {
+        const modelName = process.env.OPENROUTER_MODEL || "google/gemini-2.5-flash";
+        const audioBuffer = fs.readFileSync(fileToTranscribe);
+        const base64Audio = audioBuffer.toString("base64");
+        const audioFormat = fileToTranscribe.endsWith(".mp3") ? "mp3" : "wav";
+        console.log(`Transcribing with OpenRouter model ${modelName}...`);
 
-      // 1. Try Gemini Transcription (gemini-3.6-flash and gemini-3.5-flash-lite)
-      if (geminiClient) {
-        const modelsToTry = ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-flash-latest"];
-        for (const modelName of modelsToTry) {
-          if (extractedWords.length > 0 || creditsDepleted) break;
-          try {
-            console.log(`Transcribing with ${modelName}...`);
-            const audioBuffer = fs.readFileSync(fileToTranscribe);
-            const base64Audio = audioBuffer.toString("base64");
-            const mime = fileToTranscribe.endsWith(".mp3") ? "audio/mp3" : "video/mp4";
-
-            const response = await geminiClient.models.generateContent({
-              model: modelName,
-              contents: [
-                {
-                  inlineData: {
-                    mimeType: mime,
-                    data: base64Audio,
-                  },
-                },
-                {
-                  text: "Transcribe every single spoken word from this audio. Return accurate word-level start and end timestamps in seconds (e.g. start: 0.2, end: 0.6). If the audio is in Arabic, transcribe accurately in Arabic without translating. Capture every word accurately in sequential order.",
-                },
-              ],
-              config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                  type: Type.OBJECT,
-                  properties: {
-                    words: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          word: { type: Type.STRING },
-                          start: { type: Type.NUMBER },
-                          end: { type: Type.NUMBER },
-                        },
-                        required: ["word", "start", "end"],
-                      },
-                    },
-                  },
-                  required: ["words"],
+        const response = await openRouterClient.chat.completions.create({
+          model: modelName,
+          messages: [{
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Transcribe every spoken word in this audio. Return only valid JSON in this exact shape: {\"words\":[{\"word\":\"...\",\"start\":0.2,\"end\":0.6}]}. Include accurate word-level start and end timestamps in seconds. If the audio is Arabic, keep the transcription in Arabic without translating. Do not include markdown or explanations.",
+              },
+              {
+                type: "input_audio",
+                input_audio: {
+                  data: base64Audio,
+                  format: audioFormat,
                 },
               },
-            });
+            ],
+          }],
+          response_format: { type: "json_object" },
+        });
 
-            if (response.text) {
-              const parsed = JSON.parse(response.text);
-              if (Array.isArray(parsed.words) && parsed.words.length > 0) {
-                extractedWords = parsed.words;
-                console.log(`Gemini (${modelName}) transcription succeeded with ${extractedWords.length} words.`);
-                break;
-              }
-            }
-          } catch (geminiErr: any) {
-            const errStr = String(geminiErr?.message || geminiErr || '');
-            if (errStr.includes("prepayment credits") || errStr.includes("402") || errStr.includes("RESOURCE_EXHAUSTED")) {
-              creditsDepleted = true;
-              console.log(`[Gemini API Info] Prepayment credits depleted on Google AI Studio project. Stopping model retries.`);
-              break;
-            } else {
-              console.log(`[Gemini API Info] ${modelName} returned: ${errStr.slice(0, 100)}`);
-            }
-          }
-        }
-      }
-
-      // 2. Fallback to OpenAI Whisper if Gemini didn't return words and OpenAI key exists
-      if (extractedWords.length === 0 && hasOpenAi) {
-        try {
-          console.log("Transcribing with OpenAI Whisper fallback...");
-          const openai = new OpenAI({ apiKey: openAiKey });
-          const transcription = await openai.audio.transcriptions.create({
-            file: fs.createReadStream(fileToTranscribe),
-            model: "whisper-1",
-            response_format: "verbose_json",
-            timestamp_granularities: ["word"],
-          });
-
-          if (transcription.words && transcription.words.length > 0) {
-            extractedWords = transcription.words.map(w => ({
-              word: w.word,
-              start: w.start,
-              end: w.end,
+        const responseContent = response.choices[0]?.message?.content;
+        const responseText = typeof responseContent === "string"
+          ? responseContent
+          : responseContent?.map((part: any) => part.type === "text" ? part.text : "").join("") || "";
+        const jsonText = responseText.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+        const parsed = JSON.parse(jsonText);
+        if (Array.isArray(parsed.words)) {
+          extractedWords = parsed.words
+            .filter((word: any) => word && typeof word.word === "string" && Number.isFinite(Number(word.start)) && Number.isFinite(Number(word.end)))
+            .map((word: any) => ({
+              word: word.word,
+              start: Number(word.start),
+              end: Number(word.end),
             }));
-            console.log(`Whisper transcription succeeded with ${extractedWords.length} words.`);
-          }
-        } catch (openaiErr: any) {
-          console.error("OpenAI Whisper error:", openaiErr.message);
         }
+        console.log(`OpenRouter transcription completed with ${extractedWords.length} words.`);
+      } catch (openRouterErr: any) {
+        console.error("OpenRouter transcription error:", openRouterErr?.message || openRouterErr);
       }
 
       if (extractedWords.length === 0) {
-        if (creditsDepleted) {
-          return res.status(200).json({
-            creditsDepleted: true,
-            warning: "رصيد حساب Google AI Studio مستنفد (Prepayment credits depleted). تم تجهيز الفيديو، ويمكنك الآن تجربة كافة القوالب والتصدير بكابشن تجريبي فوري أو استيراد ملف SRT أو كتابة النصوص يدوياً.",
-            videoId,
-            segments: []
-          });
-        }
         return res.status(200).json({
           noSpeechFound: true,
           warning: "لم يتم العثور على أي كلام أو نصوص منطوقة في الفيديو. يمكنك إضافة كابشن تجريبي أو إدخال النصوص يدوياً واستيراد SRT.",

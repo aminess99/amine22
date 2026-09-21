@@ -6,11 +6,10 @@
 - Development command: `npm run dev`
 - The Express server listens on `0.0.0.0:5000` and serves the Vite app.
 
-## Optional AI configuration
+## AI configuration
 
-Transcription requires at least one Replit Secret:
+Transcription requires this Replit Secret:
 
-- `GEMINI_API_KEY`
-- `OPENAI_API_KEY`
+- `OPENROUTER_API_KEY`
 
-The interface can run without these secrets, but AI transcription requests will return a configuration error.
+The default audio-capable model is `google/gemini-2.5-flash`. Set the optional `OPENROUTER_MODEL` environment variable to choose another OpenRouter model that supports audio input. The interface can run without the secret, but transcription requests will return a configuration error.
