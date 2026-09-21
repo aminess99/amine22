@@ -16,10 +16,11 @@ ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 dotenv.config();
 
-// Ensure all application custom fonts are registered in the system font cache for libass / FFmpeg
+// Register custom fonts in a writable temporary directory for libass / FFmpeg.
+// Published VMs do not allow writing to /usr/local/share/fonts.
 try {
   const fontSrcDir = path.join(process.cwd(), "fonts");
-  const fontDestDir = "/usr/local/share/fonts/viral";
+  const fontDestDir = path.join(os.tmpdir(), "viral_captions_fonts");
   if (fs.existsSync(fontSrcDir)) {
     if (!fs.existsSync(fontDestDir)) {
       fs.mkdirSync(fontDestDir, { recursive: true });
@@ -30,7 +31,7 @@ try {
         fs.copyFileSync(path.join(fontSrcDir, file), path.join(fontDestDir, file));
       }
     }
-    execSync("fc-cache -f /usr/local/share/fonts/viral", { stdio: "ignore" });
+    execSync(`fc-cache -f "${fontDestDir}"`, { stdio: "ignore" });
     console.log("System fonts registered and cached successfully for FFmpeg/libass.");
   }
 } catch (fontErr) {
