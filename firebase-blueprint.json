@@ -1,0 +1,74 @@
+{
+  "entities": {
+    "users": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "displayName": {
+          "type": "string",
+          "description": "User display name"
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address"
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "User avatar URL"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Account creation ISO timestamp"
+        },
+        "lastLoginAt": {
+          "type": "string",
+          "description": "Last login ISO timestamp"
+        }
+      },
+      "required": ["email", "createdAt"]
+    },
+    "projects": {
+      "title": "SavedProject",
+      "description": "Saved video captions and configuration",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner user UID"
+        },
+        "videoName": {
+          "type": "string",
+          "description": "Original file name"
+        },
+        "template": {
+          "type": "string",
+          "description": "Selected template ID"
+        },
+        "captionCount": {
+          "type": "number",
+          "description": "Total captions count"
+        },
+        "duration": {
+          "type": "number",
+          "description": "Video duration in seconds"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last modified timestamp"
+        }
+      },
+      "required": ["userId", "videoName", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "users",
+      "description": "User profile document indexed by auth UID"
+    },
+    "/users/{userId}/projects/{projectId}": {
+      "schema": "projects",
+      "description": "User saved caption projects"
+    }
+  }
+}

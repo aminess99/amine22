@@ -1,0 +1,6 @@
+{
+  "name": "AI Video Captioner",
+  "description": "تطبيق الذكاء الاصطناعي لتوليد وإضافة كابشن ونصوص متحركة احترافية للفيديوهات تلقائياً مع دعم كامل للغة العربية وقوالب تيك توك وريلز.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
