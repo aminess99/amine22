@@ -34,7 +34,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { saveProjectToFirestore } from '../lib/firebaseProjects';
 import { cn } from '../lib/utils';
-import { generateAss, generateSrt, generateVtt, parseSrt } from '../lib/assGenerator';
+import { generateSrt, generateVtt, parseSrt } from '../lib/assGenerator';
 import { rechunkSegments, autoAlignTimestamps, shiftTimestamps } from '../lib/chunkUtils';
 import { exportVideoViaCanvas, ExportQualityOptions } from '../lib/clientVideoExporter';
 import { ExportModal } from './ExportModal';
@@ -522,62 +522,7 @@ export function CaptionEditor({ videoFile, onBack, initialTemplate, initialProje
         throw new Error("عنصر الفيديو غير متوفر");
       }
 
-      const mode = options?.mode || 'server_turbo';
-
-      // 1. Turbo Server Export: Ultra-fast FFmpeg ASS burn-in with 100% original audio & full Arabic fonts
-      if (mode === 'server_turbo') {
-        try {
-          setExportProgress(15);
-          const width = videoRef.current?.videoWidth || 1080;
-          const height = videoRef.current?.videoHeight || 1920;
-          const assContent = generateAss(segments, settings, width, height);
-
-          const formData = new FormData();
-          formData.append('ass', assContent);
-          if (sessionVideoId) {
-            formData.append('videoId', sessionVideoId);
-          }
-          if (!sessionVideoId || videoFile.size < 60 * 1024 * 1024) {
-            formData.append('video', videoFile);
-          }
-          formData.append('filename', videoFile.name);
-          formData.append('quality', options?.resolution || '1080p');
-
-          setExportProgress(35);
-          const exportRes = await fetch('/api/export', {
-            method: 'POST',
-            body: formData,
-          });
-
-          if (exportRes.ok) {
-            setExportProgress(90);
-            const blob = await exportRes.blob();
-            const downloadUrl = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = downloadUrl;
-            a.download = `captioned_${videoFile.name.replace(/\.[^/.]+$/, "")}.mp4`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(downloadUrl);
-
-            setExportProgress(100);
-            setTimeout(() => {
-              setIsExporting(false);
-              setIsExportModalOpen(false);
-              setExportProgress(0);
-            }, 1000);
-            return;
-          } else {
-            const errData = await exportRes.json().catch(() => null);
-            console.warn("Server turbo export failed with:", errData, "falling back to Canvas rendering...");
-          }
-        } catch (serverErr) {
-          console.warn("Server turbo export error, falling back to Canvas rendering:", serverErr);
-        }
-      }
-
-      // 2. Render pixel-perfect canvas frames with identical styles, fonts, Arabic RTL, and emojis
+      // Render every export with the same WYSIWYG canvas settings shown in the preview.
       setExportProgress(20);
       const canvasBlob = await exportVideoViaCanvas(
         videoRef.current,
@@ -591,7 +536,7 @@ export function CaptionEditor({ videoFile, onBack, initialTemplate, initialProje
 
       let exportedSuccessfully = false;
 
-      // 3. Remux on server with the original pristine audio track into standard H.264 MP4
+      // Remux the already-rendered frames with the original pristine audio.
       try {
         const formData = new FormData();
         formData.append('video', canvasBlob, 'canvas.webm');
@@ -633,7 +578,7 @@ export function CaptionEditor({ videoFile, onBack, initialTemplate, initialProje
         console.warn("Server remux failed (network/timeout/Failed to fetch), using instant direct client export fallback:", networkOrServerErr);
       }
 
-      // 4. Resilient Fallback: If server remux failed or connection dropped ("Failed to fetch"), download the high-res client canvas video directly
+      // If remuxing fails, preserve the exact rendered frames in the direct download.
       if (!exportedSuccessfully) {
         setExportProgress(95);
         const downloadUrl = URL.createObjectURL(canvasBlob);

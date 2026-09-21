@@ -3,13 +3,11 @@ import {
   Download, 
   X, 
   Sparkles, 
-  Sliders, 
   Film, 
   Check, 
   HelpCircle, 
   Volume2, 
   Zap,
-  Layers,
   ShieldCheck,
   ChevronDown,
   ChevronUp,
@@ -40,7 +38,6 @@ export function ExportModal({
   const [resolution, setResolution] = useState<'original' | '1080p' | '720p'>('original');
   const [qualityLevel, setQualityLevel] = useState<'ultra' | 'high' | 'balanced'>('ultra');
   const [fps, setFps] = useState<30 | 60>(60);
-  const [mode, setMode] = useState<'server_turbo' | 'client_canvas'>('client_canvas');
   const [showExplanation, setShowExplanation] = useState<boolean>(false);
 
   if (!isOpen) return null;
@@ -49,8 +46,7 @@ export function ExportModal({
     onStartExport({
       resolution,
       qualityLevel,
-      fps,
-      mode
+      fps
     });
   };
 
@@ -154,76 +150,33 @@ export function ExportModal({
             </div>
           ) : (
             <>
-              {/* Engine Selector */}
+              {/* Unified WYSIWYG Engine */}
               <div className="space-y-2">
                 <label className="text-xs font-bold text-slate-300 flex items-center justify-between">
                   <span className="flex items-center gap-1.5">
                     <Zap className="w-3.5 h-3.5 text-amber-400" />
-                    <span>محرك التصدير (Export Engine)</span>
+                    <span>محرك التصدير الموحد</span>
                   </span>
                   <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
                     تزامن صوتي فوري ⚡
                   </span>
                 </label>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {/* Option 1: Canvas WYSIWYG (Recommended & 100% Preview Match) */}
-                  <button
-                    type="button"
-                    onClick={() => setMode('client_canvas')}
-                    className={cn(
-                      "p-3 rounded-2xl border text-right transition-all duration-200 flex flex-col justify-between relative",
-                      mode === 'client_canvas'
-                        ? "bg-indigo-600/20 border-indigo-500 shadow-md shadow-indigo-600/20 ring-1 ring-indigo-500/50"
-                        : "bg-slate-800/60 border-slate-700/70 hover:bg-slate-800 hover:border-slate-600"
-                    )}
-                  >
+                <div className="p-3 rounded-2xl border text-right bg-indigo-600/20 border-indigo-500 shadow-md shadow-indigo-600/20 ring-1 ring-indigo-500/50">
                     <div className="flex items-center justify-between w-full mb-1">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-bold text-white">محرك الاستوديو (WYSIWYG)</span>
+                        <span className="text-xs font-bold text-white">محرك الاستوديو WYSIWYG</span>
                         <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                           🌟 مطابق 100%
                         </span>
                       </div>
-                      {mode === 'client_canvas' && (
-                        <div className="w-4 h-4 rounded-full bg-indigo-500 flex items-center justify-center text-white">
-                          <Check className="w-2.5 h-2.5 stroke-[3]" />
-                        </div>
-                      )}
-                    </div>
-                    <span className="text-[10px] text-slate-300 leading-relaxed block">
-                      الموصى به: يُصدر بالضبط وبشكل متطابق كل ما تراه في المعاينة (الخطوط العربية المتصلة، البطاقات الزجاجية، والإيموجي) مع صوت أصلي نقي.
-                    </span>
-                  </button>
-
-                  {/* Option 2: Server Turbo */}
-                  <button
-                    type="button"
-                    onClick={() => setMode('server_turbo')}
-                    className={cn(
-                      "p-3 rounded-2xl border text-right transition-all duration-200 flex flex-col justify-between relative",
-                      mode === 'server_turbo'
-                        ? "bg-indigo-600/20 border-indigo-500 shadow-md shadow-indigo-600/20 ring-1 ring-indigo-500/50"
-                        : "bg-slate-800/60 border-slate-700/70 hover:bg-slate-800 hover:border-slate-600"
-                    )}
-                  >
-                    <div className="flex items-center justify-between w-full mb-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-bold text-white">محرك Turbo السحابي</span>
-                        <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                          ⚡ فائق السرعة
-                        </span>
+                      <div className="w-4 h-4 rounded-full bg-indigo-500 flex items-center justify-center text-white">
+                        <Check className="w-2.5 h-2.5 stroke-[3]" />
                       </div>
-                      {mode === 'server_turbo' && (
-                        <div className="w-4 h-4 rounded-full bg-indigo-500 flex items-center justify-center text-white">
-                          <Check className="w-2.5 h-2.5 stroke-[3]" />
-                        </div>
-                      )}
                     </div>
                     <span className="text-[10px] text-slate-300 leading-relaxed block">
-                      معالجة سحابية عبر السيرفر للفيديوهات الطويلة، مع دمج فوري وتزامن صوتي.
+                      كل تصدير يستخدم نفس القالب والخط والألوان والإيموجي والموضع والتوقيت الظاهر في المعاينة، ثم يدمج الصوت الأصلي النقي.
                     </span>
-                  </button>
                 </div>
               </div>
 

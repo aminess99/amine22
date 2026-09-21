@@ -5,7 +5,6 @@ export interface ExportQualityOptions {
   resolution?: 'original' | '1080p' | '720p';
   fps?: 30 | 60;
   qualityLevel?: 'ultra' | 'high' | 'balanced';
-  mode?: 'server_turbo' | 'client_canvas';
 }
 
 /**
