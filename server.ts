@@ -103,7 +103,7 @@ setInterval(() => {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 5000;
 
   app.use(express.json({ limit: "500mb" }));
   app.use(express.urlencoded({ extended: true, limit: "500mb" }));
