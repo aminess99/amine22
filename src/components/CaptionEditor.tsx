@@ -522,6 +522,83 @@ export function CaptionEditor({ videoFile, onBack, initialTemplate, initialProje
         throw new Error("عنصر الفيديو غير متوفر");
       }
 
+      // Primary export engine: Remotion renders a deterministic React composition
+      // with explicit frame timestamps and the original video's audio track.
+      try {
+        setExportProgress(10);
+        const sourceWidth = videoRef.current.videoWidth || 1080;
+        const sourceHeight = videoRef.current.videoHeight || 1920;
+        const aspect = sourceWidth / sourceHeight;
+        let renderWidth = sourceWidth;
+        let renderHeight = sourceHeight;
+
+        if (options?.resolution === '720p') {
+          if (aspect < 1) {
+            renderWidth = 720;
+            renderHeight = Math.round(720 / aspect);
+          } else {
+            renderHeight = 720;
+            renderWidth = Math.round(720 * aspect);
+          }
+        } else if (options?.resolution === '1080p') {
+          if (aspect < 1) {
+            renderWidth = 1080;
+            renderHeight = Math.round(1080 / aspect);
+          } else {
+            renderHeight = 1080;
+            renderWidth = Math.round(1080 * aspect);
+          }
+        }
+
+        renderWidth = Math.max(2, Math.round(renderWidth / 2) * 2);
+        renderHeight = Math.max(2, Math.round(renderHeight / 2) * 2);
+
+        const remotionForm = new FormData();
+        remotionForm.append('video', videoFile, videoFile.name);
+        if (sessionVideoId) {
+          remotionForm.append('videoId', sessionVideoId);
+        }
+        remotionForm.append('segments', JSON.stringify(segments));
+        remotionForm.append('settings', JSON.stringify(settings));
+        remotionForm.append('durationInSeconds', String(videoRef.current.duration || duration || 10));
+        remotionForm.append('fps', String(options?.fps || 30));
+        remotionForm.append('width', String(renderWidth));
+        remotionForm.append('height', String(renderHeight));
+        remotionForm.append('quality', options?.qualityLevel || 'ultra');
+        remotionForm.append('filename', videoFile.name);
+
+        const remotionResponse = await fetch('/api/remotion-export', {
+          method: 'POST',
+          body: remotionForm,
+        });
+
+        if (!remotionResponse.ok) {
+          const errorData = await remotionResponse.json().catch(() => null);
+          throw new Error(errorData?.error || `Remotion export failed (${remotionResponse.status})`);
+        }
+
+        setExportProgress(92);
+        const remotionBlob = await remotionResponse.blob();
+        const remotionUrl = URL.createObjectURL(remotionBlob);
+        const remotionLink = document.createElement('a');
+        remotionLink.href = remotionUrl;
+        remotionLink.download = `captioned_${videoFile.name.replace(/\.[^/.]+$/, "")}.mp4`;
+        document.body.appendChild(remotionLink);
+        remotionLink.click();
+        document.body.removeChild(remotionLink);
+        URL.revokeObjectURL(remotionUrl);
+
+        setExportProgress(100);
+        setTimeout(() => {
+          setIsExporting(false);
+          setIsExportModalOpen(false);
+          setExportProgress(0);
+        }, 1000);
+        return;
+      } catch (remotionError) {
+        console.warn("Remotion export unavailable, using compatibility renderer:", remotionError);
+      }
+
       // Render every export with the same WYSIWYG canvas settings shown in the preview.
       setExportProgress(20);
       const canvasBlob = await exportVideoViaCanvas(

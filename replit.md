@@ -5,6 +5,7 @@
 - Runtime: Node.js 22
 - Development command: `npm run dev`
 - The Express server listens on `0.0.0.0:5000` and serves the Vite app.
+- Video exports use a deterministic Remotion React composition with the original video's audio. The previous real-time canvas recorder remains only as a compatibility fallback if Chromium cannot start.
 
 ## AI configuration
 

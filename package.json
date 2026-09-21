@@ -17,6 +17,9 @@
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "@google/genai": "^1.52.0",
+    "@remotion/bundler": "^4.0.526",
+    "@remotion/player": "^4.0.526",
+    "@remotion/renderer": "^4.0.526",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^5.2.0",
     "clsx": "^2.1.1",
@@ -31,6 +34,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-dropzone": "^15.0.0",
+    "remotion": "^4.0.526",
     "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {

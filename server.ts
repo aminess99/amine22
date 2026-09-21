@@ -1,5 +1,7 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
+import { bundle } from "@remotion/bundler";
+import { renderMedia, selectComposition } from "@remotion/renderer";
 import multer from "multer";
 import OpenAI from "openai";
 import fs from "fs";
@@ -37,6 +39,16 @@ try {
 
 // Safe derivation of directory path for both tsx (ESM) and esbuild CJS bundle
 const currentDirname = typeof __dirname !== "undefined" ? __dirname : process.cwd();
+let remotionBundlePromise: Promise<string> | null = null;
+
+const getRemotionBundle = () => {
+  if (!remotionBundlePromise) {
+    remotionBundlePromise = bundle({
+      entryPoint: path.join(currentDirname, "src/remotion/entry.ts"),
+    });
+  }
+  return remotionBundlePromise;
+};
 
 // OpenRouter uses the OpenAI-compatible API and keeps provider/model selection configurable.
 const getOpenRouterClient = () => {
@@ -145,6 +157,129 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
   const upload = multer({
     dest: path.join(os.tmpdir(), "uploads"),
     limits: { fileSize: 500 * 1024 * 1024 } // 500MB
+  });
+
+  // Serve source videos to Remotion's local Chromium renderer.
+  app.get("/api/video/:videoId", (req, res) => {
+    const session = videoSessions.get(req.params.videoId);
+    if (!session || !fs.existsSync(session.filePath)) {
+      return res.status(404).json({ error: "الفيديو غير موجود أو انتهت جلسة المعالجة." });
+    }
+    res.sendFile(session.filePath);
+  });
+
+  // Deterministic React/Remotion export. The rendered composition includes the
+  // original video/audio, while the caption canvas uses the shared renderer.
+  app.post("/api/remotion-export", upload.single("video"), async (req, res) => {
+    req.setTimeout(900000);
+    res.setTimeout(900000);
+
+    let temporarySourceId: string | null = null;
+    let outputPath: string | null = null;
+    const uploadedVideo = req.file;
+
+    const cleanup = () => {
+      if (outputPath && fs.existsSync(outputPath)) {
+        try { fs.unlinkSync(outputPath); } catch (e) {}
+      }
+      if (temporarySourceId) {
+        const sourceSession = videoSessions.get(temporarySourceId);
+        if (sourceSession?.filePath && fs.existsSync(sourceSession.filePath)) {
+          try { fs.unlinkSync(sourceSession.filePath); } catch (e) {}
+        }
+        videoSessions.delete(temporarySourceId);
+      }
+      if (uploadedVideo && fs.existsSync(uploadedVideo.path)) {
+        try { fs.unlinkSync(uploadedVideo.path); } catch (e) {}
+      }
+    };
+
+    try {
+      const existingVideoId = req.body.videoId;
+      let sourceSession = existingVideoId ? videoSessions.get(existingVideoId) : null;
+
+      if (uploadedVideo) {
+        const ext = path.extname(uploadedVideo.originalname || ".mp4") || ".mp4";
+        temporarySourceId = `render_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const sourcePath = path.join(STORAGE_DIR, `${temporarySourceId}${ext}`);
+        fs.renameSync(uploadedVideo.path, sourcePath);
+        sourceSession = {
+          filePath: sourcePath,
+          originalName: uploadedVideo.originalname || "source.mp4",
+          timestamp: Date.now(),
+        };
+        videoSessions.set(temporarySourceId, sourceSession);
+      }
+
+      if (!sourceSession || !fs.existsSync(sourceSession.filePath)) {
+        return res.status(400).json({ error: "لم يتم العثور على الفيديو الأصلي للتصدير." });
+      }
+
+      const segments = JSON.parse(req.body.segments || "[]");
+      const settings = JSON.parse(req.body.settings || "{}");
+      const durationInSeconds = Math.max(0.1, Number(req.body.durationInSeconds) || 10);
+      const fps = Math.min(60, Math.max(24, Math.round(Number(req.body.fps) || 30)));
+      const width = Math.max(2, Math.round(Number(req.body.width) || 1080));
+      const height = Math.max(2, Math.round(Number(req.body.height) || 1920));
+      const sourceUrl = `http://127.0.0.1:${PORT}/api/video/${temporarySourceId || existingVideoId}`;
+      const inputProps = {
+        videoUrl: sourceUrl,
+        segments,
+        settings,
+        durationInSeconds,
+        fps,
+        width,
+        height,
+      };
+
+      const serveUrl = await getRemotionBundle();
+      const composition = await selectComposition({
+        serveUrl,
+        id: "CaptionVideo",
+        inputProps,
+      });
+
+      outputPath = path.join(os.tmpdir(), `remotion_export_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.mp4`);
+      const quality = req.body.quality || "ultra";
+      const videoBitrate = quality === "balanced" ? "12M" : quality === "high" ? "22M" : "35M";
+
+      await renderMedia({
+        composition,
+        serveUrl,
+        codec: "h264",
+        audioCodec: "aac",
+        outputLocation: outputPath,
+        inputProps,
+        videoBitrate,
+        onProgress: ({ progress }) => {
+          if (Math.round(progress * 100) % 10 === 0) {
+            console.log(`Remotion export progress: ${Math.round(progress * 100)}%`);
+          }
+        },
+      });
+
+      if (!outputPath || !fs.existsSync(outputPath)) {
+        throw new Error("لم يتم إنشاء ملف التصدير بواسطة Remotion.");
+      }
+
+      const originalName = req.body.filename || sourceSession.originalName || "captioned_video.mp4";
+      const outName = `captioned_${originalName.replace(/\.[^/.]+$/, "")}.mp4`;
+      res.setHeader("Content-Type", "video/mp4");
+      res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(outName)}"`);
+      const fileStream = fs.createReadStream(outputPath);
+      fileStream.pipe(res);
+      fileStream.on("end", cleanup);
+      fileStream.on("error", (err) => {
+        console.error("Remotion output stream error:", err);
+        cleanup();
+      });
+    } catch (err: any) {
+      console.error("Remotion export failed, client fallback may be used:", err?.message || err);
+      cleanup();
+      if (!res.headersSent) {
+        res.status(500).json({ error: err?.message || "فشل تصدير Remotion." });
+      }
+    }
   });
 
   app.post("/api/transcribe", upload.single("video"), async (req, res) => {
