@@ -314,15 +314,19 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
         timestamp: Date.now()
       });
 
-      // Extract lightweight MP3 for ultra-fast audio transcription
-      audioTempPath = path.join(STORAGE_DIR, `${videoId}_extracted.mp3`);
-      console.log("Extracting audio from video for fast AI transcription...");
+      // Extract uncompressed PCM audio for accurate word-level timestamps.
+      // MP3 encoder padding and lossy frames can make an LLM's word boundaries
+      // drift even when the final video/audio streams are perfectly aligned.
+      audioTempPath = path.join(STORAGE_DIR, `${videoId}_extracted.wav`);
+      console.log("Extracting uncompressed WAV audio for accurate word timing...");
       try {
         await new Promise<void>((resolve) => {
           ffmpeg(storedVideoPath!)
             .noVideo()
-            .audioCodec('libmp3lame')
-            .audioBitrate('64k')
+            .audioCodec('pcm_s16le')
+            .audioChannels(1)
+            .audioFrequency(16000)
+            .format('wav')
             .save(audioTempPath!)
             .on('end', () => resolve())
             .on('error', (err) => {
@@ -334,16 +338,24 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
         console.warn("Audio extraction skipped:", err);
       }
 
-      const fileToTranscribe = (audioTempPath && fs.existsSync(audioTempPath) && fs.statSync(audioTempPath).size > 1000)
-        ? audioTempPath
-        : storedVideoPath;
+      if (!audioTempPath || !fs.existsSync(audioTempPath) || fs.statSync(audioTempPath).size <= 1000) {
+        throw new Error("تعذر استخراج مسار صوت WAV صالح لتحليل توقيت الكلمات.");
+      }
+
+      const fileToTranscribe = audioTempPath;
 
       let extractedWords: Array<{ word: string; start: number; end: number }> = [];
       try {
         const modelName = process.env.OPENROUTER_MODEL || "google/gemini-2.5-flash";
         const audioBuffer = fs.readFileSync(fileToTranscribe);
         const base64Audio = audioBuffer.toString("base64");
-        const audioFormat = fileToTranscribe.endsWith(".mp3") ? "mp3" : "wav";
+        const audioFormat: "wav" = "wav";
+        const audioDuration = await new Promise<number>((resolve) => {
+          ffmpeg.ffprobe(fileToTranscribe, (probeError, metadata) => {
+            const duration = Number(metadata?.format?.duration);
+            resolve(!probeError && Number.isFinite(duration) ? duration : 0);
+          });
+        });
         console.log(`Transcribing with OpenRouter model ${modelName}...`);
 
         const response = await openRouterClient.chat.completions.create({
@@ -353,7 +365,17 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
             content: [
               {
                 type: "text",
-                text: "Transcribe every spoken word in this audio. Return only valid JSON in this exact shape: {\"words\":[{\"word\":\"...\",\"start\":0.2,\"end\":0.6}]}. Include accurate word-level start and end timestamps in seconds. If the audio is Arabic, keep the transcription in Arabic without translating. Do not include markdown or explanations.",
+                text: [
+                  "Transcribe every spoken word in this audio and return only valid JSON in this exact shape:",
+                  "{\"words\":[{\"word\":\"...\",\"start\":0.2,\"end\":0.6}]}",
+                  `The audio duration is ${audioDuration > 0 ? audioDuration.toFixed(3) : "unknown"} seconds.`,
+                  "Use the actual acoustic position of every word in the audio.",
+                  "Set start to the instant the word begins being spoken and end to the instant it finishes.",
+                  "Do not distribute words evenly, do not shift timestamps earlier or later, do not smooth pauses, and do not reuse a segment timestamp for multiple words.",
+                  "Keep genuine pauses between words. Include accurate word-level timestamps in seconds.",
+                  "If the audio is Arabic, keep the transcription in Arabic without translating.",
+                  "Do not include markdown or explanations.",
+                ].join(" "),
               },
               {
                 type: "input_audio",
