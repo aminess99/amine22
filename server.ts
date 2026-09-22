@@ -8,7 +8,7 @@ import fs from "fs";
 import path from "path";
 import dotenv from "dotenv";
 import os from "os";
-import { execSync } from "child_process";
+import { execFile, execSync } from "child_process";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 
@@ -66,6 +66,89 @@ const getOpenRouterClient = () => {
       "X-Title": "AI Video Captioner",
     },
   });
+};
+
+type SpeechBounds = {
+  start: number;
+  end: number;
+};
+
+/**
+ * Gemini can return a word timeline that starts correctly but slowly drifts
+ * from the source audio. Use the actual non-silent audio envelope as the
+ * stable time base before sending timestamps to the editor.
+ */
+const detectSpeechBounds = (audioPath: string, duration: number): Promise<SpeechBounds> =>
+  new Promise((resolve) => {
+    execFile(
+      ffmpegInstaller.path,
+      [
+        "-hide_banner",
+        "-i", audioPath,
+        "-af", "silencedetect=noise=-35dB:d=0.12",
+        "-f", "null",
+        "-"
+      ],
+      { maxBuffer: 1024 * 1024 },
+      (_error, _stdout, stderr) => {
+        const silenceStarts = Array.from(stderr.matchAll(/silence_start:\s*([0-9.]+)/g))
+          .map((match) => Number(match[1]))
+          .filter(Number.isFinite);
+        const silenceEnds = Array.from(stderr.matchAll(/silence_end:\s*([0-9.]+)/g))
+          .map((match) => Number(match[1]))
+          .filter(Number.isFinite);
+
+        const firstStart = silenceStarts[0];
+        const firstEnd = silenceEnds[0];
+        const speechStart = firstStart !== undefined && firstStart <= 0.05
+          ? Math.min(duration, firstEnd ?? 0)
+          : 0;
+
+        const lastStart = silenceStarts[silenceStarts.length - 1];
+        const lastEnd = silenceEnds[silenceEnds.length - 1];
+        const hasTrailingSilence = lastStart !== undefined && (lastEnd === undefined || lastStart > lastEnd);
+        const speechEnd = hasTrailingSilence ? Math.max(speechStart, lastStart) : duration;
+
+        resolve({
+          start: Math.max(0, Math.min(speechStart, duration)),
+          end: Math.max(speechStart, Math.min(speechEnd, duration)),
+        });
+      },
+    );
+  });
+
+const calibrateWordTimeline = (
+  words: Array<{ word: string; start: number; end: number }>,
+  speechBounds: SpeechBounds,
+  duration: number,
+) => {
+  if (words.length < 2 || speechBounds.end <= speechBounds.start) return words;
+
+  const firstWord = words[0];
+  const lastWord = words[words.length - 1];
+  const sourceStart = Math.max(0, Math.min(firstWord.start, duration));
+  const sourceEnd = Math.max(sourceStart, Math.min(lastWord.end, duration));
+  const sourceSpan = sourceEnd - sourceStart;
+  const targetSpan = speechBounds.end - speechBounds.start;
+
+  if (sourceSpan <= 0.1 || targetSpan <= 0.1) return words;
+
+  const scale = targetSpan / sourceSpan;
+  // Avoid changing a good transcript for insignificant differences.
+  if (Math.abs(scale - 1) < 0.02 && Math.abs(sourceStart - speechBounds.start) < 0.08) {
+    return words;
+  }
+
+  console.log(
+    `Calibrating word timeline: ${sourceSpan.toFixed(3)}s -> ${targetSpan.toFixed(3)}s ` +
+    `(scale ${scale.toFixed(4)})`,
+  );
+
+  return words.map((word) => ({
+    ...word,
+    start: Math.max(0, Math.min(duration, speechBounds.start + (word.start - sourceStart) * scale)),
+    end: Math.max(0, Math.min(duration, speechBounds.start + (word.end - sourceStart) * scale)),
+  }));
 };
 
 // In-memory / temporary storage registry for active video sessions
@@ -406,6 +489,12 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
               end: Number(word.end),
             }));
         }
+
+        if (extractedWords.length > 1 && audioDuration > 0) {
+          const speechBounds = await detectSpeechBounds(fileToTranscribe, audioDuration);
+          extractedWords = calibrateWordTimeline(extractedWords, speechBounds, audioDuration);
+        }
+
         console.log(`OpenRouter transcription completed with ${extractedWords.length} words.`);
       } catch (openRouterErr: any) {
         console.error("OpenRouter transcription error:", openRouterErr?.message || openRouterErr);

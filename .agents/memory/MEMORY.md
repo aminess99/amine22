@@ -1,1 +1,2 @@
 - [Shared caption renderer](shared-caption-renderer.md) — preview and Remotion export must use one caption component and font-loading contract.
+- [Caption timing boundaries](caption-timing-boundaries.md) — exact segment boundaries and the video's presented media time prevent recurring preview delay.

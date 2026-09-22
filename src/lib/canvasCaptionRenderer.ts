@@ -68,8 +68,9 @@ export function drawCaptionsOnCanvas(
   const syncOffset = settings.syncOffset || 0;
   const effectiveTime = Math.max(0, currentTime + syncOffset);
 
-  // Find the active segment for the current effective timestamp
-  const activeSegment = segments.find(s => effectiveTime >= s.start - 0.15 && effectiveTime <= s.end + 0.35);
+  // Segment boundaries are authoritative. Do not keep the previous segment
+  // alive after its end; that creates a visible delay at every transition.
+  const activeSegment = segments.find(s => effectiveTime >= s.start && effectiveTime <= s.end);
   if (!activeSegment || !activeSegment.words || activeSegment.words.length === 0) return;
 
   const activeWordIdx = getActiveWordIndex(activeSegment.words, effectiveTime, activeSegment.start);

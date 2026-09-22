@@ -48,7 +48,10 @@ export function CaptionOverlay({
   // Find current active segment
   const activeSegment = useMemo(() => {
     if (!segments || segments.length === 0) return null;
-    return segments.find(s => effectiveTime >= s.start - 0.15 && effectiveTime <= s.end + 0.35);
+    // Segment boundaries are authoritative. Keeping the previous segment alive
+    // for an extra 350ms makes every new caption visibly late, especially when
+    // the transcript contains short chunks.
+    return segments.find(s => effectiveTime >= s.start && effectiveTime <= s.end) || null;
   }, [segments, effectiveTime]);
 
   const safeAreaRef = useRef<HTMLDivElement>(null);
@@ -118,10 +121,9 @@ export function CaptionOverlay({
           <motion.div
             ref={fitContentRef}
             key={activeSegment.id}
-            initial={{ opacity: 0, y: 6, scale: 0.98 }}
+            initial={false}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -6, scale: 0.98 }}
-            transition={{ duration: 0.12 }}
+            transition={{ duration: 0 }}
             className="caption-fit-content w-full flex justify-center cursor-grab active:cursor-grabbing pointer-events-auto select-none"
             style={{
               width: 'max-content',

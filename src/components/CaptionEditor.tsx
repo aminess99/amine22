@@ -415,32 +415,38 @@ export function CaptionEditor({ videoFile, onBack, initialTemplate, initialProje
     const frameVideo = video as FrameCallbackVideo;
     let animationFrameId: number | null = null;
     let videoFrameId: number | null = null;
+    let frameScheduled = false;
     let disposed = false;
 
-    const publishTime = () => {
+    const publishTime = (presentedTime = video.currentTime) => {
       if (!disposed) {
-        const nextTime = video.currentTime;
+        const nextTime = Number.isFinite(presentedTime) ? Math.max(0, presentedTime) : video.currentTime;
         setCurrentTime(previous => Math.abs(previous - nextTime) < 0.001 ? previous : nextTime);
       }
     };
 
     const scheduleVideoFrame = () => {
-      if (disposed || video.paused) return;
+      if (disposed || video.paused || frameScheduled) return;
 
       if (frameVideo.requestVideoFrameCallback) {
-        videoFrameId = frameVideo.requestVideoFrameCallback(() => {
-          publishTime();
+        frameScheduled = true;
+        videoFrameId = frameVideo.requestVideoFrameCallback((_now, metadata) => {
+          frameScheduled = false;
+          const frameMetadata = metadata as { mediaTime?: number } | undefined;
+          publishTime(frameMetadata?.mediaTime);
           scheduleVideoFrame();
         });
       } else {
+        frameScheduled = true;
         animationFrameId = requestAnimationFrame(() => {
+          frameScheduled = false;
           publishTime();
           scheduleVideoFrame();
         });
       }
     };
 
-    const handlePlay = () => {
+    const handlePlaybackStart = () => {
       publishTime();
       scheduleVideoFrame();
     };
@@ -448,7 +454,10 @@ export function CaptionEditor({ videoFile, onBack, initialTemplate, initialProje
     const handleSeeked = () => publishTime();
     const handleTimeUpdate = () => publishTime();
 
-    video.addEventListener('play', handlePlay);
+    video.addEventListener('play', handlePlaybackStart);
+    video.addEventListener('playing', handlePlaybackStart);
+    video.addEventListener('canplay', handlePlaybackStart);
+    video.addEventListener('loadedmetadata', handlePlaybackStart);
     video.addEventListener('pause', handlePause);
     video.addEventListener('seeked', handleSeeked);
     video.addEventListener('timeupdate', handleTimeUpdate);
@@ -457,9 +466,13 @@ export function CaptionEditor({ videoFile, onBack, initialTemplate, initialProje
 
     return () => {
       disposed = true;
+      frameScheduled = false;
       if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
       if (videoFrameId !== null) frameVideo.cancelVideoFrameCallback?.(videoFrameId);
-      video.removeEventListener('play', handlePlay);
+      video.removeEventListener('play', handlePlaybackStart);
+      video.removeEventListener('playing', handlePlaybackStart);
+      video.removeEventListener('canplay', handlePlaybackStart);
+      video.removeEventListener('loadedmetadata', handlePlaybackStart);
       video.removeEventListener('pause', handlePause);
       video.removeEventListener('seeked', handleSeeked);
       video.removeEventListener('timeupdate', handleTimeUpdate);
