@@ -398,19 +398,73 @@ export function CaptionEditor({ videoFile, onBack, initialTemplate, initialProje
     setActiveTab('transcript');
   };
 
-  // Keep track of current video time accurately via requestAnimationFrame
+  // Keep captions on the video's own presentation clock. A standalone
+  // requestAnimationFrame can drift behind decoded video frames on mobile
+  // when React rendering is busy, making the video appear ahead of captions.
   useEffect(() => {
-    let animFrameId: number;
-    const update = () => {
-      if (videoRef.current && !videoRef.current.paused) {
-        setCurrentTime(videoRef.current.currentTime);
-      }
-      animFrameId = requestAnimationFrame(update);
+    const video = videoRef.current;
+    if (!video) return;
+
+    type FrameCallbackVideo = HTMLVideoElement & {
+      requestVideoFrameCallback?: (
+        callback: (now: number, metadata: unknown) => void
+      ) => number;
+      cancelVideoFrameCallback?: (handle: number) => void;
     };
 
-    animFrameId = requestAnimationFrame(update);
-    return () => cancelAnimationFrame(animFrameId);
-  }, []);
+    const frameVideo = video as FrameCallbackVideo;
+    let animationFrameId: number | null = null;
+    let videoFrameId: number | null = null;
+    let disposed = false;
+
+    const publishTime = () => {
+      if (!disposed) {
+        const nextTime = video.currentTime;
+        setCurrentTime(previous => Math.abs(previous - nextTime) < 0.001 ? previous : nextTime);
+      }
+    };
+
+    const scheduleVideoFrame = () => {
+      if (disposed || video.paused) return;
+
+      if (frameVideo.requestVideoFrameCallback) {
+        videoFrameId = frameVideo.requestVideoFrameCallback(() => {
+          publishTime();
+          scheduleVideoFrame();
+        });
+      } else {
+        animationFrameId = requestAnimationFrame(() => {
+          publishTime();
+          scheduleVideoFrame();
+        });
+      }
+    };
+
+    const handlePlay = () => {
+      publishTime();
+      scheduleVideoFrame();
+    };
+    const handlePause = () => publishTime();
+    const handleSeeked = () => publishTime();
+    const handleTimeUpdate = () => publishTime();
+
+    video.addEventListener('play', handlePlay);
+    video.addEventListener('pause', handlePause);
+    video.addEventListener('seeked', handleSeeked);
+    video.addEventListener('timeupdate', handleTimeUpdate);
+    publishTime();
+    scheduleVideoFrame();
+
+    return () => {
+      disposed = true;
+      if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+      if (videoFrameId !== null) frameVideo.cancelVideoFrameCallback?.(videoFrameId);
+      video.removeEventListener('play', handlePlay);
+      video.removeEventListener('pause', handlePause);
+      video.removeEventListener('seeked', handleSeeked);
+      video.removeEventListener('timeupdate', handleTimeUpdate);
+    };
+  }, [videoUrl]);
 
   const handleLoadedMetadata = () => {
     if (videoRef.current) {

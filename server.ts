@@ -40,12 +40,15 @@ try {
 
 // Safe derivation of directory path for both tsx (ESM) and esbuild CJS bundle
 const currentDirname = typeof __dirname !== "undefined" ? __dirname : process.cwd();
+const projectRoot = fs.existsSync(path.join(process.cwd(), "src/remotion/entry.ts"))
+  ? process.cwd()
+  : currentDirname;
 let remotionBundlePromise: Promise<string> | null = null;
 
 const getRemotionBundle = () => {
   if (!remotionBundlePromise) {
     remotionBundlePromise = bundle({
-      entryPoint: path.join(currentDirname, "src/remotion/entry.ts"),
+      entryPoint: path.join(projectRoot, "src/remotion/entry.ts"),
     });
   }
   return remotionBundlePromise;
