@@ -1,3 +1,4 @@
 - [Shared caption renderer](shared-caption-renderer.md) — preview and Remotion export must use one caption component and font-loading contract.
 - [Caption timing boundaries](caption-timing-boundaries.md) — exact segment boundaries and the video's presented media time prevent recurring preview delay.
 - [Browser WebCodecs export](browser-webcodecs-export.md) — encode timestamped caption frames in-browser, then remux pristine source audio server-side.
+- [Local Arabic transcription](faster-whisper-transcription.md) — faster-whisper base is the primary word-timestamp engine; cloud transcription is fallback only.

@@ -43,6 +43,13 @@ const currentDirname = typeof __dirname !== "undefined" ? __dirname : process.cw
 const projectRoot = fs.existsSync(path.join(process.cwd(), "src/remotion/entry.ts"))
   ? process.cwd()
   : currentDirname;
+const fasterWhisperScriptPath = fs.existsSync(path.join(process.cwd(), "scripts/transcribe_faster_whisper.py"))
+  ? path.join(process.cwd(), "scripts/transcribe_faster_whisper.py")
+  : path.join(currentDirname, "../scripts/transcribe_faster_whisper.py");
+const pythonExecutable = process.env.PYTHON_BIN ||
+  (fs.existsSync(path.join(process.cwd(), ".pythonlibs/bin/python"))
+    ? path.join(process.cwd(), ".pythonlibs/bin/python")
+    : "python");
 let remotionBundlePromise: Promise<string> | null = null;
 
 const getRemotionBundle = () => {
@@ -67,6 +74,57 @@ const getOpenRouterClient = () => {
     },
   });
 };
+
+type TranscribedWord = {
+  word: string;
+  start: number;
+  end: number;
+};
+
+const transcribeWithFasterWhisper = (audioPath: string): Promise<TranscribedWord[]> =>
+  new Promise((resolve, reject) => {
+    execFile(
+      pythonExecutable,
+      [fasterWhisperScriptPath, audioPath],
+      {
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: 300000,
+        env: {
+          ...process.env,
+          PYTHONUNBUFFERED: "1",
+        },
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(stderr.trim() || error.message));
+          return;
+        }
+
+        try {
+          const output = JSON.parse(stdout.trim());
+          if (output.error || !Array.isArray(output.words)) {
+            throw new Error(output.error || "لم يعطِ faster-whisper توقيتات كلمات صالحة.");
+          }
+
+          resolve(output.words
+            .filter((word: any) =>
+              word &&
+              typeof word.word === "string" &&
+              Number.isFinite(Number(word.start)) &&
+              Number.isFinite(Number(word.end))
+            )
+            .map((word: any) => ({
+              word: word.word.trim(),
+              start: Number(word.start),
+              end: Number(word.end),
+            }))
+            .filter((word: TranscribedWord) => word.word.length > 0));
+        } catch (parseError: any) {
+          reject(new Error(`تعذر قراءة نتيجة faster-whisper: ${parseError.message}`));
+        }
+      },
+    );
+  });
 
 type SpeechBounds = {
   start: number;
@@ -374,17 +432,13 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
     let audioTempPath: string | null = null;
 
     try {
+      req.setTimeout(300000);
+
       if (!req.file) {
         return res.status(400).json({ error: "لم يتم تقديم ملف فيديو." });
       }
 
       const openRouterClient = getOpenRouterClient();
-
-      if (!openRouterClient) {
-        return res.status(400).json({
-          error: "مفتاح OpenRouter غير متوفر. يرجى ضبط OPENROUTER_API_KEY في إعدادات Secrets."
-        });
-      }
 
       console.log("Transcribing video:", req.file.path);
 
@@ -430,19 +484,30 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
       }
 
       const fileToTranscribe = audioTempPath;
+      const audioDuration = await new Promise<number>((resolve) => {
+        ffmpeg.ffprobe(fileToTranscribe, (probeError, metadata) => {
+          const duration = Number(metadata?.format?.duration);
+          resolve(!probeError && Number.isFinite(duration) ? duration : 0);
+        });
+      });
 
       let extractedWords: Array<{ word: string; start: number; end: number }> = [];
+      let transcriptionFailure: string | null = null;
       try {
+        console.log(`Transcribing with faster-whisper (${process.env.FASTER_WHISPER_MODEL || "small"})...`);
+        extractedWords = await transcribeWithFasterWhisper(fileToTranscribe);
+        console.log(`faster-whisper transcription completed with ${extractedWords.length} words.`);
+      } catch (fasterWhisperErr: any) {
+        transcriptionFailure = fasterWhisperErr?.message || String(fasterWhisperErr);
+        console.warn("faster-whisper transcription failed, trying OpenRouter fallback:", fasterWhisperErr?.message || fasterWhisperErr);
+      }
+
+      if (extractedWords.length === 0 && openRouterClient) {
+        try {
         const modelName = process.env.OPENROUTER_MODEL || "google/gemini-2.5-flash";
         const audioBuffer = fs.readFileSync(fileToTranscribe);
         const base64Audio = audioBuffer.toString("base64");
         const audioFormat: "wav" = "wav";
-        const audioDuration = await new Promise<number>((resolve) => {
-          ffmpeg.ffprobe(fileToTranscribe, (probeError, metadata) => {
-            const duration = Number(metadata?.format?.duration);
-            resolve(!probeError && Number.isFinite(duration) ? duration : 0);
-          });
-        });
         console.log(`Transcribing with OpenRouter model ${modelName}...`);
 
         const response = await openRouterClient.chat.completions.create({
@@ -496,11 +561,19 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
         }
 
         console.log(`OpenRouter transcription completed with ${extractedWords.length} words.`);
-      } catch (openRouterErr: any) {
-        console.error("OpenRouter transcription error:", openRouterErr?.message || openRouterErr);
+        } catch (openRouterErr: any) {
+          transcriptionFailure = openRouterErr?.message || String(openRouterErr);
+          console.error("OpenRouter transcription error:", openRouterErr?.message || openRouterErr);
+        }
       }
 
       if (extractedWords.length === 0) {
+        if (transcriptionFailure) {
+          return res.status(500).json({
+            error: `تعذر تشغيل محرك التفريغ: ${transcriptionFailure}`,
+            videoId,
+          });
+        }
         return res.status(200).json({
           noSpeechFound: true,
           warning: "لم يتم العثور على أي كلام أو نصوص منطوقة في الفيديو. يمكنك إضافة كابشن تجريبي أو إدخال النصوص يدوياً واستيراد SRT.",

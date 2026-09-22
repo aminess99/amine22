@@ -1,4 +1,7 @@
 node_modules/
+.pythonlibs/
+__pycache__/
+*.py[cod]
 build/
 dist/
 coverage/

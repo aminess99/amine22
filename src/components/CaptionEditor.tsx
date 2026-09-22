@@ -45,7 +45,7 @@ import { ExportModal } from './ExportModal';
 
 import { SavedProject } from '../lib/firebaseProjects';
 
-const DEFAULT_CAPTION_SYNC_OFFSET = -0.1;
+const DEFAULT_CAPTION_SYNC_OFFSET = 0;
 
 interface CaptionEditorProps {
   videoFile: File;
@@ -58,7 +58,7 @@ export function CaptionEditor({ videoFile, onBack, initialTemplate, initialProje
   const { user, openAuthModal } = useAuth();
   const savedSettings = initialProject?.settings;
   const savedSyncOffset = savedSettings?.syncOffset;
-  const initialSyncOffset = typeof savedSyncOffset === 'number' && savedSyncOffset !== 0
+  const initialSyncOffset = typeof savedSyncOffset === 'number'
     ? savedSyncOffset
     : DEFAULT_CAPTION_SYNC_OFFSET;
   const [videoUrl, setVideoUrl] = useState<string>('');

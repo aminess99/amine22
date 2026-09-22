@@ -19,7 +19,7 @@ const defaultProps: CaptionVideoProps = {
     aspectRatio: "9:16",
     wordsPerChunk: 3,
     showEmojis: true,
-    syncOffset: -0.1,
+    syncOffset: 0,
   },
   durationInSeconds: 10,
   fps: 30,
