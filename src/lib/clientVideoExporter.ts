@@ -1,10 +1,234 @@
 import { CaptionSegment, EditorSettings } from '../types';
 import { drawCaptionsOnCanvas } from './canvasCaptionRenderer';
+import {
+  BufferTarget,
+  CanvasSource,
+  Mp4OutputFormat,
+  Output,
+  Quality,
+} from 'mediabunny';
 
 export interface ExportQualityOptions {
   resolution?: 'original' | '1080p' | '720p';
   fps?: 30 | 60;
   qualityLevel?: 'ultra' | 'high' | 'balanced';
+}
+
+type FrameCallbackVideo = HTMLVideoElement & {
+  requestVideoFrameCallback?: (
+    callback: (now: number, metadata: { mediaTime?: number }) => void
+  ) => number;
+  cancelVideoFrameCallback?: (handle: number) => void;
+};
+
+/**
+ * WebCodecs export path. Mediabunny owns the VideoEncoder and MP4 muxer while
+ * the original audio is added by the server remux endpoint. Every encoded
+ * canvas sample receives the source video's presented media timestamp, so no
+ * wall-clock or MediaRecorder timing can accumulate drift.
+ */
+export async function exportVideoViaWebCodecs(
+  sourceVideoElement: HTMLVideoElement,
+  segments: CaptionSegment[],
+  settings: EditorSettings,
+  onProgress: (percent: number) => void,
+  options?: ExportQualityOptions
+): Promise<Blob> {
+  if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') {
+    throw new Error('WebCodecs غير مدعوم في هذا المتصفح.');
+  }
+
+  let offscreenVideo: FrameCallbackVideo | null = null;
+  let frameCallbackId: number | null = null;
+  let animationFrameId: number | null = null;
+  let output: Output | null = null;
+  let finished = false;
+  let captureError: unknown = null;
+
+  const cleanup = () => {
+    if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+    if (frameCallbackId !== null) offscreenVideo?.cancelVideoFrameCallback?.(frameCallbackId);
+    if (offscreenVideo) {
+      offscreenVideo.pause();
+      offscreenVideo.removeAttribute('src');
+      offscreenVideo.load();
+      offscreenVideo.remove();
+      offscreenVideo = null;
+    }
+  };
+
+  try {
+    await document.fonts?.ready;
+
+    const sourceWidth = sourceVideoElement.videoWidth || 1080;
+    const sourceHeight = sourceVideoElement.videoHeight || 1920;
+    const aspect = sourceWidth / sourceHeight;
+    let targetWidth = sourceWidth;
+    let targetHeight = sourceHeight;
+
+    if (options?.resolution === '720p') {
+      if (aspect < 1) {
+        targetWidth = 720;
+        targetHeight = Math.round(720 / aspect);
+      } else {
+        targetHeight = 720;
+        targetWidth = Math.round(720 * aspect);
+      }
+    } else if (options?.resolution === '1080p') {
+      if (aspect < 1) {
+        targetWidth = 1080;
+        targetHeight = Math.round(1080 / aspect);
+      } else {
+        targetHeight = 1080;
+        targetWidth = Math.round(1080 * aspect);
+      }
+    }
+
+    targetWidth = Math.max(2, Math.round(targetWidth / 2) * 2);
+    targetHeight = Math.max(2, Math.round(targetHeight / 2) * 2);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) throw new Error('تعذر تهيئة لوحة WebCodecs.');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    const videoSrc = sourceVideoElement.currentSrc || sourceVideoElement.src;
+    if (!videoSrc) throw new Error('رابط مصدر الفيديو غير متوفر.');
+
+    offscreenVideo = document.createElement('video') as FrameCallbackVideo;
+    offscreenVideo.src = videoSrc;
+    offscreenVideo.muted = true;
+    offscreenVideo.playsInline = true;
+    offscreenVideo.preload = 'auto';
+    offscreenVideo.style.cssText = 'position:fixed;left:-10000px;top:-10000px;width:1px;height:1px;opacity:0;';
+    document.body.appendChild(offscreenVideo);
+
+    await new Promise<void>((resolve, reject) => {
+      if (!offscreenVideo) return reject(new Error('فيديو WebCodecs غير مهيأ.'));
+      if (offscreenVideo.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        resolve();
+        return;
+      }
+      const onLoaded = () => {
+        offscreenVideo?.removeEventListener('loadedmetadata', onLoaded);
+        offscreenVideo?.removeEventListener('error', onError);
+        resolve();
+      };
+      const onError = () => {
+        offscreenVideo?.removeEventListener('loadedmetadata', onLoaded);
+        offscreenVideo?.removeEventListener('error', onError);
+        reject(new Error('تعذر قراءة الفيديو عبر WebCodecs.'));
+      };
+      offscreenVideo.addEventListener('loadedmetadata', onLoaded);
+      offscreenVideo.addEventListener('error', onError);
+    });
+
+    const videoDuration = offscreenVideo.duration || sourceVideoElement.duration;
+    if (!Number.isFinite(videoDuration) || videoDuration <= 0) {
+      throw new Error('تعذر تحديد مدة الفيديو بدقة.');
+    }
+
+    const targetFps = options?.fps || 30;
+    const frameDuration = 1 / targetFps;
+    const quality = options?.qualityLevel === 'balanced'
+      ? 'medium'
+      : options?.qualityLevel === 'high'
+        ? 'high'
+        : 'very-high';
+
+    output = new Output({
+      format: new Mp4OutputFormat(),
+      target: new BufferTarget(),
+    });
+    const videoSource = new CanvasSource(canvas, {
+      codec: 'avc',
+      quality: new Quality(quality),
+      keyFrameInterval: 2,
+    });
+    output.addVideoTrack(videoSource, { frameRate: targetFps });
+    await output.start();
+
+    await new Promise<void>((resolve) => {
+      if (!offscreenVideo) return resolve();
+      const onSeeked = () => {
+        offscreenVideo?.removeEventListener('seeked', onSeeked);
+        resolve();
+      };
+      offscreenVideo.addEventListener('seeked', onSeeked);
+      offscreenVideo.currentTime = 0;
+      if (offscreenVideo.currentTime === 0) {
+        offscreenVideo.removeEventListener('seeked', onSeeked);
+        resolve();
+      }
+    });
+
+    let lastTimestamp = -frameDuration;
+    const finalize = async () => {
+      if (finished) return;
+      finished = true;
+      onProgress(100);
+      await output?.finalize();
+    };
+
+    const captureFrame = async (_now: number, metadata?: { mediaTime?: number }) => {
+      if (finished || !offscreenVideo) return;
+
+      try {
+        const timestamp = Number.isFinite(metadata?.mediaTime)
+          ? Math.max(0, metadata!.mediaTime!)
+          : offscreenVideo.currentTime;
+
+        if (timestamp <= lastTimestamp + 0.0001) {
+          scheduleNextFrame();
+          return;
+        }
+
+        lastTimestamp = timestamp;
+        ctx.drawImage(offscreenVideo, 0, 0, canvas.width, canvas.height);
+        drawCaptionsOnCanvas(ctx, segments, timestamp, settings, canvas.width, canvas.height);
+        await videoSource.add(timestamp, frameDuration);
+        onProgress(Math.min(99, Math.round((timestamp / videoDuration) * 100)));
+
+        if (offscreenVideo.ended || timestamp >= videoDuration - frameDuration / 2) {
+          await finalize();
+        } else {
+          scheduleNextFrame();
+        }
+      } catch (error) {
+        captureError = error;
+        finished = true;
+      }
+    };
+
+    const scheduleNextFrame = () => {
+      if (finished || !offscreenVideo) return;
+      if (offscreenVideo.requestVideoFrameCallback) {
+        frameCallbackId = offscreenVideo.requestVideoFrameCallback(captureFrame);
+      } else {
+        animationFrameId = requestAnimationFrame(() => {
+          void captureFrame(performance.now(), { mediaTime: offscreenVideo?.currentTime });
+        });
+      }
+    };
+
+    const playPromise = offscreenVideo.play();
+    scheduleNextFrame();
+    await playPromise;
+
+    while (!finished) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+
+    if (captureError) throw captureError;
+    const buffer = (output.target as BufferTarget).buffer;
+    if (!buffer) throw new Error('لم يتم إنشاء ملف MP4 بواسطة WebCodecs.');
+    return new Blob([buffer], { type: 'video/mp4' });
+  } finally {
+    cleanup();
+  }
 }
 
 /**

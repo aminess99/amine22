@@ -30,7 +30,6 @@
     "lucide-react": "^0.546.0",
     "mediabunny": "^1.59.0",
     "motion": "^12.43.0",
-    "mp4-muxer": "^5.2.2",
     "multer": "^2.4.0",
     "openai": "^6.49.0",
     "react": "^19.3.0",

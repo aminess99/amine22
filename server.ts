@@ -650,7 +650,10 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
 
     const videoId = req.body.videoId;
     const session = videoId ? videoSessions.get(videoId) : null;
-    const tempCanvasVideo = videoFile.path + "_canvas.webm";
+    const inputExtension = path.extname(videoFile.originalname || "").toLowerCase() === ".mp4"
+      ? ".mp4"
+      : ".webm";
+    const tempCanvasVideo = videoFile.path + `_canvas${inputExtension}`;
     const tempOutput = videoFile.path + "_remuxed.mp4";
     let tempOriginalAudio: string | null = null;
 

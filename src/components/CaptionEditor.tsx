@@ -36,7 +36,11 @@ import { saveProjectToFirestore } from '../lib/firebaseProjects';
 import { cn } from '../lib/utils';
 import { generateSrt, generateVtt, parseSrt } from '../lib/assGenerator';
 import { rechunkSegments, autoAlignTimestamps, shiftTimestamps } from '../lib/chunkUtils';
-import { exportVideoViaCanvas, ExportQualityOptions } from '../lib/clientVideoExporter';
+import {
+  exportVideoViaCanvas,
+  exportVideoViaWebCodecs,
+  ExportQualityOptions,
+} from '../lib/clientVideoExporter';
 import { ExportModal } from './ExportModal';
 
 import { SavedProject } from '../lib/firebaseProjects';
@@ -589,92 +593,29 @@ export function CaptionEditor({ videoFile, onBack, initialTemplate, initialProje
         throw new Error("عنصر الفيديو غير متوفر");
       }
 
-      // Primary export engine: Remotion renders a deterministic React composition
-      // with explicit frame timestamps and the original video's audio track.
+      // Primary export engine: WebCodecs encodes timestamped canvas samples
+      // directly. The server only restores the original audio track.
+      let renderedBlob: Blob;
       try {
         setExportProgress(10);
-        const sourceWidth = videoRef.current.videoWidth || 1080;
-        const sourceHeight = videoRef.current.videoHeight || 1920;
-        const aspect = sourceWidth / sourceHeight;
-        let renderWidth = sourceWidth;
-        let renderHeight = sourceHeight;
-
-        if (options?.resolution === '720p') {
-          if (aspect < 1) {
-            renderWidth = 720;
-            renderHeight = Math.round(720 / aspect);
-          } else {
-            renderHeight = 720;
-            renderWidth = Math.round(720 * aspect);
-          }
-        } else if (options?.resolution === '1080p') {
-          if (aspect < 1) {
-            renderWidth = 1080;
-            renderHeight = Math.round(1080 / aspect);
-          } else {
-            renderHeight = 1080;
-            renderWidth = Math.round(1080 * aspect);
-          }
-        }
-
-        renderWidth = Math.max(2, Math.round(renderWidth / 2) * 2);
-        renderHeight = Math.max(2, Math.round(renderHeight / 2) * 2);
-
-        const remotionForm = new FormData();
-        remotionForm.append('video', videoFile, videoFile.name);
-        if (sessionVideoId) {
-          remotionForm.append('videoId', sessionVideoId);
-        }
-        remotionForm.append('segments', JSON.stringify(segments));
-        remotionForm.append('settings', JSON.stringify(settings));
-        remotionForm.append('durationInSeconds', String(videoRef.current.duration || duration || 10));
-        remotionForm.append('fps', String(options?.fps || 30));
-        remotionForm.append('width', String(renderWidth));
-        remotionForm.append('height', String(renderHeight));
-        remotionForm.append('quality', options?.qualityLevel || 'ultra');
-        remotionForm.append('filename', videoFile.name);
-
-        const remotionResponse = await fetch('/api/remotion-export', {
-          method: 'POST',
-          body: remotionForm,
-        });
-
-        if (!remotionResponse.ok) {
-          const errorData = await remotionResponse.json().catch(() => null);
-          throw new Error(errorData?.error || `Remotion export failed (${remotionResponse.status})`);
-        }
-
-        setExportProgress(92);
-        const remotionBlob = await remotionResponse.blob();
-        const remotionUrl = URL.createObjectURL(remotionBlob);
-        const remotionLink = document.createElement('a');
-        remotionLink.href = remotionUrl;
-        remotionLink.download = `captioned_${videoFile.name.replace(/\.[^/.]+$/, "")}.mp4`;
-        document.body.appendChild(remotionLink);
-        remotionLink.click();
-        document.body.removeChild(remotionLink);
-        URL.revokeObjectURL(remotionUrl);
-
-        setExportProgress(100);
-        setTimeout(() => {
-          setIsExporting(false);
-          setIsExportModalOpen(false);
-          setExportProgress(0);
-        }, 1000);
-        return;
-      } catch (remotionError) {
-        console.warn("Remotion export unavailable, using compatibility renderer:", remotionError);
+        renderedBlob = await exportVideoViaWebCodecs(
+          videoRef.current,
+          segments,
+          settings,
+          (pct) => setExportProgress(Math.min(78, Math.max(10, Math.round(10 + pct * 0.68)))),
+          options,
+        );
+      } catch (webCodecsError) {
+        console.warn("WebCodecs export unavailable, using MediaRecorder compatibility renderer:", webCodecsError);
+        setExportProgress(20);
+        renderedBlob = await exportVideoViaCanvas(
+          videoRef.current,
+          segments,
+          settings,
+          (pct) => setExportProgress(Math.min(75, Math.max(20, Math.round(20 + pct * 0.55)))),
+          options,
+        );
       }
-
-      // Render every export with the same WYSIWYG canvas settings shown in the preview.
-      setExportProgress(20);
-      const canvasBlob = await exportVideoViaCanvas(
-        videoRef.current,
-        segments,
-        settings,
-        (pct) => setExportProgress(Math.min(75, Math.max(20, Math.round(20 + pct * 0.55)))),
-        options
-      );
 
       setExportProgress(80);
 
@@ -683,7 +624,8 @@ export function CaptionEditor({ videoFile, onBack, initialTemplate, initialProje
       // Remux the already-rendered frames with the original pristine audio.
       try {
         const formData = new FormData();
-        formData.append('video', canvasBlob, 'canvas.webm');
+        const renderedExtension = renderedBlob.type.includes('mp4') ? 'mp4' : 'webm';
+        formData.append('video', renderedBlob, `webcodecs.${renderedExtension}`);
         
         // If sessionVideoId exists, server already has the original video on disk (avoids heavy re-uploading)
         if (sessionVideoId) {
@@ -726,10 +668,10 @@ export function CaptionEditor({ videoFile, onBack, initialTemplate, initialProje
       // If remuxing fails, preserve the exact rendered frames in the direct download.
       if (!exportedSuccessfully) {
         setExportProgress(95);
-        const downloadUrl = URL.createObjectURL(canvasBlob);
+        const downloadUrl = URL.createObjectURL(renderedBlob);
         const a = document.createElement('a');
         a.href = downloadUrl;
-        const fileExt = canvasBlob.type.includes('mp4') ? 'mp4' : 'webm';
+        const fileExt = renderedBlob.type.includes('mp4') ? 'mp4' : 'webm';
         a.download = `captioned_${videoFile.name.replace(/\.[^/.]+$/, "")}.${fileExt}`;
         document.body.appendChild(a);
         a.click();
