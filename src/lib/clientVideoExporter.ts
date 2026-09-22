@@ -44,10 +44,17 @@ export async function exportVideoViaWebCodecs(
   let output: Output | null = null;
   let finished = false;
   let captureError: unknown = null;
+  let sourceEnded = false;
+  let captureInProgress = false;
+  let finalizePromise: Promise<void> | null = null;
+  let watchdogId: number | null = null;
+  let removeEndedListener: (() => void) | null = null;
 
   const cleanup = () => {
     if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
     if (frameCallbackId !== null) offscreenVideo?.cancelVideoFrameCallback?.(frameCallbackId);
+    if (watchdogId !== null) window.clearTimeout(watchdogId);
+    removeEndedListener?.();
     if (offscreenVideo) {
       offscreenVideo.pause();
       offscreenVideo.removeAttribute('src');
@@ -166,23 +173,29 @@ export async function exportVideoViaWebCodecs(
     });
 
     let lastTimestamp = -frameDuration;
-    const finalize = async () => {
-      if (finished) return;
+    const finalize = () => {
+      if (finalizePromise) return finalizePromise;
       finished = true;
       onProgress(100);
-      await output?.finalize();
+      finalizePromise = output?.finalize() ?? Promise.resolve();
+      return finalizePromise;
     };
 
     const captureFrame = async (_now: number, metadata?: { mediaTime?: number }) => {
       if (finished || !offscreenVideo) return;
 
+      captureInProgress = true;
       try {
         const timestamp = Number.isFinite(metadata?.mediaTime)
           ? Math.max(0, metadata!.mediaTime!)
           : offscreenVideo.currentTime;
 
         if (timestamp <= lastTimestamp + 0.0001) {
-          scheduleNextFrame();
+          if (sourceEnded || offscreenVideo.ended) {
+            await finalize();
+          } else {
+            scheduleNextFrame();
+          }
           return;
         }
 
@@ -192,7 +205,7 @@ export async function exportVideoViaWebCodecs(
         await videoSource.add(timestamp, frameDuration);
         onProgress(Math.min(99, Math.round((timestamp / videoDuration) * 100)));
 
-        if (offscreenVideo.ended || timestamp >= videoDuration - frameDuration / 2) {
+        if (sourceEnded || offscreenVideo.ended || timestamp >= videoDuration - frameDuration / 2) {
           await finalize();
         } else {
           scheduleNextFrame();
@@ -200,6 +213,14 @@ export async function exportVideoViaWebCodecs(
       } catch (error) {
         captureError = error;
         finished = true;
+      } finally {
+        captureInProgress = false;
+        if (sourceEnded && lastTimestamp >= 0 && !finished) {
+          void finalize().catch((error) => {
+            captureError = error;
+            finished = true;
+          });
+        }
       }
     };
 
@@ -214,15 +235,35 @@ export async function exportVideoViaWebCodecs(
       }
     };
 
+    const handleEnded = () => {
+      sourceEnded = true;
+      if (!captureInProgress && lastTimestamp >= 0 && !finished) {
+        void finalize().catch((error) => {
+          captureError = error;
+          finished = true;
+        });
+      }
+    };
+    offscreenVideo.addEventListener('ended', handleEnded);
+    removeEndedListener = () => offscreenVideo?.removeEventListener('ended', handleEnded);
+
     const playPromise = offscreenVideo.play();
     scheduleNextFrame();
     await playPromise;
+
+    watchdogId = window.setTimeout(() => {
+      if (!finished) {
+        captureError = new Error('توقف ترميز الفيديو قبل اكتمال التصدير.');
+        finished = true;
+      }
+    }, Math.max(60000, videoDuration * 4000 + 60000));
 
     while (!finished) {
       await new Promise(resolve => setTimeout(resolve, 50));
     }
 
     if (captureError) throw captureError;
+    if (finalizePromise) await finalizePromise;
     const buffer = (output.target as BufferTarget).buffer;
     if (!buffer) throw new Error('لم يتم إنشاء ملف MP4 بواسطة WebCodecs.');
     return new Blob([buffer], { type: 'video/mp4' });
