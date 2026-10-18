@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
-import { cssFilter } from '../../editor/renderer';
-import { Adjustments, OverlayAnim, TextAnimIn, TextAnimOut, TransitionType } from '../../editor/types';
+import { captionStyleFields } from '../../editor/constants';
+import { cssFilter, drawText } from '../../editor/renderer';
+import { Adjustments, OverlayAnim, TextClip, TextAnimIn, TextAnimOut, TransitionType } from '../../editor/types';
 
 const LOOP_MS = 2400;
 
@@ -274,4 +275,71 @@ function SlideFrame({ src, index, count, filter }: { key?: React.Key; src: strin
       <img src={src} alt="" draggable={false} className="h-full w-full object-cover" style={{ filter }} />
     </div>
   );
+}
+
+// ---------------------------------------------------------------- caption styles
+
+const SAMPLE_WORDS = ['شاهد', 'الآن'];
+const SAMPLE_LOOP = 2.4;
+const THUMB_W = 430; // logical width the sample is laid out in
+const THUMB_H = 215;
+
+/**
+ * A caption style drawn by the real renderer, cycling through a short sample
+ * sentence, so the preview is exactly what the video will show.
+ */
+export function CaptionStyleThumb({ styleId }: { key?: React.Key; styleId: string }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = ref.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    const look = captionStyleFields(styleId);
+    const per = (SAMPLE_LOOP - 0.3) / SAMPLE_WORDS.length;
+    const clip: TextClip = {
+      ...look,
+      id: 'preview',
+      text: SAMPLE_WORDS.join(' '),
+      start: 0,
+      duration: SAMPLE_LOOP,
+      x: 0.5,
+      y: 0.55,
+      rotation: 0,
+      align: 'center',
+      animIn: 'none',
+      animOut: 'none',
+      words: SAMPLE_WORDS.map((text, i) => ({ text, start: i * per, end: (i + 1) * per })),
+      emoji: '🔥',
+    };
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const draw = (t: number) => {
+      const w = canvas.clientWidth * dpr;
+      const h = canvas.clientHeight * dpr;
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      const bg = ctx.createLinearGradient(0, 0, w, h);
+      bg.addColorStop(0, '#334155');
+      bg.addColorStop(1, '#0f172a');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, w, h);
+      ctx.setTransform(w / THUMB_W, 0, 0, h / THUMB_H, 0, 0);
+      drawText(ctx, clip, t, THUMB_W, THUMB_H);
+    };
+    if (reducedMotion()) {
+      draw(per * 1.5);
+      return;
+    }
+    let raf = 0;
+    const start = performance.now();
+    const loop = (now: number) => {
+      draw(((now - start) / 1000) % SAMPLE_LOOP);
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [styleId]);
+  return <canvas ref={ref} className="block h-full w-full" />;
 }

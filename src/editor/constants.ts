@@ -1,4 +1,4 @@
-import { Adjustments, AspectRatio, BlendMode, ClipAnimType, EffectType, FrameTransform, MaskShape, OverlayAnim, TextAnimIn, TextAnimOut, TextClip, TransitionType } from './types';
+import { Adjustments, AspectRatio, BlendMode, CaptionHighlight, ClipAnimType, EffectType, FrameTransform, MaskShape, OverlayAnim, TextAnimIn, TextAnimOut, TextClip, TransitionType } from './types';
 
 export const PEAKS_PER_SECOND = 20;
 export const DEFAULT_IMAGE_DURATION = 3;
@@ -256,9 +256,50 @@ export const SPEED_CURVES: { id: string; label: string; points: number[] }[] = [
   { id: 'flash-out', label: 'تباطؤ', points: [3, 2, 1, 0.6, 0.3] },
 ];
 
-export const CAPTION_STYLES: { id: string; label: string; font: string; color: string; stroke: number; highlight: { style: 'color' | 'box' | 'pop' | 'karaoke'; color: string } }[] = [
-  { id: 'hormozi', label: 'هورموزي', font: 'Rubik', color: '#ffffff', stroke: 8, highlight: { style: 'color', color: '#facc15' } },
-  { id: 'box', label: 'صندوق', font: 'Cairo', color: '#ffffff', stroke: 0, highlight: { style: 'box', color: '#7c3aed' } },
-  { id: 'pop', label: 'قفزة', font: 'Almarai', color: '#ffffff', stroke: 6, highlight: { style: 'pop', color: '#22d3ee' } },
-  { id: 'karaoke', label: 'كاريوكي', font: 'Tajawal', color: '#94a3b8', stroke: 4, highlight: { style: 'karaoke', color: '#ffffff' } },
+export interface CaptionStyle {
+  id: string;
+  label: string;
+  font: string;
+  fontSize: number;
+  bold: boolean;
+  color: string;
+  strokeColor: string;
+  strokeWidth: number;
+  shadow: boolean;
+  background: string | null;
+  highlight: CaptionHighlight;
+}
+
+/** Word-timed caption looks, shared by auto captions, the restyle panel and their previews. */
+export const CAPTION_STYLES: CaptionStyle[] = [
+  { id: 'plain', label: 'ترجمة', font: 'Tajawal', fontSize: 62, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 0, shadow: false, background: 'rgba(0,0,0,0.65)', highlight: { style: 'none', color: '#ffffff' } },
+  { id: 'hormozi', label: 'هورموزي', font: 'Rubik', fontSize: 84, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 8, shadow: false, background: null, highlight: { style: 'color', color: '#facc15' } },
+  { id: 'beast', label: 'MrBeast', font: 'Rubik', fontSize: 96, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 10, shadow: true, background: null, highlight: { style: 'beast', color: '#facc15' } },
+  { id: 'single', label: 'كلمة واحدة', font: 'Rubik', fontSize: 120, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 10, shadow: true, background: null, highlight: { style: 'single', color: '#facc15' } },
+  { id: 'box', label: 'صندوق', font: 'Cairo', fontSize: 76, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 0, shadow: true, background: null, highlight: { style: 'box', color: '#7c3aed' } },
+  { id: 'pop', label: 'قفزة', font: 'Almarai', fontSize: 78, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 6, shadow: false, background: null, highlight: { style: 'pop', color: '#22d3ee' } },
+  { id: 'karaoke', label: 'كاريوكي', font: 'Tajawal', fontSize: 76, bold: true, color: '#94a3b8', strokeColor: '#000000', strokeWidth: 4, shadow: false, background: null, highlight: { style: 'karaoke', color: '#ffffff' } },
+  { id: 'neon', label: 'نيون', font: 'Cairo', fontSize: 78, bold: true, color: '#f5d0fe', strokeColor: '#000000', strokeWidth: 0, shadow: false, background: null, highlight: { style: 'neon', color: '#e879f9' } },
+  { id: 'underline', label: 'تسطير', font: 'Almarai', fontSize: 74, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 0, shadow: true, background: null, highlight: { style: 'underline', color: '#f97316' } },
+  { id: 'bubble', label: 'فقاعة', font: 'Cairo', fontSize: 70, bold: true, color: '#111827', strokeColor: '#000000', strokeWidth: 0, shadow: false, background: null, highlight: { style: 'bubble', color: '#facc15' } },
+  { id: 'gradient', label: 'تدرّج', font: 'Rubik', fontSize: 82, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 6, shadow: false, background: null, highlight: { style: 'gradient', color: '#f472b6' } },
+  { id: 'comic', label: 'كوميك', font: 'Rubik', fontSize: 84, bold: true, color: '#fde047', strokeColor: '#000000', strokeWidth: 9, shadow: false, background: null, highlight: { style: 'comic', color: '#fb923c' } },
+  { id: 'cinematic', label: 'سينمائي', font: 'Tajawal', fontSize: 56, bold: false, color: '#f8fafc', strokeColor: '#000000', strokeWidth: 0, shadow: true, background: null, highlight: { style: 'none', color: '#ffffff' } },
 ];
+
+/** The look fields a caption style sets on a text clip (position and timing are left alone). */
+export function captionStyleFields(id: string) {
+  const cs = CAPTION_STYLES.find((c) => c.id === id) ?? CAPTION_STYLES[1];
+  return {
+    captionStyle: cs.id,
+    font: cs.font,
+    fontSize: cs.fontSize,
+    bold: cs.bold,
+    color: cs.color,
+    strokeColor: cs.strokeColor,
+    strokeWidth: cs.strokeWidth,
+    shadow: cs.shadow,
+    background: cs.background,
+    highlight: { ...cs.highlight },
+  };
+}

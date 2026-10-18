@@ -268,7 +268,7 @@ function wrapLines(text: string): string[] {
   return text.split('\n');
 }
 
-function drawText(ctx: Ctx, t: TextClip, time: number, W: number, H: number): TextBounds {
+export function drawText(ctx: Ctx, t: TextClip, time: number, W: number, H: number): TextBounds {
   const local = time - t.start;
   const inDur = Math.min(0.45, t.duration / 2);
   const outDur = Math.min(0.4, t.duration / 2);
@@ -474,17 +474,74 @@ function drawOverlay(
   return bounds;
 }
 
+/** Colours the "MrBeast" style cycles through, one per word. */
+const BEAST_COLORS = ['#facc15', '#4ade80', '#f87171', '#38bdf8', '#c084fc'];
+
+function roundRectPath(ctx: Ctx, x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath();
+  if (typeof ctx.roundRect === 'function') ctx.roundRect(x, y, w, h, r);
+  else ctx.rect(x, y, w, h);
+}
+
 /**
  * A caption whose words light up as they are spoken. Words are laid out in
- * reading order (right to left for Arabic) and wrapped to the frame width.
+ * reading order (right to left for Arabic) and wrapped to the frame width;
+ * each highlight style decides how the spoken word stands out.
  */
 function drawWordCaption(ctx: Ctx, t: TextClip, time: number, W: number) {
   const words = t.words!;
   const hl = t.highlight!;
+  const fs = t.fontSize;
   const rtl = ctx.direction === 'rtl';
-  const space = ctx.measureText(' ').width;
+  // The word being said, or the last one said during a pause.
+  let current = words.findIndex((w) => time >= w.start && time < w.end);
+  if (current === -1) {
+    for (let i = words.length - 1; i >= 0; i--) if (time >= words[i].start) { current = i; break; }
+  }
+  const sinceStart = current >= 0 ? time - words[current].start : 0;
+
+  const drawWord = (text: string, cx: number, y: number, fill: string | CanvasGradient, glow?: string) => {
+    if (glow) {
+      ctx.shadowColor = glow;
+      ctx.shadowBlur = fs * 0.55;
+    } else if (t.shadow) {
+      ctx.shadowColor = 'rgba(0,0,0,0.6)';
+      ctx.shadowBlur = fs * 0.15;
+      ctx.shadowOffsetY = fs * 0.05;
+    }
+    if (t.strokeWidth > 0) {
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = t.strokeWidth * 2;
+      ctx.strokeStyle = t.strokeColor;
+      ctx.strokeText(text, cx, y);
+      if (!glow) ctx.shadowColor = 'transparent';
+    }
+    ctx.fillStyle = fill;
+    ctx.fillText(text, cx, y);
+    if (glow) ctx.fillText(text, cx, y); // a second pass makes the glow read on bright video
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+  };
+
+  ctx.textAlign = 'center';
+
+  if (hl.style === 'single') {
+    // One word at a time, popping in as it is spoken.
+    if (current < 0) return;
+    const p = Math.min(1, sinceStart / 0.14);
+    const s = 0.7 + 0.3 * (1 - Math.pow(1 - p, 3)) + 0.08 * Math.sin(p * Math.PI);
+    ctx.save();
+    ctx.scale(s, s);
+    drawWord(words[current].text, 0, 0, current % 3 === 1 ? hl.color : t.color);
+    ctx.restore();
+    drawCaptionEmoji(ctx, t, time, -fs * 1.1);
+    return;
+  }
+
+  const space = hl.style === 'bubble' ? fs * 0.75 : ctx.measureText(' ').width;
   const widths = words.map((w) => ctx.measureText(w.text).width);
-  const maxW = W * 0.88;
+  const maxW = W * 0.86;
   const lines: number[][] = [[]];
   let lineW = 0;
   widths.forEach((w, i) => {
@@ -497,58 +554,118 @@ function drawWordCaption(ctx: Ctx, t: TextClip, time: number, W: number) {
       lineW += add;
     }
   });
-  const lineHeight = t.fontSize * 1.35;
+  const lineHeight = fs * (hl.style === 'bubble' ? 1.6 : 1.35);
   const top = (-lineHeight * lines.length) / 2;
-  ctx.textAlign = 'center';
+
   lines.forEach((line, li) => {
     const total = line.reduce((sum, i) => sum + widths[i], 0) + space * (line.length - 1);
-    let cursor = rtl ? total / 2 : -total / 2;
     const y = top + lineHeight * (li + 0.5);
+    if (t.background) {
+      ctx.fillStyle = t.background;
+      roundRectPath(ctx, -total / 2 - fs * 0.35, y - fs * 0.62, total + fs * 0.7, fs * 1.24, fs * 0.2);
+      ctx.fill();
+    }
+    let cursor = rtl ? total / 2 : -total / 2;
     for (const i of line) {
       const w = widths[i];
       const cx = rtl ? cursor - w / 2 : cursor + w / 2;
       cursor += (rtl ? -1 : 1) * (w + space);
       const word = words[i];
-      const active = time >= word.start && time < word.end;
+      const active = i === current && time < word.end;
       const spoken = time >= word.start;
-      let fill = t.color;
+      const popIn = active ? 1 + 0.18 * Math.max(0, 1 - sinceStart / 0.18) : 1;
+      let fill: string | CanvasGradient = t.color;
+      let glow: string | undefined;
+
       ctx.save();
-      if (hl.style === 'color' && active) fill = hl.color;
-      if (hl.style === 'karaoke' && spoken) fill = hl.color;
-      if (hl.style === 'pop' && active) {
-        fill = hl.color;
-        ctx.translate(cx, y);
-        ctx.scale(1.2, 1.2);
-        ctx.translate(-cx, -y);
+      switch (hl.style) {
+        case 'color':
+          if (active) fill = hl.color;
+          break;
+        case 'karaoke':
+          if (spoken) fill = hl.color;
+          break;
+        case 'pop':
+          if (active) {
+            fill = hl.color;
+            ctx.translate(cx, y);
+            ctx.scale(1.12 * popIn, 1.12 * popIn);
+            ctx.translate(-cx, -y);
+          }
+          break;
+        case 'beast':
+          if (active) {
+            fill = BEAST_COLORS[i % BEAST_COLORS.length];
+            ctx.translate(cx, y);
+            ctx.scale(1.15 * popIn, 1.15 * popIn);
+            ctx.translate(-cx, -y);
+          }
+          break;
+        case 'comic':
+          if (active) {
+            fill = hl.color;
+            ctx.translate(cx, y);
+            ctx.rotate((-5 * Math.PI) / 180);
+            ctx.scale(1.1 * popIn, 1.1 * popIn);
+            ctx.translate(-cx, -y);
+          }
+          break;
+        case 'neon':
+          if (active) {
+            fill = '#ffffff';
+            glow = hl.color;
+          } else {
+            ctx.globalAlpha *= 0.75;
+          }
+          break;
+        case 'gradient':
+          if (active) {
+            const g = ctx.createLinearGradient(cx - w / 2, 0, cx + w / 2, 0);
+            g.addColorStop(0, hl.color);
+            g.addColorStop(1, '#818cf8');
+            fill = g;
+          }
+          break;
+        case 'box':
+          if (active) {
+            ctx.fillStyle = hl.color;
+            roundRectPath(ctx, cx - w / 2 - fs * 0.18, y - fs * 0.62, w + fs * 0.36, fs * 1.24, fs * 0.18);
+            ctx.fill();
+          }
+          break;
+        case 'bubble':
+          ctx.fillStyle = active ? hl.color : '#ffffff';
+          roundRectPath(ctx, cx - w / 2 - fs * 0.28, y - fs * 0.66, w + fs * 0.56, fs * 1.32, fs * 0.66);
+          ctx.fill();
+          break;
+        case 'underline':
+          if (active) {
+            ctx.fillStyle = hl.color;
+            const grow = Math.min(1, sinceStart / 0.15);
+            roundRectPath(ctx, cx - (w / 2) * grow, y + fs * 0.5, w * grow, fs * 0.13, fs * 0.06);
+            ctx.fill();
+          }
+          break;
       }
-      if (hl.style === 'box' && active) {
-        const padX = t.fontSize * 0.18;
-        const padY = t.fontSize * 0.12;
-        ctx.fillStyle = hl.color;
-        ctx.beginPath();
-        const bx = cx - w / 2 - padX;
-        const by = y - t.fontSize / 2 - padY;
-        if (typeof ctx.roundRect === 'function') ctx.roundRect(bx, by, w + padX * 2, t.fontSize + padY * 2, t.fontSize * 0.18);
-        else ctx.rect(bx, by, w + padX * 2, t.fontSize + padY * 2);
-        ctx.fill();
-      }
-      if (t.shadow) {
-        ctx.shadowColor = 'rgba(0,0,0,0.6)';
-        ctx.shadowBlur = t.fontSize * 0.15;
-        ctx.shadowOffsetY = t.fontSize * 0.05;
-      }
-      if (t.strokeWidth > 0) {
-        ctx.lineJoin = 'round';
-        ctx.lineWidth = t.strokeWidth * 2;
-        ctx.strokeStyle = t.strokeColor;
-        ctx.strokeText(word.text, cx, y);
-        ctx.shadowColor = 'transparent';
-      }
-      ctx.fillStyle = fill;
-      ctx.fillText(word.text, cx, y);
+      drawWord(word.text, cx, y, fill, glow);
       ctx.restore();
     }
   });
+  drawCaptionEmoji(ctx, t, time, top - fs * 0.75);
+}
+
+/** An emoji that pops in above a caption. */
+function drawCaptionEmoji(ctx: Ctx, t: TextClip, time: number, y: number) {
+  if (!t.emoji) return;
+  const p = Math.min(1, Math.max(0, (time - t.start) / 0.3));
+  const s = p < 1 ? 0.4 + 0.8 * p - 0.2 * Math.sin(p * Math.PI) : 1 + 0.04 * Math.sin(time * 6);
+  ctx.save();
+  ctx.translate(0, y);
+  ctx.scale(s, s);
+  ctx.font = `${t.fontSize * 1.05}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.fillText(t.emoji, 0, 0);
+  ctx.restore();
 }
 
 /** Draws one composed frame. Shared by the live preview and the exporter. */

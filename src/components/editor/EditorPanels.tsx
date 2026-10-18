@@ -3,10 +3,10 @@ import { Captions, Check, Film, Image as ImageIcon, Layers, Loader2, Mic, Music,
 import { cn } from '../../lib/utils';
 import { CAPTION_STYLES, FILTER_PRESETS, STICKERS, TEXT_PRESETS, TRANSITIONS, presetAdjustments } from '../../editor/constants';
 import { PROJECT_TEMPLATES, templatePreview } from '../../editor/templates';
-import { FilterThumb, TemplateThumb, TransitionThumb } from './previews';
+import { CaptionStyleThumb, FilterThumb, TemplateThumb, TransitionThumb } from './previews';
 import { cssFilter } from '../../editor/renderer';
 import { formatTime } from '../../editor/timeline';
-import { AssetKind, MediaAsset, TransitionType } from '../../editor/types';
+import { AssetKind, MediaAsset, TextClip, TransitionType } from '../../editor/types';
 
 function UploadButton({
   accept,
@@ -135,55 +135,177 @@ export function MediaPanel({ assets, kinds, loading, onFiles, onAdd, onOverlay, 
 interface CaptionTool {
   busy: boolean;
   status: string | null;
-  run: (wordsPerCaption: number, styleId: string) => void;
+  /** Upload/transcription progress 0..1 while busy, or null when unknown. */
+  progress: number | null;
+  run: (wordsPerCaption: number, styleId: string, emoji: boolean) => void;
 }
 
-export function TextPanel({ onAdd, captions }: { onAdd: (presetId: string) => void; captions: CaptionTool }) {
+/** Edits applied to every word-timed caption at once. */
+export interface CaptionManager {
+  items: TextClip[];
+  restyle: (styleId: string) => void;
+  setY: (y: number) => void;
+  setSize: (percent: number) => void;
+  setEmoji: (on: boolean) => void;
+  editLine: (id: string, text: string) => void;
+  deleteLine: (id: string) => void;
+  seek: (t: number) => void;
+  removeAll: () => void;
+}
+
+const POSITIONS = [
+  { label: 'أعلى', y: 0.2 },
+  { label: 'وسط', y: 0.5 },
+  { label: 'أسفل', y: 0.75 },
+  { label: 'أسفل جداً', y: 0.86 },
+];
+
+function CaptionsSection({ captions, manager }: { captions: CaptionTool; manager: CaptionManager }) {
+  const items = manager.items;
+  const current = items[0]?.captionStyle;
+  const [style, setStyle] = React.useState(current ?? 'hormozi');
   const [words, setWords] = React.useState(3);
-  const [style, setStyle] = React.useState('hormozi');
+  const [emoji, setEmoji] = React.useState(true);
+  const [confirmClear, setConfirmClear] = React.useState(false);
+  const base = CAPTION_STYLES.find((c) => c.id === (current ?? style));
+  const sizePct = items.length && base ? Math.round((items[0].fontSize / base.fontSize) * 100) : 100;
+
   return (
-    <div className="space-y-4 p-4">
-      <div className="space-y-2 rounded-xl bg-violet-500/10 p-3 ring-1 ring-violet-400/20">
-        <div className="flex items-center gap-2 text-sm font-bold text-violet-100">
-          <Captions className="h-4 w-4" /> كابشن تلقائي بالذكاء الاصطناعي
-        </div>
-        <p className="text-[11px] leading-relaxed text-violet-200/70">يفرّغ كلام الفيديو ويضيفه كنصوص متزامنة على الخط الزمني.</p>
-        <div className="grid grid-cols-5 gap-1">
-          {[{ id: 'plain', label: 'عادي', font: 'Tajawal', color: '#fff', hl: '#fff' }, ...CAPTION_STYLES.map((c) => ({ id: c.id, label: c.label, font: c.font, color: c.color, hl: c.highlight.color }))].map((c) => (
+    <div className="space-y-3 rounded-xl bg-violet-500/10 p-3 ring-1 ring-violet-400/20">
+      <div className="flex items-center gap-2 text-sm font-bold text-violet-100">
+        <Captions className="h-4 w-4" /> كابشن تلقائي بالذكاء الاصطناعي
+      </div>
+      <p className="text-[11px] leading-relaxed text-violet-200/70">
+        {items.length
+          ? 'اضغط أي نمط لتغيير شكل كل الكابشن فوراً، بدون إعادة التفريغ.'
+          : 'اختر النمط، ثم اضغط إنشاء. يُفرَّغ كلام الفيديو ويُضاف كنصوص متزامنة.'}
+      </p>
+      <div className="grid grid-cols-3 gap-1.5">
+        {CAPTION_STYLES.map((c) => {
+          const active = (items.length ? current : style) === c.id;
+          return (
             <button
               key={c.id}
               type="button"
-              onClick={() => setStyle(c.id)}
-              className={cn('flex flex-col items-center gap-0.5 rounded-lg py-1.5 text-[10px]', style === c.id ? 'bg-violet-400/25 text-white ring-1 ring-violet-300' : 'bg-white/5 text-slate-300')}
+              onClick={() => {
+                setStyle(c.id);
+                if (items.length) manager.restyle(c.id);
+              }}
+              className="text-center"
             >
-              <span className="text-xs font-black" style={{ fontFamily: `"${c.font}", sans-serif` }}>
-                <span style={{ color: c.color }}>أ</span>
-                <span style={{ color: c.hl }}>ب</span>
-              </span>
-              {c.label}
+              <div className={cn('aspect-[16/8] overflow-hidden rounded-lg ring-2 transition', active ? 'ring-violet-300' : 'ring-transparent hover:ring-white/30')}>
+                <CaptionStyleThumb styleId={c.id} />
+              </div>
+              <span className={cn('mt-0.5 block text-[10px]', active ? 'font-bold text-white' : 'text-slate-300')}>{c.label}</span>
             </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-2 text-[11px] text-slate-300">
-          <span>كلمات في كل سطر:</span>
-          {[1, 2, 3, 5].map((n) => (
-            <button key={n} type="button" onClick={() => setWords(n)}
-              className={cn('h-6 w-6 rounded-md', words === n ? 'bg-violet-400 text-slate-950' : 'bg-white/5 hover:bg-white/10')}>
-              {n}
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          disabled={captions.busy}
-          onClick={() => captions.run(words, style)}
-          className="flex w-full items-center justify-center gap-2 rounded-lg bg-violet-500 py-2 text-xs font-bold text-white hover:bg-violet-400 disabled:opacity-60"
-        >
-          {captions.busy && <Loader2 className="h-4 w-4 animate-spin" />}
-          {captions.busy ? 'جاري التفريغ...' : 'إنشاء الكابشن'}
-        </button>
-        {captions.status && <p className="text-[11px] text-violet-100/80">{captions.status}</p>}
+          );
+        })}
       </div>
+
+      {!items.length && (
+        <>
+          <div className="flex items-center gap-2 text-[11px] text-slate-300">
+            <span>كلمات في كل سطر:</span>
+            {[1, 2, 3, 5].map((n) => (
+              <button key={n} type="button" onClick={() => setWords(n)}
+                className={cn('h-6 w-6 rounded-md', words === n ? 'bg-violet-400 text-slate-950' : 'bg-white/5 hover:bg-white/10')}>
+                {n}
+              </button>
+            ))}
+          </div>
+          <label className="flex items-center justify-between text-[11px] text-slate-300">
+            <span>إيموجي تلقائي فوق الكلمات المهمة 🔥</span>
+            <input type="checkbox" checked={emoji} onChange={(e) => setEmoji(e.target.checked)} className="h-4 w-4 accent-violet-400" />
+          </label>
+          <button
+            type="button"
+            disabled={captions.busy}
+            onClick={() => captions.run(words, style, emoji)}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-violet-500 py-2 text-xs font-bold text-white hover:bg-violet-400 disabled:opacity-60"
+          >
+            {captions.busy && <Loader2 className="h-4 w-4 animate-spin" />}
+            {captions.busy ? 'جاري التفريغ...' : 'إنشاء الكابشن'}
+          </button>
+        </>
+      )}
+      {captions.busy && captions.progress !== null && (
+        <div className="h-1.5 overflow-hidden rounded-full bg-white/10" dir="ltr">
+          <div className="h-full rounded-full bg-violet-400 transition-[width]" style={{ width: `${Math.round(captions.progress * 100)}%` }} />
+        </div>
+      )}
+      {captions.status && <p className="text-[11px] text-violet-100/80">{captions.status}</p>}
+
+      {items.length > 0 && (
+        <div className="space-y-3 border-t border-violet-300/15 pt-3">
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-semibold text-slate-300">الموضع</p>
+            <div className="grid grid-cols-4 gap-1">
+              {POSITIONS.map((p) => (
+                <button key={p.label} type="button" onClick={() => manager.setY(p.y)}
+                  className={cn('rounded-md py-1.5 text-[11px]', Math.abs(items[0].y - p.y) < 0.02 ? 'bg-violet-400 text-slate-950' : 'bg-white/5 text-slate-300 hover:bg-white/10')}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="block">
+            <div className="mb-1 flex justify-between text-[11px] text-slate-400">
+              <span>الحجم</span>
+              <span className="tabular-nums text-slate-200">{sizePct}%</span>
+            </div>
+            <input type="range" min={50} max={160} value={sizePct} onChange={(e) => manager.setSize(Number(e.target.value))} className="w-full accent-violet-400" dir="ltr" />
+          </label>
+          <label className="flex items-center justify-between text-[11px] text-slate-300">
+            <span>إيموجي تلقائي 🔥</span>
+            <input type="checkbox" checked={items.some((t) => t.emoji)} onChange={(e) => manager.setEmoji(e.target.checked)} className="h-4 w-4 accent-violet-400" />
+          </label>
+
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-semibold text-slate-300">النصوص ({items.length} سطر) · صحّح أي كلمة هنا</p>
+            <div className="max-h-64 space-y-1 overflow-y-auto pl-1">
+              {items.map((t) => (
+                <div key={t.id} className="flex items-center gap-1.5">
+                  <button type="button" onClick={() => manager.seek(t.start)} className="w-11 shrink-0 rounded bg-white/5 py-1 text-[10px] tabular-nums text-slate-400 hover:text-white" dir="ltr" title="انتقل إلى هذا السطر">
+                    {formatTime(t.start)}
+                  </button>
+                  <input
+                    value={t.text}
+                    dir="auto"
+                    onChange={(e) => manager.editLine(t.id, e.target.value)}
+                    className="min-w-0 flex-1 rounded-md border border-white/10 bg-slate-900 px-2 py-1 text-xs text-slate-100 focus:border-violet-400 focus:outline-none"
+                  />
+                  <button type="button" onClick={() => manager.deleteLine(t.id)} className="shrink-0 rounded p-1 text-slate-500 hover:text-red-300" title="حذف السطر">
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (!confirmClear) {
+                setConfirmClear(true);
+                window.setTimeout(() => setConfirmClear(false), 3000);
+                return;
+              }
+              setConfirmClear(false);
+              manager.removeAll();
+            }}
+            className={cn('w-full rounded-lg py-1.5 text-[11px]', confirmClear ? 'bg-red-500/25 text-red-200' : 'bg-white/5 text-slate-400 hover:text-red-300')}
+          >
+            {confirmClear ? 'اضغط مجدداً لحذف كل الكابشن' : 'حذف كل الكابشن'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function TextPanel({ onAdd, captions, manager }: { onAdd: (presetId: string) => void; captions: CaptionTool; manager: CaptionManager }) {
+  return (
+    <div className="space-y-4 p-4">
+      <CaptionsSection captions={captions} manager={manager} />
     <div className="grid grid-cols-2 gap-2">
       {TEXT_PRESETS.map((p) => (
         <button
