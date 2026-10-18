@@ -4,6 +4,28 @@ import { ExportCancelled, ExportOptions, exportProject } from '../../editor/expo
 import { MediaAsset, Project } from '../../editor/types';
 import { Segmented } from './ui';
 
+interface HostDownloads {
+  save: (req: { filename: string; data: Blob }) => Promise<unknown>;
+}
+
+/**
+ * When the editor runs inside a sandboxed host page that blocks `<a download>`,
+ * the host may expose its own save prompt; otherwise plain links are used.
+ */
+function useHostDownloads(): HostDownloads | null {
+  const [api, setApi] = useState<HostDownloads | null>(null);
+  useEffect(() => {
+    const host = (window as unknown as { claude?: { use?: (name: string) => Promise<HostDownloads | null> } }).claude;
+    if (!host?.use) return;
+    let alive = true;
+    host.use('downloads').then((d) => alive && setApi(d)).catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return api;
+}
+
 interface Props {
   project: Project;
   assets: Map<string, MediaAsset>;
@@ -13,13 +35,15 @@ interface Props {
 type Phase =
   | { kind: 'setup' }
   | { kind: 'running'; progress: number; stage: string }
-  | { kind: 'done'; url: string; fileName: string; size: number; seconds: number }
+  | { kind: 'done'; url: string; blob: Blob; fileName: string; size: number; seconds: number }
   | { kind: 'error'; message: string };
 
 export function EditorExportModal({ project, assets, onClose }: Props) {
   const [options, setOptions] = useState<ExportOptions>({ resolution: 1080, fps: 30, quality: 'high' });
   const [phase, setPhase] = useState<Phase>({ kind: 'setup' });
   const signal = useRef({ cancelled: false });
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const hostDownloads = useHostDownloads();
 
   useEffect(() => {
     const s = signal.current;
@@ -50,6 +74,7 @@ export function EditorExportModal({ project, assets, onClose }: Props) {
       setPhase({
         kind: 'done',
         url: URL.createObjectURL(blob),
+        blob,
         fileName: `video-${stamp}.${extension}`,
         size: blob.size,
         seconds: (performance.now() - startedAt) / 1000,
@@ -167,11 +192,20 @@ export function EditorExportModal({ project, assets, onClose }: Props) {
               <a
                 href={phase.url}
                 download={phase.fileName}
+                onClick={(e) => {
+                  if (!hostDownloads) return;
+                  e.preventDefault();
+                  setSaveError(null);
+                  hostDownloads.save({ filename: phase.fileName, data: phase.blob }).catch((err: { code?: string }) => {
+                    if (err?.code !== 'declined') setSaveError('تعذر حفظ الملف. حاول مرة أخرى.');
+                  });
+                }}
                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-l from-cyan-400 to-sky-500 py-3 text-sm font-bold text-slate-950 hover:brightness-110"
               >
                 <Download className="h-4 w-4" />
                 تحميل الفيديو
               </a>
+              {saveError && <p className="text-center text-xs text-red-300">{saveError}</p>}
               <button
                 type="button"
                 onClick={() => setPhase({ kind: 'setup' })}

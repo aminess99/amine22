@@ -66,7 +66,7 @@ const replaceById = <T extends { id: string }>(list: T[], id: string, fn: (item:
   list.map((item) => (item.id === id ? fn(item) : item));
 
 interface VideoEditorProps {
-  onBack: () => void;
+  onBack?: () => void;
 }
 
 export function VideoEditor({ onBack }: VideoEditorProps) {
@@ -524,17 +524,19 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     <div className="fixed inset-0 z-50 flex flex-col bg-[#0b0d12] text-slate-100" dir="rtl">
       {/* Top bar */}
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-white/5 bg-[#10131a] px-2 sm:h-14 sm:px-4">
-        <button
-          type="button"
-          onClick={() => {
-            if (!isEmpty && !window.confirm('سيتم فقدان المشروع الحالي. هل تريد الخروج؟')) return;
-            onBack();
-          }}
-          className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-slate-300 hover:bg-white/10"
-        >
-          <ArrowRight className="h-4 w-4" />
-          <span className="hidden sm:inline">خروج</span>
-        </button>
+        {onBack && (
+          <button
+            type="button"
+            onClick={() => {
+              if (!isEmpty && !window.confirm('سيتم فقدان المشروع الحالي. هل تريد الخروج؟')) return;
+              onBack();
+            }}
+            className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-slate-300 hover:bg-white/10"
+          >
+            <ArrowRight className="h-4 w-4" />
+            <span className="hidden sm:inline">خروج</span>
+          </button>
+        )}
         <div className="flex items-center gap-2">
           <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-tr from-cyan-400 to-sky-600 text-slate-950">
             <Scissors className="h-4 w-4" />
