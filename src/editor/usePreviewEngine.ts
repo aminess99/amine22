@@ -1,5 +1,6 @@
 import { RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { ASPECT_SIZES } from './constants';
+import { filmstripFrame } from './media';
 import { renderFrame } from './renderer';
 import { audioClipEnd, audioGainAt, clamp, getMainFrameState, overlayEnd, sourceTimeFor } from './timeline';
 import { FrameRef, LaidOutClip, MediaAsset, Project, TextBounds } from './types';
@@ -16,6 +17,10 @@ interface EngineInput {
 }
 
 const DRIFT_PLAYING = 0.3;
+/** While playing, the held-frame copy is refreshed at most this often (it costs a draw). */
+const HOLD_REFRESH_MS = 400;
+const HOLD_MAX_SIDE = 720;
+
 /** Clips starting this soon are pre-seeked so the cut doesn't wait on a seek. */
 const PRELOAD_AHEAD = 1.5;
 const DRIFT_PAUSED = 0.02;
@@ -58,6 +63,43 @@ export function usePreviewEngine(input: EngineInput) {
   const audios = useRef(new Map<string, HTMLAudioElement>());
   const images = useRef(new Map<string, HTMLImageElement>());
   const overlayVideos = useRef(new Map<string, HTMLVideoElement>());
+
+  // A seeking or still-loading <video> has no frame to draw, which used to flash the
+  // background. Each video keeps a copy of the last frame it showed to draw instead,
+  // and a clip that has never shown a frame borrows the nearest filmstrip still.
+  const held = useRef(new Map<string, { canvas: HTMLCanvasElement; mediaTime: number; at: number }>());
+  const stills = useRef(new Map<string, HTMLImageElement>());
+
+  const videoFrame = (key: string, v: HTMLVideoElement | undefined, asset: MediaAsset, sourceTime: number, playing: boolean): CanvasImageSource | null => {
+    const hold = held.current.get(key);
+    if (v && v.readyState >= 2 && v.videoWidth) {
+      const now = performance.now();
+      const stale = !hold || (hold.mediaTime !== v.currentTime && (!playing || now - hold.at > HOLD_REFRESH_MS));
+      if (stale && !v.seeking) {
+        const scale = Math.min(1, HOLD_MAX_SIDE / Math.max(v.videoWidth, v.videoHeight));
+        const canvas = hold?.canvas ?? document.createElement('canvas');
+        const w = Math.max(1, Math.round(v.videoWidth * scale));
+        const h = Math.max(1, Math.round(v.videoHeight * scale));
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+        canvas.getContext('2d')?.drawImage(v, 0, 0, w, h);
+        held.current.set(key, { canvas, mediaTime: v.currentTime, at: now });
+      }
+      if (!v.seeking) return v;
+    }
+    if (hold) return hold.canvas;
+    const src = filmstripFrame(asset, sourceTime);
+    if (!src) return null;
+    let img = stills.current.get(src);
+    if (!img) {
+      img = new Image();
+      img.src = src;
+      stills.current.set(src, img);
+    }
+    return img.complete && img.naturalWidth ? img : null;
+  };
 
   useEffect(() => {
     const holder = document.createElement('div');
@@ -109,6 +151,7 @@ export function usePreviewEngine(input: EngineInput) {
         el.pause();
         el.remove();
         videos.current.delete(id);
+        held.current.delete(id);
       }
     }
 
@@ -141,6 +184,7 @@ export function usePreviewEngine(input: EngineInput) {
         el.pause();
         el.remove();
         overlayVideos.current.delete(id);
+        held.current.delete(`ov:${id}`);
       }
     }
 
@@ -374,16 +418,15 @@ export function usePreviewEngine(input: EngineInput) {
             const img = images.current.get(asset.id);
             return img && img.complete && img.naturalWidth ? img : null;
           }
-          const v = overlayVideos.current.get(o.id);
-          return v && v.readyState >= 2 ? v : null;
+          if (!asset) return null;
+          return videoFrame(`ov:${o.id}`, overlayVideos.current.get(o.id), asset, o.inPoint + (t - o.start), playNow);
         },
         getFrame: (ref) => {
           if (ref.lc.asset.kind === 'image') {
             const img = images.current.get(ref.lc.asset.id);
             return img && img.complete && img.naturalWidth ? img : null;
           }
-          const v = videos.current.get(ref.lc.clip.id);
-          return v && v.readyState >= 2 ? v : null;
+          return videoFrame(ref.lc.clip.id, videos.current.get(ref.lc.clip.id), ref.lc.asset, ref.sourceTime, playNow);
         },
       });
     };

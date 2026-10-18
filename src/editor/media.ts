@@ -201,3 +201,13 @@ async function thumbnailFromElement(url: string, duration: number): Promise<stri
     video.load();
   }
 }
+
+/** The filmstrip frame closest to a source time, falling back to the asset thumbnail. */
+export function filmstripFrame(asset: MediaAsset | undefined, sourceTime: number): string | undefined {
+  if (!asset) return undefined;
+  if (asset.frames?.length && asset.frameInterval) {
+    const i = Math.min(asset.frames.length - 1, Math.max(0, Math.floor(sourceTime / asset.frameInterval)));
+    return asset.frames[i] || asset.thumbnail;
+  }
+  return asset.thumbnail;
+}

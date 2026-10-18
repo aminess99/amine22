@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { cssFilter } from '../../editor/renderer';
-import { Adjustments, MediaAsset, OverlayAnim, TextAnimIn, TextAnimOut, TransitionType } from '../../editor/types';
+import { Adjustments, OverlayAnim, TextAnimIn, TextAnimOut, TransitionType } from '../../editor/types';
 
 const LOOP_MS = 2400;
 
@@ -31,15 +31,7 @@ function Still({ src, filter, className, style }: { src?: string | null; filter?
   return <img src={src} alt="" draggable={false} className={`${className ?? ''} object-cover`} style={{ ...style, filter }} />;
 }
 
-/** Picks the filmstrip frame closest to a source time, falling back to the asset thumbnail. */
-export function frameAt(asset: MediaAsset | undefined, sourceTime: number): string | undefined {
-  if (!asset) return undefined;
-  if (asset.frames?.length && asset.frameInterval) {
-    const i = Math.min(asset.frames.length - 1, Math.max(0, Math.floor(sourceTime / asset.frameInterval)));
-    return asset.frames[i] || asset.thumbnail;
-  }
-  return asset.thumbnail;
-}
+export { filmstripFrame as frameAt } from '../../editor/media';
 
 // ---------------------------------------------------------------- filters
 
