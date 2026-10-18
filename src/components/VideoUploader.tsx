@@ -1,4 +1,4 @@
-import { Upload, Video, AlertCircle, Sparkles, CheckCircle2, HelpCircle, ShieldCheck, Play, Zap, FileText, X, Layers, UserCheck } from 'lucide-react';
+import { Upload, Video, AlertCircle, Sparkles, CheckCircle2, HelpCircle, ShieldCheck, Play, Zap, FileText, X, Layers, UserCheck, Scissors } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { cn } from '../lib/utils';
@@ -269,6 +269,17 @@ export function VideoUploader({ onVideoSelect, onNavigate }: VideoUploaderProps)
             )}
             <span>ليس لديك فيديو جاهز؟ جرب فيديو نموذجي فوري</span>
           </button>
+
+          {onNavigate && (
+            <button
+              type="button"
+              onClick={() => onNavigate('editor')}
+              className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-slate-950 bg-gradient-to-l from-cyan-400 to-sky-500 hover:brightness-110 px-4 py-2.5 rounded-xl transition-all shadow-sm shadow-cyan-500/20 active:scale-95 cursor-pointer"
+            >
+              <Scissors className="w-3.5 h-3.5" />
+              <span>محرر الفيديو الجديد: قص ودمج وفلاتر وانتقالات</span>
+            </button>
+          )}
 
           {onNavigate && (
             <button

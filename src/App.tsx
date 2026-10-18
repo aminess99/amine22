@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { CaptionEditor } from './components/CaptionEditor';
 import { VideoUploader } from './components/VideoUploader';
+import { VideoEditor } from './components/editor/VideoEditor';
 import { Navbar, PageTab } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { TemplatesPage } from './components/pages/TemplatesPage';
@@ -36,6 +37,10 @@ function MainApp() {
         initialProject={loadedProject}
       />
     );
+  }
+
+  if (currentPage === 'editor') {
+    return <VideoEditor onBack={() => setCurrentPage('studio')} />;
   }
 
   // Handle template selection from the templates showcase page

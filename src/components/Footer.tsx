@@ -53,6 +53,15 @@ export function Footer({ onNavigate }: FooterProps) {
             <ul className="space-y-2">
               <li>
                 <button 
+                  onClick={() => handleNav('editor')}
+                  className="hover:text-indigo-300 transition-colors flex items-center gap-1.5"
+                >
+                  <Film className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>محرر الفيديو</span>
+                </button>
+              </li>
+              <li>
+                <button 
                   onClick={() => handleNav('studio')}
                   className="hover:text-indigo-300 transition-colors flex items-center gap-1.5"
                 >
