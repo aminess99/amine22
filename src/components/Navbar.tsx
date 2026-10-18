@@ -12,12 +12,13 @@ import {
   User as UserIcon,
   LogOut,
   FolderOpen,
-  CreditCard
+  CreditCard,
+  Scissors
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../context/AuthContext';
 
-export type PageTab = 'studio' | 'templates' | 'features' | 'pricing' | 'help' | 'privacy' | 'terms' | 'contact';
+export type PageTab = 'studio' | 'editor' | 'templates' | 'features' | 'pricing' | 'help' | 'privacy' | 'terms' | 'contact';
 
 interface NavbarProps {
   currentPage: PageTab;
@@ -33,6 +34,7 @@ export function Navbar({ currentPage, onNavigate, onStartVideo, onOpenSavedProje
 
   const navItems: { id: PageTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { id: 'studio', label: 'الرئيسية (الاستوديو)', icon: Video },
+    { id: 'editor', label: 'محرر الفيديو', icon: Scissors },
     { id: 'templates', label: 'معرض القوالب', icon: Layers },
     { id: 'features', label: 'المميزات وكيف تعمل', icon: Zap },
     { id: 'pricing', label: 'خطط الأسعار', icon: CreditCard },
