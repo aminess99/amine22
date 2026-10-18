@@ -1,7 +1,7 @@
 import { RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { ASPECT_SIZES } from './constants';
 import { renderFrame } from './renderer';
-import { audioClipEnd, audioGainAt, clamp, getMainFrameState } from './timeline';
+import { audioClipEnd, audioGainAt, clamp, getMainFrameState, overlayEnd } from './timeline';
 import { FrameRef, LaidOutClip, MediaAsset, Project, TextBounds } from './types';
 
 interface EngineInput {
@@ -10,7 +10,7 @@ interface EngineInput {
   assets: Map<string, MediaAsset>;
   layout: LaidOutClip[];
   duration: number;
-  selectedTextId: string | null;
+  selectedId: string | null;
   /** Preview canvas pixels per base pixel. */
   previewScale: number;
 }
@@ -52,6 +52,7 @@ export function usePreviewEngine(input: EngineInput) {
   const videos = useRef(new Map<string, HTMLVideoElement>());
   const audios = useRef(new Map<string, HTMLAudioElement>());
   const images = useRef(new Map<string, HTMLImageElement>());
+  const overlayVideos = useRef(new Map<string, HTMLVideoElement>());
 
   useEffect(() => {
     const holder = document.createElement('div');
@@ -60,14 +61,16 @@ export function usePreviewEngine(input: EngineInput) {
     holderRef.current = holder;
     const vids = videos.current;
     const auds = audios.current;
+    const ovs = overlayVideos.current;
     return () => {
-      for (const el of [...vids.values(), ...auds.values()]) {
+      for (const el of [...vids.values(), ...auds.values(), ...ovs.values()]) {
         el.pause();
         el.removeAttribute('src');
         el.load();
       }
       vids.clear();
       auds.clear();
+      ovs.clear();
       holder.remove();
     };
   }, []);
@@ -104,6 +107,38 @@ export function usePreviewEngine(input: EngineInput) {
       }
     }
 
+    const wantedOverlays = new Set<string>();
+    for (const o of input.project.overlays) {
+      const asset = input.assets.get(o.assetId);
+      if (!asset) continue;
+      if (asset.kind === 'image') {
+        if (!images.current.has(asset.id)) {
+          const img = new Image();
+          img.src = asset.url;
+          images.current.set(asset.id, img);
+        }
+        continue;
+      }
+      wantedOverlays.add(o.id);
+      if (!overlayVideos.current.has(o.id)) {
+        const v = document.createElement('video');
+        v.src = asset.url;
+        v.preload = 'auto';
+        v.playsInline = true;
+        v.muted = true;
+        v.currentTime = o.inPoint;
+        holder.appendChild(v);
+        overlayVideos.current.set(o.id, v);
+      }
+    }
+    for (const [id, el] of overlayVideos.current) {
+      if (!wantedOverlays.has(id)) {
+        el.pause();
+        el.remove();
+        overlayVideos.current.delete(id);
+      }
+    }
+
     const wantedAudios = new Set<string>();
     for (const a of input.project.audios) {
       const asset = input.assets.get(a.assetId);
@@ -124,7 +159,7 @@ export function usePreviewEngine(input: EngineInput) {
         audios.current.delete(id);
       }
     }
-  }, [input.layout, input.project.audios, input.assets]);
+  }, [input.layout, input.project.audios, input.project.overlays, input.assets]);
 
   const currentTime = () => {
     if (!playingRef.current) return timeRef.current;
@@ -165,7 +200,7 @@ export function usePreviewEngine(input: EngineInput) {
     let lastUiUpdate = 0;
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick);
-      const { canvasRef, project, layout, duration, selectedTextId, previewScale } = latest.current;
+      const { canvasRef, project, layout, duration, selectedId, previewScale, assets } = latest.current;
       let t = currentTime();
       const isPlaying = playingRef.current;
       if (isPlaying && t >= duration) {
@@ -216,6 +251,19 @@ export function usePreviewEngine(input: EngineInput) {
         syncMedia(el, a.inPoint + (t - a.start), playNow, 1, false);
       }
 
+      // --- sync overlay videos
+      for (const o of project.overlays) {
+        const el = overlayVideos.current.get(o.id);
+        if (!el) continue;
+        if (t < o.start || t >= overlayEnd(o)) {
+          if (!el.paused) el.pause();
+          continue;
+        }
+        el.muted = o.muted || !assets.get(o.assetId)?.hasAudio;
+        el.volume = clamp(o.volume, 0, 1);
+        syncMedia(el, o.inPoint + (t - o.start), playNow, 1, false);
+      }
+
       // --- paint
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext('2d');
@@ -234,7 +282,16 @@ export function usePreviewEngine(input: EngineInput) {
         project,
         layout,
         time: t,
-        selectedTextId: playNow ? null : selectedTextId,
+        selectedId: playNow ? null : selectedId,
+        getOverlayFrame: (o) => {
+          const asset = assets.get(o.assetId);
+          if (asset?.kind === 'image') {
+            const img = images.current.get(asset.id);
+            return img && img.complete && img.naturalWidth ? img : null;
+          }
+          const v = overlayVideos.current.get(o.id);
+          return v && v.readyState >= 2 ? v : null;
+        },
         getFrame: (ref) => {
           if (ref.lc.asset.kind === 'image') {
             const img = images.current.get(ref.lc.asset.id);

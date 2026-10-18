@@ -1,9 +1,10 @@
-import { activeTexts, clamp, getMainFrameState } from './timeline';
+import { activeOverlays, activeTexts, clamp, getMainFrameState, transformAt } from './timeline';
 import {
   Adjustments,
   FrameRef,
   LaidOutClip,
   MainClip,
+  OverlayClip,
   Project,
   TextBounds,
   TextClip,
@@ -15,6 +16,9 @@ type Ctx = CanvasRenderingContext2D;
 /** Returns the drawable frame for a clip at a source time, or null if not ready yet. */
 export type FrameProvider = (ref: FrameRef) => CanvasImageSource | null;
 
+/** Returns the drawable frame for an overlay at a source time. */
+export type OverlayFrameProvider = (overlay: OverlayClip, sourceTime: number) => CanvasImageSource | null;
+
 export interface RenderOptions {
   width: number; // base (logical) width; the context is pre-scaled to it
   height: number;
@@ -22,7 +26,9 @@ export interface RenderOptions {
   layout: LaidOutClip[];
   time: number;
   getFrame: FrameProvider;
-  selectedTextId?: string | null;
+  getOverlayFrame: OverlayFrameProvider;
+  /** Text or overlay to outline in the preview. */
+  selectedId?: string | null;
 }
 
 const ARABIC_RE = /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/;
@@ -72,15 +78,17 @@ function drawClipFrame(
   const [sw, sh] = sourceSize(src);
   if (!sw || !sh) return;
   const clip: MainClip = ref.lc.clip;
+  const span = clip.outPoint - clip.inPoint;
+  const tf = transformAt(clip, span > 0 ? (ref.sourceTime - clip.inPoint) / span : 0);
 
   const base = clip.fit === 'cover' ? Math.max(W / sw, H / sh) : Math.min(W / sw, H / sh);
-  const scale = base * clip.zoom;
+  const scale = base * tf.zoom;
   const dw = sw * scale;
   const dh = sh * scale;
 
   ctx.save();
-  ctx.translate(W / 2 + clip.offsetX * W, H / 2 + clip.offsetY * H);
-  if (clip.rotation) ctx.rotate((clip.rotation * Math.PI) / 180);
+  ctx.translate(W / 2 + tf.offsetX * W, H / 2 + tf.offsetY * H);
+  if (tf.rotation) ctx.rotate((tf.rotation * Math.PI) / 180);
   // ctx.filter blur is applied in device pixels, so compensate for the context scale.
   const deviceScale = ctx.getTransform().a || 1;
   const filter = cssFilter(clip.adjust, deviceScale);
@@ -264,6 +272,7 @@ function drawText(ctx: Ctx, t: TextClip, time: number, W: number, H: number): Te
   const cy = t.y * H;
   const bounds: TextBounds = {
     id: t.id,
+    kind: 'text',
     x: cx - blockW / 2 - padX,
     y: cy - blockH / 2 - padY,
     w: blockW + padX * 2,
@@ -327,6 +336,70 @@ function drawText(ctx: Ctx, t: TextClip, time: number, W: number, H: number): Te
   return bounds;
 }
 
+function drawOverlay(
+  ctx: Ctx,
+  o: OverlayClip,
+  time: number,
+  W: number,
+  H: number,
+  getFrame: OverlayFrameProvider
+): TextBounds | null {
+  const src = getFrame(o, o.inPoint + (time - o.start));
+  if (!src) return null;
+  const [sw, sh] = sourceSize(src);
+  if (!sw || !sh) return null;
+
+  const dur = o.outPoint - o.inPoint;
+  const local = time - o.start;
+  const animDur = Math.min(0.4, dur / 2);
+  const pIn = animDur > 0 ? clamp(local / animDur, 0, 1) : 1;
+  const pOut = animDur > 0 ? clamp((dur - local) / animDur, 0, 1) : 1;
+  let alpha = o.opacity;
+  let scale = 1;
+  let dy = 0;
+  const apply = (anim: OverlayClip['animIn'], p: number) => {
+    const e = easeOutCubic(p);
+    if (anim === 'fade') alpha *= e;
+    else if (anim === 'pop') scale *= Math.max(0, easeOutBack(p));
+    else if (anim === 'slide-up') {
+      dy += (1 - e) * H * 0.08;
+      alpha *= e;
+    }
+  };
+  apply(o.animIn, pIn);
+  apply(o.animOut, pOut);
+
+  const w = o.scale * W;
+  const h = (w * sh) / sw;
+  const cx = o.x * W;
+  const cy = o.y * H;
+  const size = o.shape === 'circle' ? Math.min(w, h) : 0;
+  const bw = size || w;
+  const bh = size || h;
+  const bounds: TextBounds = { id: o.id, kind: 'overlay', x: cx - bw / 2, y: cy - bh / 2, w: bw, h: bh };
+  if (alpha <= 0.001 || scale <= 0.001) return bounds;
+
+  ctx.save();
+  ctx.globalAlpha = clamp(alpha, 0, 1);
+  ctx.translate(cx, cy + dy);
+  if (o.rotation) ctx.rotate((o.rotation * Math.PI) / 180);
+  ctx.scale(scale, scale);
+  ctx.beginPath();
+  if (o.shape === 'circle') ctx.arc(0, 0, size / 2, 0, Math.PI * 2);
+  else if (o.shape === 'rounded' && typeof ctx.roundRect === 'function') ctx.roundRect(-w / 2, -h / 2, w, h, Math.min(w, h) * 0.08);
+  else ctx.rect(-w / 2, -h / 2, w, h);
+  ctx.clip();
+  if (o.shape === 'circle') {
+    // Cover the circle with the centre of the frame.
+    const s = size / Math.min(sw, sh);
+    ctx.drawImage(src, (-sw * s) / 2, (-sh * s) / 2, sw * s, sh * s);
+  } else {
+    ctx.drawImage(src, -w / 2, -h / 2, w, h);
+  }
+  ctx.restore();
+  return bounds;
+}
+
 /** Draws one composed frame. Shared by the live preview and the exporter. */
 export function renderFrame(ctx: Ctx, opts: RenderOptions): TextBounds[] {
   const { width: W, height: H, project, layout, time, getFrame } = opts;
@@ -351,12 +424,16 @@ export function renderFrame(ctx: Ctx, opts: RenderOptions): TextBounds[] {
   }
 
   const bounds: TextBounds[] = [];
+  for (const o of activeOverlays(project.overlays, time)) {
+    const b = drawOverlay(ctx, o, time, W, H, opts.getOverlayFrame);
+    if (b) bounds.push(b);
+  }
   for (const t of activeTexts(project.texts, time)) {
     bounds.push(drawText(ctx, t, time, W, H));
   }
 
-  if (opts.selectedTextId) {
-    const b = bounds.find((x) => x.id === opts.selectedTextId);
+  if (opts.selectedId) {
+    const b = bounds.find((x) => x.id === opts.selectedId);
     if (b) {
       ctx.save();
       ctx.strokeStyle = '#22d3ee';

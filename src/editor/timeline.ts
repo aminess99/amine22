@@ -1,4 +1,6 @@
 import {
+  MAX_IMAGE_DURATION,
+  MOTION_PRESETS,
   DEFAULT_IMAGE_DURATION,
   DEFAULT_TRANSITION_DURATION,
   MIN_CLIP_DURATION,
@@ -7,8 +9,10 @@ import {
 import {
   AudioClip,
   FrameRef,
+  FrameTransform,
   LaidOutClip,
   MainClip,
+  OverlayClip,
   MainFrameState,
   MediaAsset,
   Project,
@@ -53,6 +57,82 @@ export function createMainClip(asset: MediaAsset): MainClip {
     filterId: 'none',
     adjust: { ...NEUTRAL_ADJUSTMENTS },
     transition: { type: 'none', duration: DEFAULT_TRANSITION_DURATION },
+    motion: null,
+  };
+}
+
+export function createOverlayClip(asset: MediaAsset, start: number): OverlayClip {
+  return {
+    id: uid(),
+    assetId: asset.id,
+    start,
+    inPoint: 0,
+    outPoint: asset.kind === 'image' ? DEFAULT_IMAGE_DURATION : asset.duration,
+    x: 0.72,
+    y: 0.25,
+    scale: 0.4,
+    rotation: 0,
+    opacity: 1,
+    shape: 'rounded',
+    volume: 1,
+    muted: false,
+    animIn: 'pop',
+    animOut: 'fade',
+  };
+}
+
+export function overlayEnd(o: OverlayClip): number {
+  return o.start + (o.outPoint - o.inPoint);
+}
+
+export function overlayMaxOut(asset: MediaAsset): number {
+  return asset.kind === 'image' ? MAX_IMAGE_DURATION : asset.duration;
+}
+
+export function activeOverlays(overlays: OverlayClip[], t: number): OverlayClip[] {
+  return overlays.filter((o) => t >= o.start && t < overlayEnd(o));
+}
+
+export function splitOverlayClip(o: OverlayClip, t: number): [OverlayClip, OverlayClip] | null {
+  const local = t - o.start;
+  const dur = o.outPoint - o.inPoint;
+  if (local < MIN_CLIP_DURATION || dur - local < MIN_CLIP_DURATION) return null;
+  const cut = o.inPoint + local;
+  return [
+    { ...o, outPoint: cut, animOut: 'none' },
+    { ...o, id: uid(), start: t, inPoint: cut, animIn: 'none' },
+  ];
+}
+
+export function baseTransform(clip: MainClip): FrameTransform {
+  return { zoom: clip.zoom, offsetX: clip.offsetX, offsetY: clip.offsetY, rotation: clip.rotation };
+}
+
+export function motionFromPreset(clip: MainClip, presetId: string): MainClip['motion'] {
+  const preset = MOTION_PRESETS.find((m) => m.id === presetId);
+  if (!preset) return null;
+  const base = baseTransform(clip);
+  const apply = (p: Partial<FrameTransform>): FrameTransform => ({
+    zoom: base.zoom * (p.zoom ?? 1),
+    offsetX: base.offsetX + (p.offsetX ?? 0),
+    offsetY: base.offsetY + (p.offsetY ?? 0),
+    rotation: base.rotation + (p.rotation ?? 0),
+  });
+  return { preset: presetId, from: apply(preset.from), to: apply(preset.to) };
+}
+
+/** The clip's frame transform at a progress (0..1) through the clip. */
+export function transformAt(clip: MainClip, progress: number): FrameTransform {
+  if (!clip.motion) return baseTransform(clip);
+  const p = clamp(progress, 0, 1);
+  const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+  const { from, to } = clip.motion;
+  const lerp = (a: number, b: number) => a + (b - a) * e;
+  return {
+    zoom: lerp(from.zoom, to.zoom),
+    offsetX: lerp(from.offsetX, to.offsetX),
+    offsetY: lerp(from.offsetY, to.offsetY),
+    rotation: lerp(from.rotation, to.rotation),
   };
 }
 
@@ -91,6 +171,7 @@ export function projectDuration(project: Project, layout: LaidOutClip[]): number
   let end = layout.length ? layout[layout.length - 1].end : 0;
   for (const t of project.texts) end = Math.max(end, t.start + t.duration);
   for (const a of project.audios) end = Math.max(end, audioClipEnd(a));
+  for (const o of project.overlays) end = Math.max(end, overlayEnd(o));
   return end;
 }
 

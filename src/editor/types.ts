@@ -47,6 +47,21 @@ export interface Adjustments {
   vignette: number; // 0..100
 }
 
+/** Position/scale state of a clip's frame; animated between two keyframes. */
+export interface FrameTransform {
+  zoom: number;
+  offsetX: number;
+  offsetY: number;
+  rotation: number;
+}
+
+export interface ClipMotion {
+  /** Preset that produced the keyframes, for the UI ('custom' when set by hand). */
+  preset: string;
+  from: FrameTransform;
+  to: FrameTransform;
+}
+
 /** A clip on the main (sequential) video track. */
 export interface MainClip {
   id: string;
@@ -66,6 +81,30 @@ export interface MainClip {
   adjust: Adjustments;
   /** Transition from the previous clip into this one. Ignored on the first clip. */
   transition: Transition;
+  /** Animates the frame transform across the clip; null keeps it static. */
+  motion: ClipMotion | null;
+}
+
+export type OverlayShape = 'rect' | 'rounded' | 'circle';
+export type OverlayAnim = 'none' | 'fade' | 'pop' | 'slide-up';
+
+/** A picture-in-picture image or video placed above the main track. */
+export interface OverlayClip {
+  id: string;
+  assetId: string;
+  start: number;
+  inPoint: number;
+  outPoint: number;
+  x: number; // 0..1, centre
+  y: number; // 0..1, centre
+  scale: number; // width as a fraction of the canvas width
+  rotation: number;
+  opacity: number; // 0..1
+  shape: OverlayShape;
+  volume: number;
+  muted: boolean;
+  animIn: OverlayAnim;
+  animOut: OverlayAnim;
 }
 
 export type TextAnimIn = 'none' | 'fade' | 'pop' | 'slide-up' | 'zoom' | 'typewriter';
@@ -108,12 +147,14 @@ export interface Project {
   clips: MainClip[];
   texts: TextClip[];
   audios: AudioClip[];
+  overlays: OverlayClip[];
 }
 
 export type Selection =
   | { kind: 'clip'; id: string }
   | { kind: 'text'; id: string }
   | { kind: 'audio'; id: string }
+  | { kind: 'overlay'; id: string }
   | { kind: 'transition'; id: string } // id of the clip the transition leads into
   | null;
 
@@ -144,6 +185,7 @@ export interface MainFrameState {
 
 export interface TextBounds {
   id: string;
+  kind: 'text' | 'overlay';
   x: number;
   y: number;
   w: number;

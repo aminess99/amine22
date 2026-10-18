@@ -5,6 +5,8 @@ import {
   Copy,
   Download,
   Film,
+  FilePlus2,
+  LayoutTemplate,
   Minus,
   Music,
   Pause,
@@ -15,6 +17,7 @@ import {
   SkipBack,
   SkipForward,
   SlidersHorizontal,
+  Smile,
   Sparkles,
   Trash2,
   Type,
@@ -31,36 +34,44 @@ import {
   clamp,
   createAudioClip,
   createMainClip,
+  createOverlayClip,
   formatTime,
   getMainFrameState,
   layoutMainTrack,
   projectDuration,
   splitAudioClip,
   splitMainClip,
+  splitOverlayClip,
   splitTextClip,
   uid,
 } from '../../editor/timeline';
-import { AspectRatio, AudioClip, MainClip, MediaAsset, Project, Selection, TextClip, TransitionType } from '../../editor/types';
+import { AspectRatio, AudioClip, MainClip, MediaAsset, OverlayClip, Project, Selection, TextClip, TransitionType } from '../../editor/types';
+import { generateCaptions } from '../../editor/autoCaptions';
+import { clearAll, loadSaved, saveAsset, saveProject } from '../../editor/persistence';
+import { clipsFromRanges, findSpeechRanges } from '../../editor/silence';
+import { applyTemplate } from '../../editor/templates';
 import { useHistory } from '../../editor/useHistory';
 import { usePreviewEngine } from '../../editor/usePreviewEngine';
 import { EditorExportModal } from './EditorExportModal';
-import { AudioInspector, ClipInspector, ProjectInspector, TextInspector, TransitionInspector } from './EditorInspector';
-import { FiltersPanel, MediaPanel, TextPanel, TransitionsPanel } from './EditorPanels';
+import { AudioInspector, ClipInspector, OverlayInspector, ProjectInspector, TextInspector, TransitionInspector } from './EditorInspector';
+import { FiltersPanel, MediaPanel, StickersPanel, TemplatesPanel, TextPanel, TransitionsPanel } from './EditorPanels';
 import { EditorTimeline } from './EditorTimeline';
 import { ToolButton } from './ui';
 
-type PanelId = 'media' | 'audio' | 'text' | 'filters' | 'transitions' | 'edit';
+type PanelId = 'media' | 'audio' | 'text' | 'stickers' | 'filters' | 'transitions' | 'templates' | 'edit';
 
 const PANELS: { id: PanelId; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'media', label: 'الوسائط', icon: Film },
   { id: 'audio', label: 'الصوت', icon: Music },
   { id: 'text', label: 'نصوص', icon: Type },
+  { id: 'stickers', label: 'ملصقات', icon: Smile },
   { id: 'filters', label: 'فلاتر', icon: Sparkles },
   { id: 'transitions', label: 'انتقالات', icon: ArrowLeftRight },
+  { id: 'templates', label: 'قوالب', icon: LayoutTemplate },
   { id: 'edit', label: 'تعديل', icon: SlidersHorizontal },
 ];
 
-const INITIAL_PROJECT: Project = { aspect: '9:16', background: '#000000', clips: [], texts: [], audios: [] };
+const INITIAL_PROJECT: Project = { aspect: '9:16', background: '#000000', clips: [], texts: [], audios: [], overlays: [] };
 
 const replaceById = <T extends { id: string }>(list: T[], id: string, fn: (item: T) => T) =>
   list.map((item) => (item.id === id ? fn(item) : item));
@@ -70,7 +81,7 @@ interface VideoEditorProps {
 }
 
 export function VideoEditor({ onBack }: VideoEditorProps) {
-  const { state: project, update, undo, redo, canUndo, canRedo } = useHistory<Project>(INITIAL_PROJECT);
+  const { state: project, update, undo, redo, reset, canUndo, canRedo } = useHistory<Project>(INITIAL_PROJECT);
   const [assetList, setAssetList] = useState<MediaAsset[]>([]);
   const [loading, setLoading] = useState(0);
   const [errors, setErrors] = useState<string[]>([]);
@@ -79,6 +90,11 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [pxPerSec, setPxPerSec] = useState(60);
   const [exporting, setExporting] = useState(false);
+  const [restored, setRestored] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [confirmNew, setConfirmNew] = useState(false);
+  const [silence, setSilence] = useState<{ busy: boolean; message: string | null }>({ busy: false, message: null });
+  const [captionState, setCaptionState] = useState<{ busy: boolean; status: string | null }>({ busy: false, status: null });
 
   const assets = useMemo(() => new Map(assetList.map((a) => [a.id, a])), [assetList]);
   const layout = useMemo(() => layoutMainTrack(project.clips, assets), [project.clips, assets]);
@@ -102,8 +118,8 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
   const previewScale = clamp((cssW * dpr) / base.width, 0.1, 1);
 
-  const selectedTextId = selection?.kind === 'text' ? selection.id : null;
-  const engine = usePreviewEngine({ canvasRef, project, assets, layout, duration, selectedTextId, previewScale });
+  const selectedId = selection?.kind === 'text' || selection?.kind === 'overlay' ? selection.id : null;
+  const engine = usePreviewEngine({ canvasRef, project, assets, layout, duration, selectedId, previewScale });
   const { time, playing, toggle, seek, pause } = engine;
 
   useEffect(() => {
@@ -115,15 +131,54 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
   assetsRef.current = assetList;
   useEffect(() => () => assetsRef.current.forEach((a) => URL.revokeObjectURL(a.url)), []);
 
+  // ---------- autosave ----------
   useEffect(() => {
-    if (!project.clips.length && !project.audios.length) return;
-    const warn = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = '';
+    let alive = true;
+    loadSaved()
+      .then((saved) => {
+        if (!alive || !saved) return;
+        setAssetList(saved.assets);
+        reset(saved.project);
+        if (saved.project.clips.length || saved.project.texts.length || saved.project.audios.length) {
+          setNotice('تم استرجاع مشروعك المحفوظ.');
+        }
+      })
+      .catch(() => {})
+      .finally(() => alive && setRestored(true));
+    return () => {
+      alive = false;
     };
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
-  }, [project.clips.length, project.audios.length]);
+  }, [reset]);
+
+  useEffect(() => {
+    if (!restored) return;
+    const id = window.setTimeout(() => {
+      saveProject(project).catch(() => setNotice('تعذر الحفظ التلقائي في هذا المتصفح.'));
+    }, 600);
+    return () => window.clearTimeout(id);
+  }, [project, restored]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const id = window.setTimeout(() => setNotice(null), 4000);
+    return () => window.clearTimeout(id);
+  }, [notice]);
+
+  const startNewProject = async () => {
+    if (!confirmNew) {
+      setConfirmNew(true);
+      window.setTimeout(() => setConfirmNew(false), 3000);
+      return;
+    }
+    setConfirmNew(false);
+    pause();
+    seek(0);
+    await clearAll().catch(() => {});
+    assetList.forEach((a) => URL.revokeObjectURL(a.url));
+    setAssetList([]);
+    setSelection(null);
+    reset(INITIAL_PROJECT);
+  };
 
   // ---------- mutations ----------
   const updateClip = useCallback(
@@ -137,6 +192,91 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
   const updateAudio = useCallback(
     (id: string, fn: (a: AudioClip) => AudioClip, key?: string) => update((p) => ({ ...p, audios: replaceById(p.audios, id, fn) }), key),
     [update]
+  );
+  const updateOverlay = useCallback(
+    (id: string, fn: (o: OverlayClip) => OverlayClip, key?: string) =>
+      update((p) => ({ ...p, overlays: replaceById(p.overlays, id, fn) }), key),
+    [update]
+  );
+
+  const addOverlay = useCallback(
+    (asset: MediaAsset) => {
+      const clip = createOverlayClip(asset, engine.getTime());
+      update((p) => ({ ...p, overlays: [...p.overlays, clip] }));
+      setSelection({ kind: 'overlay', id: clip.id });
+    },
+    [update, engine]
+  );
+
+  const addSticker = useCallback(
+    (emoji: string) => {
+      const text: TextClip = {
+        ...TEXT_PRESETS[0].style,
+        id: uid(),
+        text: emoji,
+        start: engine.getTime(),
+        duration: 3,
+        fontSize: 180,
+        shadow: false,
+        x: 0.5,
+        y: 0.35,
+        animIn: 'pop',
+        animOut: 'pop',
+      };
+      update((p) => ({ ...p, texts: [...p.texts, text] }));
+      setSelection({ kind: 'text', id: text.id });
+    },
+    [update, engine]
+  );
+
+  const removeSilence = useCallback(
+    async (clipId: string) => {
+      const lc = layout.find((l) => l.clip.id === clipId);
+      if (!lc) return;
+      setSilence({ busy: true, message: 'جاري تحليل الصوت...' });
+      try {
+        const ranges = await findSpeechRanges(lc.asset, lc.clip.inPoint, lc.clip.outPoint);
+        const kept = ranges.reduce((sum, [a, b]) => sum + (b - a), 0);
+        const removed = lc.clip.outPoint - lc.clip.inPoint - kept;
+        if (!ranges.length) {
+          setSilence({ busy: false, message: 'لم يتم العثور على كلام في هذا المقطع.' });
+          return;
+        }
+        if (removed < 0.3) {
+          setSilence({ busy: false, message: 'لا توجد لحظات صمت طويلة لحذفها.' });
+          return;
+        }
+        const parts = clipsFromRanges(lc.clip, ranges);
+        update((p) => ({ ...p, clips: p.clips.flatMap((c) => (c.id === clipId ? parts : [c])) }));
+        setSilence({
+          busy: false,
+          message: `تم حذف ${(removed / lc.clip.speed).toFixed(1)} ثانية من الصمت وتقسيم المقطع إلى ${parts.length} أجزاء.`,
+        });
+      } catch {
+        setSilence({ busy: false, message: 'تعذر قراءة صوت هذا المقطع.' });
+      }
+    },
+    [layout, update]
+  );
+
+  const runCaptions = useCallback(
+    async (wordsPerCaption: number) => {
+      setCaptionState({ busy: true, status: 'جاري رفع الصوت وتفريغه، قد يستغرق ذلك دقيقة...' });
+      try {
+        const captions = await generateCaptions(layout, wordsPerCaption, (done, total) =>
+          setCaptionState({ busy: true, status: `جاري التفريغ (${Math.min(done + 1, total)} من ${total})...` })
+        );
+        if (!captions.length) {
+          setCaptionState({ busy: false, status: 'لم يتم العثور على كلام في الفيديو.' });
+          return;
+        }
+        update((p) => ({ ...p, texts: [...p.texts, ...captions] }));
+        setCaptionState({ busy: false, status: `تمت إضافة ${captions.length} سطر كابشن. حدد أي سطر لتعديل نصه أو شكله.` });
+      } catch (err) {
+        setCaptionState({ busy: false, status: err instanceof Error ? err.message : 'فشل التفريغ.' });
+      }
+    },
+    [layout, update]
   );
 
   const addVisual = useCallback(
@@ -176,6 +316,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
           const asset = await loadAsset(file);
           loaded.push(asset);
           setAssetList((list) => [...list, asset]);
+          saveAsset(asset).catch(() => setNotice('الملف كبير على مساحة الحفظ في المتصفح، ولن يُستعاد بعد إغلاق الصفحة.'));
         } catch (err) {
           setErrors((e) => [...e, `${file.name}: ${err instanceof Error ? err.message : 'فشل التحميل'}`]);
         } finally {
@@ -219,6 +360,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     if (selection.kind === 'clip') update((p) => ({ ...p, clips: p.clips.filter((c) => c.id !== selection.id) }));
     if (selection.kind === 'text') update((p) => ({ ...p, texts: p.texts.filter((c) => c.id !== selection.id) }));
     if (selection.kind === 'audio') update((p) => ({ ...p, audios: p.audios.filter((c) => c.id !== selection.id) }));
+    if (selection.kind === 'overlay') update((p) => ({ ...p, overlays: p.overlays.filter((c) => c.id !== selection.id) }));
     if (selection.kind === 'transition') updateClip(selection.id, (c) => ({ ...c, transition: { ...c.transition, type: 'none' } }));
     setSelection(null);
   }, [selection, update, updateClip]);
@@ -229,6 +371,12 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       const text = project.texts.find((x) => x.id === selection.id);
       const parts = text && splitTextClip(text, t);
       if (parts) update((p) => ({ ...p, texts: p.texts.flatMap((x) => (x.id === text!.id ? parts : [x])) }));
+      return;
+    }
+    if (selection?.kind === 'overlay') {
+      const o = project.overlays.find((x) => x.id === selection.id);
+      const parts = o && splitOverlayClip(o, t);
+      if (parts) update((p) => ({ ...p, overlays: p.overlays.flatMap((x) => (x.id === o!.id ? parts : [x])) }));
       return;
     }
     if (selection?.kind === 'audio') {
@@ -244,7 +392,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     if (!lc || !parts) return;
     update((p) => ({ ...p, clips: p.clips.flatMap((c) => (c.id === lc.clip.id ? parts : [c])) }));
     setSelection({ kind: 'clip', id: parts[1].id });
-  }, [engine, selection, project.texts, project.audios, layout, update]);
+  }, [engine, selection, project.texts, project.audios, project.overlays, layout, update]);
 
   const duplicateSelection = useCallback(() => {
     if (selection?.kind === 'clip') {
@@ -268,6 +416,12 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       const copy = { ...src, id: uid(), start: audioClipEnd(src) };
       update((p) => ({ ...p, audios: [...p.audios, copy] }));
       setSelection({ kind: 'audio', id: copy.id });
+    } else if (selection?.kind === 'overlay') {
+      const src = project.overlays.find((x) => x.id === selection.id);
+      if (!src) return;
+      const copy = { ...src, id: uid(), x: Math.min(0.9, src.x + 0.05), y: Math.min(0.9, src.y + 0.05) };
+      update((p) => ({ ...p, overlays: [...p.overlays, copy] }));
+      setSelection({ kind: 'overlay', id: copy.id });
     }
   }, [selection, project, update]);
 
@@ -372,7 +526,13 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     const key = `canvas-${performance.now()}`;
     let onMove: ((dx: number, dy: number) => void) | null = null;
 
-    if (hit) {
+    if (hit?.kind === 'overlay') {
+      const ov = project.overlays.find((o) => o.id === hit.id);
+      if (!ov) return;
+      setSelection({ kind: 'overlay', id: ov.id });
+      onMove = (dx, dy) =>
+        updateOverlay(ov.id, (o) => ({ ...o, x: clamp(ov.x + dx / base.width, 0, 1), y: clamp(ov.y + dy / base.height, 0, 1) }), key);
+    } else if (hit) {
       const text = project.texts.find((t) => t.id === hit.id);
       if (!text) return;
       setSelection({ kind: 'text', id: text.id });
@@ -415,6 +575,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
   const selectedText = selection?.kind === 'text' ? project.texts.find((t) => t.id === selection.id) : undefined;
   const selectedAudio = selection?.kind === 'audio' ? project.audios.find((a) => a.id === selection.id) : undefined;
   const selectedCut = selection?.kind === 'transition' ? layout.find((l) => l.clip.id === selection.id) : undefined;
+  const selectedOverlay = selection?.kind === 'overlay' ? project.overlays.find((o) => o.id === selection.id) : undefined;
 
   const actions = { onSplit: splitAtPlayhead, onDuplicate: duplicateSelection, onDelete: deleteSelection };
 
@@ -423,6 +584,14 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       clip={selectedClip.clip}
       asset={selectedClip.asset}
       patch={(fn, key) => updateClip(selectedClip.clip.id, fn, key)}
+      actions={actions}
+      silence={{ ...silence, run: () => removeSilence(selectedClip.clip.id) }}
+    />
+  ) : selectedOverlay ? (
+    <OverlayInspector
+      overlay={selectedOverlay}
+      asset={assets.get(selectedOverlay.assetId)}
+      patch={(fn, key) => updateOverlay(selectedOverlay.id, fn, key)}
       actions={actions}
     />
   ) : selectedText ? (
@@ -453,6 +622,10 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
               addVisual(a);
               setSheetOpen(false);
             }}
+            onOverlay={(a) => {
+              addOverlay(a);
+              setSheetOpen(false);
+            }}
           />
         );
       case 'audio':
@@ -473,6 +646,29 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
           <TextPanel
             onAdd={(id) => {
               addText(id);
+              setSheetOpen(false);
+            }}
+            captions={{ ...captionState, run: runCaptions }}
+          />
+        );
+      case 'stickers':
+        return (
+          <StickersPanel
+            onAdd={(e) => {
+              addSticker(e);
+              setSheetOpen(false);
+            }}
+          />
+        );
+      case 'templates':
+        return (
+          <TemplatesPanel
+            disabled={!project.clips.length}
+            onApply={(id) => {
+              update((p) => applyTemplate(p, assets, id));
+              setNotice('تم تطبيق القالب. اضغط تشغيل للمشاهدة، أو تراجع بـ Ctrl+Z.');
+              pause();
+              seek(0);
               setSheetOpen(false);
             }}
           />
@@ -516,7 +712,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     }
   };
 
-  const isEmpty = project.clips.length === 0 && project.texts.length === 0 && project.audios.length === 0;
+  const isEmpty = project.clips.length === 0 && project.texts.length === 0 && project.audios.length === 0 && project.overlays.length === 0;
   const desktopPanel: PanelId = panel === 'edit' ? 'media' : panel;
 
   return (
@@ -543,6 +739,18 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
           <span className="hidden text-sm font-bold sm:inline">محرر الفيديو</span>
         </div>
         <div className="mx-auto flex items-center gap-1">
+          <button
+            type="button"
+            onClick={startNewProject}
+            title="مشروع جديد"
+            className={cn(
+              'flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs transition-colors',
+              confirmNew ? 'bg-red-500/20 text-red-200' : 'text-slate-300 hover:bg-white/10'
+            )}
+          >
+            <FilePlus2 className="h-4 w-4" />
+            {confirmNew ? <span>اضغط مجدداً للتأكيد</span> : <span className="hidden sm:inline">جديد</span>}
+          </button>
           <ToolButton icon={Undo2} label="تراجع" compact onClick={undo} disabled={!canUndo} />
           <ToolButton icon={Redo2} label="إعادة" compact onClick={redo} disabled={!canRedo} />
           <select
@@ -570,6 +778,12 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
           تصدير
         </button>
       </header>
+
+      {notice && (
+        <div className="pointer-events-none fixed left-1/2 top-16 z-[70] -translate-x-1/2 rounded-full bg-slate-800/95 px-4 py-2 text-xs text-white shadow-xl ring-1 ring-white/10">
+          {notice}
+        </div>
+      )}
 
       {errors.length > 0 && (
         <div className="flex items-start gap-2 bg-red-500/15 px-4 py-2 text-xs text-red-200">
@@ -713,6 +927,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
               onUpdateClip={updateClip}
               onUpdateText={updateText}
               onUpdateAudio={updateAudio}
+              onUpdateOverlay={updateOverlay}
               onReorder={reorderClip}
               onDropAsset={onDropAsset}
               onAddText={() => addText('basic')}
@@ -721,7 +936,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
           </div>
 
           {/* Mobile bottom bar */}
-          <nav className="flex shrink-0 justify-around border-t border-white/5 bg-[#10131a] pb-[env(safe-area-inset-bottom)] lg:hidden">
+          <nav className="flex shrink-0 overflow-x-auto border-t border-white/5 bg-[#10131a] pb-[env(safe-area-inset-bottom)] lg:hidden">
             {PANELS.map((p) => {
               const Icon = p.icon;
               const active = sheetOpen && panel === p.id;
@@ -730,7 +945,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
                   key={p.id}
                   type="button"
                   onClick={() => openPanel(p.id)}
-                  className={cn('flex flex-1 flex-col items-center gap-0.5 py-2 text-[10px]', active ? 'text-cyan-300' : 'text-slate-400')}
+                  className={cn('flex min-w-[52px] flex-1 flex-col items-center gap-0.5 py-2 text-[10px]', active ? 'text-cyan-300' : 'text-slate-400')}
                 >
                   <Icon className="h-5 w-5" />
                   {p.label}
@@ -743,7 +958,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
         {/* Inspector – desktop */}
         <aside className="hidden w-[300px] shrink-0 overflow-y-auto border-r border-white/5 bg-[#10131a] lg:block">
           <div className="sticky top-0 z-10 border-b border-white/5 bg-[#10131a] px-4 py-3 text-xs font-bold text-slate-200">
-            {selectedClip ? 'خصائص المقطع' : selectedText ? 'خصائص النص' : selectedAudio ? 'خصائص الصوت' : selectedCut ? 'الانتقال' : 'إعدادات المشروع'}
+            {selectedClip ? 'خصائص المقطع' : selectedOverlay ? 'خصائص الطبقة' : selectedText ? 'خصائص النص' : selectedAudio ? 'خصائص الصوت' : selectedCut ? 'الانتقال' : 'إعدادات المشروع'}
           </div>
           {inspector}
         </aside>

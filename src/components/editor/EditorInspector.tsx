@@ -1,20 +1,22 @@
 import React from 'react';
-import { AlignCenter, AlignLeft, AlignRight, Copy, Scissors, Trash2, Volume2, VolumeX } from 'lucide-react';
+import { AlignCenter, AlignLeft, AlignRight, Copy, Loader2, Scissors, Trash2, Volume2, VolumeX, Wand2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import {
   ASPECT_SIZES,
   FILTER_PRESETS,
   FONTS,
   MAX_IMAGE_DURATION,
+  MOTION_PRESETS,
   NEUTRAL_ADJUSTMENTS,
+  OVERLAY_ANIMS,
   SPEED_PRESETS,
   TEXT_ANIMS_IN,
   TEXT_ANIMS_OUT,
   TRANSITIONS,
   presetAdjustments,
 } from '../../editor/constants';
-import { clipDuration } from '../../editor/timeline';
-import { Adjustments, AspectRatio, AudioClip, MainClip, MediaAsset, Project, TextClip, TransitionType } from '../../editor/types';
+import { baseTransform, clipDuration, motionFromPreset } from '../../editor/timeline';
+import { Adjustments, AspectRatio, AudioClip, MainClip, MediaAsset, OverlayClip, OverlayShape, Project, TextClip, TransitionType } from '../../editor/types';
 import { ColorInput, Section, Segmented, SliderRow } from './ui';
 
 type Patch<T> = (fn: (item: T) => T, coalesceKey?: string) => void;
@@ -39,7 +41,25 @@ function ActionsBar({ onSplit, onDuplicate, onDelete }: Actions) {
 const pct = (v: number) => `${Math.round(v)}%`;
 const secs = (v: number) => `${v.toFixed(1)}ث`;
 
-export function ClipInspector({ clip, asset, patch, actions }: { clip: MainClip; asset: MediaAsset; patch: Patch<MainClip>; actions: Actions }) {
+interface SilenceTool {
+  busy: boolean;
+  message: string | null;
+  run: () => void;
+}
+
+export function ClipInspector({
+  clip,
+  asset,
+  patch,
+  actions,
+  silence,
+}: {
+  clip: MainClip;
+  asset: MediaAsset;
+  patch: Patch<MainClip>;
+  actions: Actions;
+  silence: SilenceTool;
+}) {
   const k = (name: string) => `${clip.id}-${name}`;
   const setAdjust = (key: keyof Adjustments, v: number) =>
     patch((c) => ({ ...c, adjust: { ...c.adjust, [key]: v } }), k(`adj-${key}`));
@@ -119,6 +139,20 @@ export function ClipInspector({ clip, asset, patch, actions }: { clip: MainClip;
           }
         >
           {!asset.hasAudio && <p className="text-[11px] text-slate-500">هذا المقطع لا يحتوي على صوت.</p>}
+          {asset.hasAudio && (
+            <>
+              <button
+                type="button"
+                disabled={silence.busy}
+                onClick={silence.run}
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-violet-500/15 py-2 text-xs font-semibold text-violet-200 hover:bg-violet-500/25 disabled:opacity-50"
+              >
+                {silence.busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                حذف لحظات الصمت تلقائياً
+              </button>
+              {silence.message && <p className="text-[11px] text-slate-400">{silence.message}</p>}
+            </>
+          )}
           <SliderRow
             label="مستوى الصوت"
             value={Math.round(clip.volume * 100)}
@@ -148,6 +182,52 @@ export function ClipInspector({ clip, asset, patch, actions }: { clip: MainClip;
         <SliderRow label="دوران" value={clip.rotation} min={-180} max={180} format={(v) => `${v}°`}
           onChange={(v) => patch((c) => ({ ...c, rotation: v }), k('rot'))} onReset={() => patch((c) => ({ ...c, rotation: 0 }))} />
         <p className="text-[11px] text-slate-500">يمكنك أيضاً سحب المقطع مباشرة داخل المعاينة.</p>
+      </Section>
+
+      <Section title="حركة المقطع (إطارات مفتاحية)">
+        <div className="grid grid-cols-3 gap-1">
+          <button
+            type="button"
+            onClick={() => patch((c) => ({ ...c, motion: null }))}
+            className={cn('rounded-md px-1 py-1.5 text-[11px]', !clip.motion ? 'bg-cyan-400 text-slate-950' : 'bg-white/5 text-slate-300 hover:bg-white/10')}
+          >
+            بدون
+          </button>
+          {MOTION_PRESETS.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => patch((c) => ({ ...c, motion: motionFromPreset(c, m.id) }))}
+              className={cn(
+                'rounded-md px-1 py-1.5 text-[11px]',
+                clip.motion?.preset === m.id ? 'bg-cyan-400 text-slate-950' : 'bg-white/5 text-slate-300 hover:bg-white/10'
+              )}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-[11px] leading-relaxed text-slate-500">
+          حركة مخصصة: اضبط التكبير والموضع بالأعلى ثم احفظه كبداية، ثم اضبطه مرة أخرى واحفظه كنهاية.
+        </p>
+        <div className="flex gap-1.5">
+          {(['from', 'to'] as const).map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() =>
+                patch((c) => {
+                  const now = baseTransform(c);
+                  const prev = c.motion ?? { preset: 'custom', from: now, to: now };
+                  return { ...c, motion: { ...prev, preset: 'custom', [k]: now } };
+                })
+              }
+              className="flex-1 rounded-lg bg-white/5 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-white/10"
+            >
+              {k === 'from' ? 'حفظ كإطار البداية' : 'حفظ كإطار النهاية'}
+            </button>
+          ))}
+        </div>
       </Section>
 
       <Section title="الفلتر">
@@ -301,6 +381,87 @@ export function AudioInspector({ audio, asset, patch, actions }: { audio: AudioC
           onChange={(v) => patch((a) => ({ ...a, fadeOut: v }), k('fo'))} />
         <p className="text-[11px] text-slate-500">المدة: {secs(len)} · اسحب الأطراف في الخط الزمني للقص.</p>
       </Section>
+    </div>
+  );
+}
+
+export function OverlayInspector({
+  overlay,
+  asset,
+  patch,
+  actions,
+}: {
+  overlay: OverlayClip;
+  asset?: MediaAsset;
+  patch: Patch<OverlayClip>;
+  actions: Actions;
+}) {
+  const k = (name: string) => `${overlay.id}-${name}`;
+  const select = (label: string, value: string, onChange: (v: string) => void) => (
+    <label className="block text-[11px] text-slate-400">
+      {label}
+      <select value={value} onChange={(e) => onChange(e.target.value)}
+        className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1.5 text-xs text-slate-100">
+        {OVERLAY_ANIMS.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+      </select>
+    </label>
+  );
+  return (
+    <div>
+      <ActionsBar {...actions} />
+      <Section title="الشكل">
+        <Segmented<OverlayShape>
+          options={[
+            { id: 'rect', label: 'مستطيل' },
+            { id: 'rounded', label: 'حواف دائرية' },
+            { id: 'circle', label: 'دائرة' },
+          ]}
+          value={overlay.shape}
+          onChange={(shape) => patch((o) => ({ ...o, shape }))}
+        />
+        <SliderRow label="الحجم" value={Math.round(overlay.scale * 100)} min={5} max={100} format={pct}
+          onChange={(v) => patch((o) => ({ ...o, scale: v / 100 }), k('scale'))} />
+        <SliderRow label="الشفافية" value={Math.round(overlay.opacity * 100)} min={0} max={100} format={pct}
+          onChange={(v) => patch((o) => ({ ...o, opacity: v / 100 }), k('op'))} />
+        <SliderRow label="دوران" value={overlay.rotation} min={-180} max={180} format={(v) => `${v}°`}
+          onChange={(v) => patch((o) => ({ ...o, rotation: v }), k('rot'))} onReset={() => patch((o) => ({ ...o, rotation: 0 }))} />
+      </Section>
+      <Section title="الموضع">
+        <SliderRow label="أفقي" value={Math.round(overlay.x * 100)} min={0} max={100} format={pct} onChange={(v) => patch((o) => ({ ...o, x: v / 100 }), k('x'))} />
+        <SliderRow label="عمودي" value={Math.round(overlay.y * 100)} min={0} max={100} format={pct} onChange={(v) => patch((o) => ({ ...o, y: v / 100 }), k('y'))} />
+        <div className="grid grid-cols-3 gap-1">
+          {[
+            ['أعلى يمين', 0.75, 0.2], ['أعلى', 0.5, 0.2], ['أعلى يسار', 0.25, 0.2],
+            ['يمين', 0.75, 0.5], ['وسط', 0.5, 0.5], ['يسار', 0.25, 0.5],
+            ['أسفل يمين', 0.75, 0.8], ['أسفل', 0.5, 0.8], ['أسفل يسار', 0.25, 0.8],
+          ].map(([label, x, y]) => (
+            <button key={label as string} type="button" onClick={() => patch((o) => ({ ...o, x: x as number, y: y as number }))}
+              className="rounded-md bg-white/5 py-1.5 text-[10px] text-slate-300 hover:bg-white/10">
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="text-[11px] text-slate-500">يمكنك سحب الطبقة مباشرة داخل المعاينة.</p>
+      </Section>
+      <Section title="الحركة">
+        {select('دخول', overlay.animIn, (v) => patch((o) => ({ ...o, animIn: v as OverlayClip['animIn'] })))}
+        {select('خروج', overlay.animOut, (v) => patch((o) => ({ ...o, animOut: v as OverlayClip['animOut'] })))}
+      </Section>
+      {asset?.kind === 'video' && asset.hasAudio && (
+        <Section
+          title="الصوت"
+          action={
+            <button type="button" onClick={() => patch((o) => ({ ...o, muted: !o.muted }))}
+              className={cn('flex items-center gap-1 rounded-md px-2 py-1 text-[11px]', overlay.muted ? 'bg-red-500/20 text-red-300' : 'bg-white/5 text-slate-300')}>
+              {overlay.muted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+              {overlay.muted ? 'مكتوم' : 'كتم'}
+            </button>
+          }
+        >
+          <SliderRow label="مستوى الصوت" value={Math.round(overlay.volume * 100)} min={0} max={100} format={pct}
+            onChange={(v) => patch((o) => ({ ...o, volume: v / 100 }), k('vol'))} />
+        </Section>
+      )}
     </div>
   );
 }

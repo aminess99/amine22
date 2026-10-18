@@ -48,7 +48,14 @@ export function useHistory<T>(initial: T) {
     );
   }, []);
 
+  /** Replaces the state and clears undo history (e.g. after restoring a saved project). */
+  const reset = useCallback((next: T) => {
+    last.current = null;
+    setState({ past: [], present: next, future: [] });
+  }, []);
+
   return {
+    reset,
     state: state.present,
     update,
     undo,

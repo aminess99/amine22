@@ -1,7 +1,8 @@
 import React from 'react';
-import { Check, Film, Image as ImageIcon, Loader2, Music, Plus, Upload } from 'lucide-react';
+import { Captions, Check, Film, Image as ImageIcon, Layers, Loader2, Music, Plus, Upload } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { FILTER_PRESETS, TEXT_PRESETS, TRANSITIONS, presetAdjustments } from '../../editor/constants';
+import { FILTER_PRESETS, STICKERS, TEXT_PRESETS, TRANSITIONS, presetAdjustments } from '../../editor/constants';
+import { PROJECT_TEMPLATES } from '../../editor/templates';
 import { cssFilter } from '../../editor/renderer';
 import { formatTime } from '../../editor/timeline';
 import { AssetKind, MediaAsset, TransitionType } from '../../editor/types';
@@ -40,7 +41,7 @@ function UploadButton({
   );
 }
 
-function AssetCard({ asset, onAdd }: { key?: React.Key; asset: MediaAsset; onAdd: () => void }) {
+function AssetCard({ asset, onAdd, onOverlay }: { key?: React.Key; asset: MediaAsset; onAdd: () => void; onOverlay?: () => void }) {
   const Icon = asset.kind === 'video' ? Film : asset.kind === 'image' ? ImageIcon : Music;
   return (
     <div
@@ -71,6 +72,16 @@ function AssetCard({ asset, onAdd }: { key?: React.Key; asset: MediaAsset; onAdd
       >
         <Plus className="h-4 w-4" />
       </button>
+      {onOverlay && (
+        <button
+          type="button"
+          onClick={onOverlay}
+          title="إضافة كطبقة فوق الفيديو"
+          className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full bg-orange-500 text-white shadow-lg transition-transform hover:scale-110"
+        >
+          <Layers className="h-3.5 w-3.5" />
+        </button>
+      )}
     </div>
   );
 }
@@ -81,9 +92,10 @@ interface MediaPanelProps {
   loading: number;
   onFiles: (files: File[]) => void;
   onAdd: (asset: MediaAsset) => void;
+  onOverlay?: (asset: MediaAsset) => void;
 }
 
-export function MediaPanel({ assets, kinds, loading, onFiles, onAdd }: MediaPanelProps) {
+export function MediaPanel({ assets, kinds, loading, onFiles, onAdd, onOverlay }: MediaPanelProps) {
   const isAudio = kinds.includes('audio');
   const list = assets.filter((a) => kinds.includes(a.kind));
   return (
@@ -97,10 +109,13 @@ export function MediaPanel({ assets, kinds, loading, onFiles, onAdd }: MediaPane
       />
       {list.length > 0 ? (
         <>
-          <p className="text-[11px] text-slate-500">اضغط + للإضافة، أو اسحب العنصر إلى الخط الزمني.</p>
+          <p className="text-[11px] text-slate-500">
+            اضغط + للإضافة، أو اسحب العنصر إلى الخط الزمني.
+            {onOverlay && ' الزر البرتقالي يضيفه كطبقة فوق الفيديو.'}
+          </p>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2">
             {list.map((a) => (
-              <AssetCard key={a.id} asset={a} onAdd={() => onAdd(a)} />
+              <AssetCard key={a.id} asset={a} onAdd={() => onAdd(a)} onOverlay={onOverlay && (() => onOverlay(a))} />
             ))}
           </div>
         </>
@@ -113,9 +128,42 @@ export function MediaPanel({ assets, kinds, loading, onFiles, onAdd }: MediaPane
   );
 }
 
-export function TextPanel({ onAdd }: { onAdd: (presetId: string) => void }) {
+interface CaptionTool {
+  busy: boolean;
+  status: string | null;
+  run: (wordsPerCaption: number) => void;
+}
+
+export function TextPanel({ onAdd, captions }: { onAdd: (presetId: string) => void; captions: CaptionTool }) {
+  const [words, setWords] = React.useState(3);
   return (
-    <div className="grid grid-cols-2 gap-2 p-4">
+    <div className="space-y-4 p-4">
+      <div className="space-y-2 rounded-xl bg-violet-500/10 p-3 ring-1 ring-violet-400/20">
+        <div className="flex items-center gap-2 text-sm font-bold text-violet-100">
+          <Captions className="h-4 w-4" /> كابشن تلقائي بالذكاء الاصطناعي
+        </div>
+        <p className="text-[11px] leading-relaxed text-violet-200/70">يفرّغ كلام الفيديو ويضيفه كنصوص متزامنة على الخط الزمني.</p>
+        <div className="flex items-center gap-2 text-[11px] text-slate-300">
+          <span>كلمات في كل سطر:</span>
+          {[1, 2, 3, 5].map((n) => (
+            <button key={n} type="button" onClick={() => setWords(n)}
+              className={cn('h-6 w-6 rounded-md', words === n ? 'bg-violet-400 text-slate-950' : 'bg-white/5 hover:bg-white/10')}>
+              {n}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          disabled={captions.busy}
+          onClick={() => captions.run(words)}
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-violet-500 py-2 text-xs font-bold text-white hover:bg-violet-400 disabled:opacity-60"
+        >
+          {captions.busy && <Loader2 className="h-4 w-4 animate-spin" />}
+          {captions.busy ? 'جاري التفريغ...' : 'إنشاء الكابشن'}
+        </button>
+        {captions.status && <p className="text-[11px] text-violet-100/80">{captions.status}</p>}
+      </div>
+    <div className="grid grid-cols-2 gap-2">
       {TEXT_PRESETS.map((p) => (
         <button
           key={p.id}
@@ -142,6 +190,7 @@ export function TextPanel({ onAdd }: { onAdd: (presetId: string) => void }) {
           <span className="text-[11px] text-slate-400">{p.label}</span>
         </button>
       ))}
+    </div>
     </div>
   );
 }
@@ -263,6 +312,54 @@ export function TransitionsPanel({ currentType, disabled, onApply, onApplyAll }:
       >
         تطبيق على كل نقاط القطع
       </button>
+    </div>
+  );
+}
+
+export function StickersPanel({ onAdd }: { onAdd: (emoji: string) => void }) {
+  return (
+    <div className="space-y-4 p-4">
+      {STICKERS.map((g) => (
+        <div key={g.group}>
+          <p className="mb-2 text-[11px] font-semibold text-slate-400">{g.group}</p>
+          <div className="grid grid-cols-6 gap-1.5">
+            {g.items.map((e) => (
+              <button key={e} type="button" onClick={() => onAdd(e)}
+                className="flex aspect-square items-center justify-center rounded-lg bg-white/5 text-2xl transition hover:scale-110 hover:bg-white/10">
+                {e}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+      <p className="text-[11px] text-slate-500">الملصق يُضاف عند مؤشر التشغيل، وتستطيع تكبيره وتحريكه وإضافة حركة له مثل النص.</p>
+    </div>
+  );
+}
+
+export function TemplatesPanel({ disabled, onApply }: { disabled: boolean; onApply: (id: string) => void }) {
+  return (
+    <div className="space-y-3 p-4">
+      {disabled ? (
+        <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">أضف مقاطعك أو صورك أولاً، ثم اختر قالباً لتنسيقها تلقائياً.</p>
+      ) : (
+        <p className="text-[11px] text-slate-500">القالب يعيد تنسيق المقاطع الموجودة (فلاتر، انتقالات، حركة) ويضيف عنواناً. يمكنك التراجع بـ Ctrl+Z.</p>
+      )}
+      {PROJECT_TEMPLATES.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          disabled={disabled}
+          onClick={() => onApply(t.id)}
+          className="flex w-full items-center gap-3 rounded-xl bg-white/5 p-2.5 text-right ring-1 ring-white/5 transition hover:ring-cyan-400/50 disabled:opacity-40"
+        >
+          <div className="h-14 w-10 shrink-0 rounded-md" style={{ background: `linear-gradient(160deg, ${t.colors[0]}, ${t.colors[1]})` }} />
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-white">{t.label}</p>
+            <p className="text-[11px] text-slate-400">{t.description}</p>
+          </div>
+        </button>
+      ))}
     </div>
   );
 }

@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeftRight, Image as ImageIcon, Music, Type, VolumeX } from 'lucide-react';
+import { ArrowLeftRight, Image as ImageIcon, Layers, Music, Type, VolumeX } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { MAX_IMAGE_DURATION, MIN_CLIP_DURATION, PEAKS_PER_SECOND } from '../../editor/constants';
-import { assignLanes, audioClipEnd, clamp, formatTime, snap } from '../../editor/timeline';
+import { assignLanes, audioClipEnd, clamp, formatTime, overlayEnd, overlayMaxOut, snap } from '../../editor/timeline';
 import {
   AudioClip,
   LaidOutClip,
   MainClip,
   MediaAsset,
+  OverlayClip,
   Project,
   Selection,
   TextClip,
@@ -30,6 +31,7 @@ interface TimelineProps {
   onUpdateClip: Updater<MainClip>;
   onUpdateText: Updater<TextClip>;
   onUpdateAudio: Updater<AudioClip>;
+  onUpdateOverlay: Updater<OverlayClip>;
   onReorder: (from: number, to: number) => void;
   onDropAsset: (assetId: string, time: number) => void;
   onAddText: () => void;
@@ -113,7 +115,7 @@ function TrimHandle({ side, onPointerDown }: { side: 'start' | 'end'; onPointerD
 export function EditorTimeline(props: TimelineProps) {
   const {
     project, layout, assets, duration, time, playing, pxPerSec: pps, onZoom, selection, onSelect, onSeek,
-    onUpdateClip, onUpdateText, onUpdateAudio, onReorder, onDropAsset, onAddText, onAddAudio,
+    onUpdateClip, onUpdateText, onUpdateAudio, onUpdateOverlay, onReorder, onDropAsset, onAddText, onAddAudio,
   } = props;
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -151,6 +153,7 @@ export function EditorTimeline(props: TimelineProps) {
   }, [pps, onZoom]);
 
   const textLanes = useMemo(() => assignLanes(project.texts, (t) => [t.start, t.start + t.duration]), [project.texts]);
+  const overlayLanes = useMemo(() => assignLanes(project.overlays, (o) => [o.start, overlayEnd(o)]), [project.overlays]);
   const audioLanes = useMemo(() => assignLanes(project.audios, (a) => [a.start, audioClipEnd(a)]), [project.audios]);
 
   const contentWidth = PAD * 2 + Math.max((duration + 8) * pps, viewport);
@@ -165,8 +168,9 @@ export function EditorTimeline(props: TimelineProps) {
     for (const lc of layout) pts.push(lc.start, lc.end);
     for (const t of project.texts) pts.push(t.start, t.start + t.duration);
     for (const a of project.audios) pts.push(a.start, audioClipEnd(a));
+    for (const o of project.overlays) pts.push(o.start, overlayEnd(o));
     return pts;
-  }, [layout, project.texts, project.audios, time]);
+  }, [layout, project.texts, project.audios, project.overlays, time]);
 
   const scrub = (e: React.PointerEvent) => {
     onSeek(timeAtClientX(e.clientX));
@@ -249,26 +253,51 @@ export function EditorTimeline(props: TimelineProps) {
     });
   };
 
-  const onAudioPointerDown = (e: React.PointerEvent, a: AudioClip, mode: 'move' | 'start' | 'end') => {
-    onSelect({ kind: 'audio', id: a.id });
-    const asset = assets.get(a.assetId);
-    const key = `audio-${a.id}-${performance.now()}`;
-    const items = project.audios.map((x) => ({ id: x.id, s: x.start, e: audioClipEnd(x) }));
-    const len = a.outPoint - a.inPoint;
+  /** Move/trim for free-placed items that play a source range (audio, overlays). */
+  const dragRanged = <T extends { id: string; start: number; inPoint: number; outPoint: number }>(
+    e: React.PointerEvent,
+    item: T,
+    mode: 'move' | 'start' | 'end',
+    siblings: T[],
+    maxOut: number,
+    isImage: boolean,
+    update: Updater<T>
+  ) => {
+    const key = `ranged-${item.id}-${performance.now()}`;
+    const end0 = item.start + item.outPoint - item.inPoint;
+    const items = siblings.map((x) => ({ id: x.id, s: x.start, e: x.start + x.outPoint - x.inPoint }));
+    const len = item.outPoint - item.inPoint;
     const th = SNAP_PX / pps;
     startDrag(e, (dx) => {
       const dt = dx / pps;
-      onUpdateAudio(a.id, (x) => {
-        if (mode === 'move') return { ...x, start: snapMove(a.start + dt, len, a.id, items) };
+      update(item.id, (x) => {
+        if (mode === 'move') return { ...x, start: snapMove(item.start + dt, len, item.id, items) };
         if (mode === 'end') {
-          const end = snap(audioClipEnd(a) + dt, snapPoints, th);
-          return { ...x, outPoint: clamp(a.inPoint + (end - a.start), a.inPoint + MIN_CLIP_DURATION, asset?.duration ?? a.outPoint) };
+          const end = snap(end0 + dt, snapPoints, th);
+          return { ...x, outPoint: clamp(item.inPoint + (end - item.start), item.inPoint + MIN_CLIP_DURATION, maxOut) };
         }
-        let shift = snap(a.start + dt, snapPoints, th) - a.start;
-        shift = clamp(shift, Math.max(-a.inPoint, -a.start), len - MIN_CLIP_DURATION);
-        return { ...x, start: a.start + shift, inPoint: a.inPoint + shift };
+        let shift = snap(item.start + dt, snapPoints, th) - item.start;
+        if (isImage) {
+          // Images have no source position: trimming the start just changes the duration.
+          shift = clamp(shift, -item.start, len - MIN_CLIP_DURATION);
+          return { ...x, start: item.start + shift, outPoint: item.outPoint - shift };
+        }
+        shift = clamp(shift, Math.max(-item.inPoint, -item.start), len - MIN_CLIP_DURATION);
+        return { ...x, start: item.start + shift, inPoint: item.inPoint + shift };
       }, key);
     });
+  };
+
+  const onAudioPointerDown = (e: React.PointerEvent, a: AudioClip, mode: 'move' | 'start' | 'end') => {
+    onSelect({ kind: 'audio', id: a.id });
+    const asset = assets.get(a.assetId);
+    dragRanged(e, a, mode, project.audios, asset?.duration ?? a.outPoint, false, onUpdateAudio);
+  };
+
+  const onOverlayPointerDown = (e: React.PointerEvent, o: OverlayClip, mode: 'move' | 'start' | 'end') => {
+    onSelect({ kind: 'overlay', id: o.id });
+    const asset = assets.get(o.assetId);
+    dragRanged(e, o, mode, project.overlays, asset ? overlayMaxOut(asset) : o.outPoint, asset?.kind === 'image', onUpdateOverlay);
   };
 
   const step = rulerStep(pps);
@@ -277,6 +306,7 @@ export function EditorTimeline(props: TimelineProps) {
 
   const textTrackH = textLanes.count * LANE_H + 8;
   const audioTrackH = audioLanes.count * LANE_H + 8;
+  const overlayTrackH = project.overlays.length ? overlayLanes.count * LANE_H + 8 : 0;
 
   return (
     <div
@@ -354,6 +384,40 @@ export function EditorTimeline(props: TimelineProps) {
               );
             })}
           </div>
+
+          {/* Overlay track (picture in picture) */}
+          {project.overlays.length > 0 && (
+            <div className="relative" style={{ height: overlayTrackH }} onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); scrub(e); } }}>
+              {project.overlays.map((o) => {
+                const asset = assets.get(o.assetId);
+                const lane = overlayLanes.lanes.get(o.id) ?? 0;
+                const selected = selection?.kind === 'overlay' && selection.id === o.id;
+                return (
+                  <div
+                    key={o.id}
+                    onPointerDown={(e) => onOverlayPointerDown(e, o, 'move')}
+                    className={cn(
+                      'absolute flex cursor-grab touch-none items-center overflow-hidden rounded-md bg-orange-600/80 bg-repeat-x text-[11px] font-semibold text-white active:cursor-grabbing',
+                      selected ? 'ring-2 ring-white' : 'hover:bg-orange-500/90'
+                    )}
+                    style={{
+                      left: PAD + o.start * pps,
+                      width: Math.max(6, (o.outPoint - o.inPoint) * pps),
+                      top: 4 + lane * LANE_H,
+                      height: LANE_H - 4,
+                      backgroundImage: asset?.thumbnail ? `linear-gradient(rgba(234,88,12,.55),rgba(234,88,12,.55)),url(${asset.thumbnail})` : undefined,
+                      backgroundSize: 'auto 100%',
+                    }}
+                  >
+                    {selected && <TrimHandle side="start" onPointerDown={(e) => onOverlayPointerDown(e, o, 'start')} />}
+                    <Layers className="mx-1.5 h-3 w-3 shrink-0 opacity-80" />
+                    <span className="truncate pr-3" dir="auto">{asset?.name ?? 'طبقة'}</span>
+                    {selected && <TrimHandle side="end" onPointerDown={(e) => onOverlayPointerDown(e, o, 'end')} />}
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* Main track */}
           <div className="relative" style={{ height: MAIN_H }} onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); scrub(e); } }}>

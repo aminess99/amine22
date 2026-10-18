@@ -18,9 +18,10 @@ import {
   getFirstEncodableVideoCodec,
 } from 'mediabunny';
 import { ASPECT_SIZES } from './constants';
+import { timeStretch } from './timeStretch';
 import { loadFonts, renderFrame } from './renderer';
-import { getMainFrameState, layoutMainTrack, projectDuration } from './timeline';
-import { FrameRef, LaidOutClip, MediaAsset, Project } from './types';
+import { overlayEnd, getMainFrameState, layoutMainTrack, projectDuration } from './timeline';
+import { LaidOutClip, MediaAsset, Project } from './types';
 
 export interface ExportOptions {
   resolution: 720 | 1080;
@@ -105,7 +106,27 @@ async function renderAudioMix(
     if (asset.kind !== 'video' || !asset.hasAudio || clip.muted || clip.volume <= 0) continue;
     const buffer = await decode(asset);
     if (!buffer) continue;
-    schedule(buffer, lc.start, clip.inPoint, clip.outPoint - clip.inPoint, clip.speed, clip.volume, 0, 0);
+    if (clip.speed === 1) {
+      schedule(buffer, lc.start, clip.inPoint, clip.outPoint - clip.inPoint, 1, clip.volume, 0, 0);
+    } else {
+      // Keep the voice's pitch: stretch the clip's samples instead of resampling them.
+      const from = Math.floor(clip.inPoint * buffer.sampleRate);
+      const to = Math.min(buffer.length, Math.ceil(clip.outPoint * buffer.sampleRate));
+      if (to <= from) continue;
+      const channels = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c).subarray(from, to));
+      const stretched = timeStretch(channels, buffer.sampleRate, clip.speed);
+      const out = ctx.createBuffer(stretched.length, stretched[0].length, buffer.sampleRate);
+      stretched.forEach((data, c) => out.copyToChannel(data, c));
+      schedule(out, lc.start, 0, out.duration, 1, clip.volume, 0, 0);
+    }
+  }
+
+  for (const o of project.overlays) {
+    const asset = assets.get(o.assetId);
+    if (!asset || asset.kind !== 'video' || !asset.hasAudio || o.muted || o.volume <= 0 || o.start >= duration) continue;
+    const buffer = await decode(asset);
+    if (!buffer) continue;
+    schedule(buffer, o.start, o.inPoint, Math.min(o.outPoint - o.inPoint, duration - o.start), 1, o.volume, 0, 0);
   }
 
   for (const a of project.audios) {
@@ -200,66 +221,73 @@ export async function exportProject(
       audioSource.close();
     }
 
-    // Pre-compute which source timestamps each video clip will be asked for, in order,
-    // so mediabunny can decode each clip sequentially.
-    const timestampsByClip = new Map<string, number[]>();
-    const visits: (FrameRef | null)[][] = [];
+    // Pre-compute which source timestamps each video (main clip or overlay) will be
+    // asked for, in order, so mediabunny can decode each one sequentially.
+    interface Visit { key: string; file: File; sourceTime: number }
+    const timestampsByKey = new Map<string, number[]>();
+    const visits: Visit[][] = [];
     for (let f = 0; f < totalFrames; f++) {
-      const st = getMainFrameState(layout, f / fps);
-      const refs = [st.from, st.to];
-      for (const r of refs) {
-        if (r && r.lc.asset.kind === 'video') {
-          const list = timestampsByClip.get(r.lc.clip.id) ?? [];
-          list.push(r.sourceTime);
-          timestampsByClip.set(r.lc.clip.id, list);
+      const t = f / fps;
+      const st = getMainFrameState(layout, t);
+      const frameVisits: Visit[] = [];
+      for (const r of [st.from, st.to]) {
+        if (r && r.lc.asset.kind === 'video') frameVisits.push({ key: r.lc.clip.id, file: r.lc.asset.file, sourceTime: r.sourceTime });
+      }
+      for (const o of project.overlays) {
+        const asset = assets.get(o.assetId);
+        if (asset?.kind === 'video' && t >= o.start && t < overlayEnd(o)) {
+          frameVisits.push({ key: `ov:${o.id}`, file: asset.file, sourceTime: o.inPoint + (t - o.start) });
         }
       }
-      visits.push(refs);
+      for (const v of frameVisits) {
+        const list = timestampsByKey.get(v.key) ?? [];
+        list.push(v.sourceTime);
+        timestampsByKey.set(v.key, list);
+      }
+      visits.push(frameVisits);
     }
 
-    for (const lc of layout) {
-      if (lc.asset.kind === 'image' && !images.has(lc.asset.id)) {
-        images.set(lc.asset.id, await createImageBitmap(lc.asset.file));
+    const imageAssets = [...layout.map((lc) => lc.asset), ...project.overlays.map((o) => assets.get(o.assetId))];
+    for (const asset of imageAssets) {
+      if (asset?.kind === 'image' && !images.has(asset.id)) {
+        images.set(asset.id, await createImageBitmap(asset.file));
       }
     }
 
     const currentFrames = new Map<string, CanvasImageSource>();
     const withoutVideo = new Set<string>();
 
-    const pullFrame = async (ref: FrameRef) => {
-      const id = ref.lc.clip.id;
-      if (withoutVideo.has(id)) return;
-      let stream = streams.get(id);
+    const pullFrame = async ({ key, file }: Visit) => {
+      if (withoutVideo.has(key)) return;
+      let stream = streams.get(key);
       if (!stream) {
-        const input = new Input({ source: new BlobSource(ref.lc.asset.file), formats: ALL_FORMATS });
+        const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
         const track = await input.getPrimaryVideoTrack();
-        const timestamps = timestampsByClip.get(id) ?? [];
+        const timestamps = timestampsByKey.get(key) ?? [];
         if (!track) {
           input.dispose();
-          withoutVideo.add(id);
+          withoutVideo.add(key);
           return;
         }
         // No canvas pool: a frame may stay on screen (held in currentFrames) while later ones decode.
         const sink = new CanvasSink(track);
         stream = { input, iterator: sink.canvasesAtTimestamps(timestamps), remaining: timestamps.length };
-        streams.set(id, stream);
+        streams.set(key, stream);
       }
       const next = await stream.iterator.next();
       stream.remaining--;
-      if (!next.done && next.value) currentFrames.set(id, next.value.canvas);
+      if (!next.done && next.value) currentFrames.set(key, next.value.canvas);
       if (stream.remaining <= 0) {
         await stream.iterator.return();
         stream.input.dispose();
-        streams.delete(id);
+        streams.delete(key);
       }
     };
 
     for (let f = 0; f < totalFrames; f++) {
       if (signal.cancelled) throw new ExportCancelled();
       const t = f / fps;
-      for (const ref of visits[f]) {
-        if (ref && ref.lc.asset.kind === 'video') await pullFrame(ref);
-      }
+      for (const v of visits[f]) await pullFrame(v);
 
       ctx.setTransform(width / base.width, 0, 0, height / base.height, 0, 0);
       renderFrame(ctx, {
@@ -272,6 +300,10 @@ export async function exportProject(
           ref.lc.asset.kind === 'image'
             ? images.get(ref.lc.asset.id) ?? null
             : currentFrames.get(ref.lc.clip.id) ?? null,
+        getOverlayFrame: (o) => {
+          const asset = assets.get(o.assetId);
+          return asset?.kind === 'image' ? images.get(asset.id) ?? null : currentFrames.get(`ov:${o.id}`) ?? null;
+        },
       });
       await videoSource.add(t, 1 / fps);
 

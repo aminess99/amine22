@@ -1,4 +1,4 @@
-import { Adjustments, AspectRatio, TextAnimIn, TextAnimOut, TextClip, TransitionType } from './types';
+import { Adjustments, AspectRatio, FrameTransform, OverlayAnim, TextAnimIn, TextAnimOut, TextClip, TransitionType } from './types';
 
 export const PEAKS_PER_SECOND = 20;
 export const DEFAULT_IMAGE_DURATION = 3;
@@ -176,3 +176,29 @@ export const TEXT_PRESETS: { id: string; label: string; style: TextStyle }[] = [
 ];
 
 export const SPEED_PRESETS = [0.25, 0.5, 1, 1.5, 2, 3, 4];
+
+/** Two-keyframe motion presets, expressed relative to the clip's own transform. */
+export const MOTION_PRESETS: { id: string; label: string; from: Partial<FrameTransform>; to: Partial<FrameTransform> }[] = [
+  { id: 'zoom-in', label: 'تقريب بطيء', from: {}, to: { zoom: 1.25 } },
+  { id: 'zoom-out', label: 'إبعاد بطيء', from: { zoom: 1.25 }, to: {} },
+  { id: 'pan-left', label: 'تحريك لليسار', from: { zoom: 1.2, offsetX: 0.08 }, to: { zoom: 1.2, offsetX: -0.08 } },
+  { id: 'pan-right', label: 'تحريك لليمين', from: { zoom: 1.2, offsetX: -0.08 }, to: { zoom: 1.2, offsetX: 0.08 } },
+  { id: 'pan-up', label: 'تحريك لأعلى', from: { zoom: 1.2, offsetY: 0.06 }, to: { zoom: 1.2, offsetY: -0.06 } },
+  { id: 'pan-down', label: 'تحريك لأسفل', from: { zoom: 1.2, offsetY: -0.06 }, to: { zoom: 1.2, offsetY: 0.06 } },
+  { id: 'punch', label: 'تقريب سريع', from: { zoom: 1 }, to: { zoom: 1.5 } },
+  { id: 'spin', label: 'دوران خفيف', from: { zoom: 1.15, rotation: -4 }, to: { zoom: 1.15, rotation: 4 } },
+];
+
+export const OVERLAY_ANIMS: { id: OverlayAnim; label: string }[] = [
+  { id: 'none', label: 'بدون' },
+  { id: 'fade', label: 'تلاشي' },
+  { id: 'pop', label: 'قفزة' },
+  { id: 'slide-up', label: 'انزلاق' },
+];
+
+export const STICKERS: { group: string; items: string[] }[] = [
+  { group: 'وجوه', items: ['😂', '😍', '🔥', '😎', '🤯', '😭', '🥳', '😱', '🤔', '👀', '🙌', '👏'] },
+  { group: 'رموز', items: ['❤️', '💯', '⭐', '✨', '⚡', '💥', '✅', '❌', '⚠️', '💡', '🎯', '🚀'] },
+  { group: 'أسهم وأشكال', items: ['⬅️', '➡️', '⬆️', '⬇️', '↩️', '🔴', '🟡', '🟢', '🔵', '⬛', '⭕', '🔻'] },
+  { group: 'مناسبات', items: ['🎉', '🎁', '🎂', '🌙', '🕌', '🏆', '📍', '📢', '🛒', '💰', '📸', '🎬'] },
+];
