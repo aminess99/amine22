@@ -26,7 +26,7 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { ASPECT_SIZES, DEFAULT_TRANSITION_DURATION, FONTS, TEXT_PRESETS, presetAdjustments } from '../../editor/constants';
+import { ASPECT_SIZES, CAPTION_STYLES, captionStyleFields, DEFAULT_TRANSITION_DURATION, FONTS, TEXT_PRESETS, presetAdjustments } from '../../editor/constants';
 import { computePeaks, extractVideoFrames, loadAsset } from '../../editor/media';
 import { VOICE_EFFECTS, VoiceEffect, applyVoiceEffect, decodeFile, detectBeats, encodeWav } from '../../editor/audioTools';
 import { reverseVideo } from '../../editor/reverse';
@@ -43,6 +43,7 @@ import {
   getMainFrameState,
   layoutMainTrack,
   projectDuration,
+  retimeWords,
   setKeyframe,
   sourceTimeFor,
   splitAudioClip,
@@ -52,7 +53,7 @@ import {
   uid,
 } from '../../editor/timeline';
 import { AspectRatio, AudioClip, MainClip, MediaAsset, OverlayClip, Project, Selection, TextClip, TransitionType } from '../../editor/types';
-import { generateCaptions } from '../../editor/autoCaptions';
+import { emojiFor, generateCaptions } from '../../editor/autoCaptions';
 import { clearAll, loadSaved, saveAsset, saveProject } from '../../editor/persistence';
 import { clipsFromRanges, findSpeechRanges } from '../../editor/silence';
 import { applyTemplate } from '../../editor/templates';
@@ -68,7 +69,7 @@ import {
 import { usePreviewEngine } from '../../editor/usePreviewEngine';
 import { EditorExportModal } from './EditorExportModal';
 import { AudioInspector, ClipInspector, OverlayInspector, ProjectInspector, TextInspector, TransitionInspector } from './EditorInspector';
-import { FiltersPanel, MediaPanel, StickersPanel, TemplatesPanel, TextPanel, TransitionsPanel, VoiceRecorder } from './EditorPanels';
+import { CaptionManager, FiltersPanel, MediaPanel, StickersPanel, TemplatesPanel, TextPanel, TransitionsPanel, VoiceRecorder } from './EditorPanels';
 import { EditorTimeline } from './EditorTimeline';
 import { ToolButton } from './ui';
 import { frameAt } from './previews';
@@ -109,7 +110,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmNew, setConfirmNew] = useState(false);
   const [silence, setSilence] = useState<{ busy: boolean; message: string | null }>({ busy: false, message: null });
-  const [captionState, setCaptionState] = useState<{ busy: boolean; status: string | null }>({ busy: false, status: null });
+  const [captionState, setCaptionState] = useState<{ busy: boolean; status: string | null; progress: number | null }>({ busy: false, status: null, progress: null });
 
   const assets = useMemo(() => new Map(assetList.map((a) => [a.id, a])), [assetList]);
   const layout = useMemo(() => layoutMainTrack(project.clips, assets), [project.clips, assets]);
@@ -504,24 +505,59 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
   };
 
   const runCaptions = useCallback(
-    async (wordsPerCaption: number, styleId: string) => {
-      setCaptionState({ busy: true, status: 'جاري رفع الصوت وتفريغه، قد يستغرق ذلك دقيقة...' });
+    async (wordsPerCaption: number, styleId: string, withEmoji: boolean) => {
+      setCaptionState({ busy: true, status: 'جاري التحضير...', progress: 0 });
       try {
-        const captions = await generateCaptions(layout, wordsPerCaption, styleId, (done, total) =>
-          setCaptionState({ busy: true, status: `جاري التفريغ (${Math.min(done + 1, total)} من ${total})...` })
-        );
+        const captions = await generateCaptions(layout, wordsPerCaption, styleId, withEmoji, (p) => {
+          const part = p.clips > 1 ? ` (${p.clip} من ${p.clips})` : '';
+          // Upload is the first half of the bar; the server's transcription the rest.
+          if (p.stage === 'upload') {
+            setCaptionState({ busy: true, status: `جاري رفع الصوت ${p.percent}%${part}`, progress: ((p.clip - 1) + p.percent / 200) / p.clips });
+          } else {
+            setCaptionState({ busy: true, status: `جاري التفريغ بالذكاء الاصطناعي${part}... قد يأخذ دقيقة إذا كان الخادم نائماً.`, progress: ((p.clip - 1) + 0.75) / p.clips });
+          }
+        });
         if (!captions.length) {
-          setCaptionState({ busy: false, status: 'لم يتم العثور على كلام في الفيديو.' });
+          setCaptionState({ busy: false, status: 'لم يتم العثور على كلام في الفيديو.', progress: null });
           return;
         }
         update((p) => ({ ...p, texts: [...p.texts, ...captions] }));
-        setCaptionState({ busy: false, status: `تمت إضافة ${captions.length} سطر كابشن. حدد أي سطر لتعديل نصه أو شكله.` });
+        setCaptionState({ busy: false, status: `تمت إضافة ${captions.length} سطر كابشن.`, progress: null });
+        previewRange(captions[0].start, captions[0].start + 3);
       } catch (err) {
-        setCaptionState({ busy: false, status: err instanceof Error ? err.message : 'فشل التفريغ.' });
+        setCaptionState({ busy: false, status: err instanceof Error ? err.message : 'فشل التفريغ.', progress: null });
       }
     },
-    [layout, update]
+    [layout, update, previewRange]
   );
+
+  // ---------- bulk caption edits ----------
+  const captionItems = useMemo(() => project.texts.filter((t) => t.words?.length).sort((a, b) => a.start - b.start), [project.texts]);
+  const updateCaptions = useCallback(
+    (fn: (t: TextClip) => TextClip, key?: string) => update((p) => ({ ...p, texts: p.texts.map((t) => (t.words?.length ? fn(t) : t)) }), key),
+    [update]
+  );
+  const captionManager: CaptionManager = {
+    items: captionItems,
+    restyle: (styleId) => {
+      updateCaptions((t) => ({ ...t, ...captionStyleFields(styleId) }));
+      if (captionItems[0]) previewRange(captionItems[0].start, captionItems[0].start + 2.5);
+    },
+    setY: (y) => updateCaptions((t) => ({ ...t, y })),
+    setSize: (percent) =>
+      updateCaptions((t) => {
+        const base = CAPTION_STYLES.find((c) => c.id === t.captionStyle)?.fontSize ?? 80;
+        return { ...t, fontSize: Math.round((base * percent) / 100) };
+      }, 'caption-size'),
+    setEmoji: (on) => updateCaptions((t) => ({ ...t, emoji: on ? emojiFor(t.words ?? []) : undefined })),
+    editLine: (id, text) => updateText(id, (t) => ({ ...t, text, words: t.words ? retimeWords(t.words, text) : undefined }), `caption-line-${id}`),
+    deleteLine: (id) => update((p) => ({ ...p, texts: p.texts.filter((t) => t.id !== id) })),
+    seek: (t) => {
+      pause();
+      seek(t + 0.01);
+    },
+    removeAll: () => update((p) => ({ ...p, texts: p.texts.filter((t) => !t.words?.length) })),
+  };
 
   const addVisual = useCallback(
     (asset: MediaAsset, at?: number) => {
@@ -1103,6 +1139,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
               setSheetOpen(false);
             }}
             captions={{ ...captionState, run: runCaptions }}
+            manager={captionManager}
           />
         );
       case 'stickers':

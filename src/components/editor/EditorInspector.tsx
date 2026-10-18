@@ -7,6 +7,7 @@ import {
   FONTS,
   BLEND_MODES,
   CAPTION_STYLES,
+  captionStyleFields,
   MAX_IMAGE_DURATION,
   MOTION_PRESETS,
   NEUTRAL_ADJUSTMENTS,
@@ -20,7 +21,7 @@ import {
 import { clipDuration, motionFromPreset, retimeWords, setKeyframe } from '../../editor/timeline';
 import { Adjustments, AspectRatio, AudioClip, MainClip, MediaAsset, OverlayClip, OverlayShape, Project, TextClip, TransitionType } from '../../editor/types';
 import { ColorInput, Section, Segmented, SliderRow } from './ui';
-import { AnimChip, FilterThumb, MotionThumb, TransitionThumb } from './previews';
+import { AnimChip, CaptionStyleThumb, FilterThumb, MotionThumb, TransitionThumb } from './previews';
 import { ChromaSection, ClipAnimSection, CropSection, EffectSection, FlipButtons, MaskSection, SpeedCurveSection } from './ClipExtras';
 import { VOICE_EFFECTS, VoiceEffect } from '../../editor/audioTools';
 
@@ -466,15 +467,19 @@ export function TextInspector({ text, patch, actions, preview }: { text: TextCli
 
       {text.words?.length ? (
         <Section title="تمييز الكلمة المنطوقة">
-          <div className="grid grid-cols-4 gap-1">
+          <p className="text-[11px] text-slate-500">لتغيير كل الكابشن معاً استخدم تبويب "نصوص".</p>
+          <div className="grid grid-cols-3 gap-1.5">
             {CAPTION_STYLES.map((cs) => (
               <button
                 key={cs.id}
                 type="button"
-                onClick={() => patch((t) => ({ ...t, highlight: { ...cs.highlight }, font: cs.font, color: cs.color, strokeWidth: cs.stroke }))}
-                className={cn('rounded-lg px-1 py-1.5 text-[11px] font-semibold', text.highlight?.style === cs.highlight.style ? 'bg-cyan-400 text-slate-950' : 'bg-white/5 text-slate-300 hover:bg-white/10')}
+                onClick={() => patch((t) => ({ ...t, ...captionStyleFields(cs.id) }))}
+                className="text-center"
               >
-                {cs.label}
+                <div className={cn('aspect-[16/8] overflow-hidden rounded-md ring-2', text.captionStyle === cs.id ? 'ring-cyan-400' : 'ring-transparent')}>
+                  <CaptionStyleThumb styleId={cs.id} />
+                </div>
+                <span className="mt-0.5 block text-[10px] text-slate-300">{cs.label}</span>
               </button>
             ))}
           </div>

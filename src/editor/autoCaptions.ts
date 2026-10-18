@@ -1,4 +1,5 @@
-import { CAPTION_STYLES, TEXT_PRESETS } from './constants';
+import { getWordEmoji } from '../lib/emojiMatcher';
+import { TEXT_PRESETS, captionStyleFields } from './constants';
 import { uid } from './timeline';
 import { LaidOutClip, TextClip } from './types';
 
@@ -8,58 +9,85 @@ interface Word {
   end: number;
 }
 
+export type CaptionProgress =
+  | { stage: 'upload'; clip: number; clips: number; percent: number }
+  | { stage: 'transcribe'; clip: number; clips: number };
+
+/** Transcripts by source file, so restyling or regenerating doesn't upload and pay again. */
+const transcripts = new WeakMap<File, Word[]>();
+
 /** Sends a file to the site's transcription endpoint and returns word timings in source seconds. */
-async function transcribe(file: File): Promise<Word[]> {
-  const form = new FormData();
-  form.append('video', file);
-  let res: Response;
-  try {
-    res = await fetch('/api/transcribe', { method: 'POST', body: form });
-  } catch {
-    throw new Error('خدمة التفريغ غير متاحة هنا. الكابشن التلقائي يعمل على الموقع الكامل فقط.');
+function transcribe(file: File, onUpload: (percent: number) => void, onUploaded: () => void): Promise<Word[]> {
+  const cached = transcripts.get(file);
+  if (cached) return Promise.resolve(cached);
+  return new Promise((resolve, reject) => {
+    // XHR rather than fetch: it reports upload progress, which matters on slow phones.
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/transcribe');
+    xhr.responseType = 'json';
+    xhr.upload.onprogress = (e) => e.lengthComputable && onUpload(Math.round((e.loaded / e.total) * 100));
+    xhr.upload.onload = onUploaded;
+    xhr.onerror = () => reject(new Error('خدمة التفريغ غير متاحة هنا. الكابشن التلقائي يعمل على الموقع الكامل فقط.'));
+    xhr.onload = () => {
+      const data = xhr.response;
+      if (xhr.status === 404 || xhr.status === 405) {
+        reject(new Error('خدمة التفريغ غير متاحة هنا. الكابشن التلقائي يعمل على الموقع الكامل فقط.'));
+        return;
+      }
+      if (xhr.status < 200 || xhr.status >= 300 || !data) {
+        console.error('Transcription failed:', xhr.status, data?.error);
+        reject(new Error('تعذر تشغيل خدمة التفريغ على الخادم حالياً. حاول مرة أخرى لاحقاً.'));
+        return;
+      }
+      const words: Word[] = [];
+      for (const seg of data.segments ?? []) for (const w of seg.words ?? []) words.push({ text: w.text, start: w.start, end: w.end });
+      transcripts.set(file, words);
+      resolve(words);
+    };
+    const form = new FormData();
+    form.append('video', file);
+    xhr.send(form);
+  });
+}
+
+/** The first word in a caption that has a matching emoji. */
+export function emojiFor(words: { text: string }[]): string | undefined {
+  for (const w of words) {
+    const e = getWordEmoji(w.text);
+    if (e) return e;
   }
-  const data = await res.json().catch(() => null);
-  if (res.status === 404 || res.status === 405) {
-    throw new Error('خدمة التفريغ غير متاحة هنا. الكابشن التلقائي يعمل على الموقع الكامل فقط.');
-  }
-  if (!res.ok || !data) {
-    console.error('Transcription failed:', res.status, data?.error);
-    throw new Error('تعذر تشغيل خدمة التفريغ على الخادم حالياً. حاول مرة أخرى لاحقاً.');
-  }
-  const words: Word[] = [];
-  for (const seg of data.segments ?? []) for (const w of seg.words ?? []) words.push({ text: w.text, start: w.start, end: w.end });
-  return words;
+  return undefined;
 }
 
 /**
  * Transcribes every main-track video clip and turns the speech into timed
- * subtitle text clips, mapped from source time onto the timeline.
+ * captions, mapped from source time onto the timeline.
  */
 export async function generateCaptions(
   layout: LaidOutClip[],
   wordsPerCaption: number,
-  /** A CAPTION_STYLES id for word-by-word highlighting, or 'plain' for a simple subtitle. */
+  /** A CAPTION_STYLES id. */
   styleId: string,
-  onProgress: (done: number, total: number) => void
+  withEmoji: boolean,
+  onProgress: (p: CaptionProgress) => void
 ): Promise<TextClip[]> {
   const videos = layout.filter((lc) => lc.asset.kind === 'video' && lc.asset.hasAudio && !lc.clip.muted);
   if (!videos.length) throw new Error('لا يوجد مقطع فيديو فيه صوت لتفريغه.');
 
-  const cache = new Map<string, Word[]>();
-  const plain = (TEXT_PRESETS.find((p) => p.id === 'subtitle') ?? TEXT_PRESETS[0]).style;
-  const cs = CAPTION_STYLES.find((c) => c.id === styleId);
-  const style = cs
-    ? { ...plain, font: cs.font, color: cs.color, strokeColor: '#000000', strokeWidth: cs.stroke, background: null, fontSize: 76, bold: true, shadow: cs.stroke === 0, y: 0.72 }
-    : plain;
+  const base = (TEXT_PRESETS.find((p) => p.id === 'subtitle') ?? TEXT_PRESETS[0]).style;
+  const look = captionStyleFields(styleId);
   const captions: TextClip[] = [];
 
   for (let i = 0; i < videos.length; i++) {
-    onProgress(i, videos.length);
     const lc = videos[i];
-    if (!cache.has(lc.asset.id)) cache.set(lc.asset.id, await transcribe(lc.asset.file));
+    onProgress({ stage: 'upload', clip: i + 1, clips: videos.length, percent: 0 });
+    const all = await transcribe(
+      lc.asset.file,
+      (percent) => onProgress({ stage: 'upload', clip: i + 1, clips: videos.length, percent }),
+      () => onProgress({ stage: 'transcribe', clip: i + 1, clips: videos.length })
+    );
     const { inPoint, outPoint, speed } = lc.clip;
-    const words = cache
-      .get(lc.asset.id)!
+    const words = all
       .filter((w) => w.end > inPoint && w.start < outPoint)
       .map((w) => ({
         text: w.text,
@@ -73,17 +101,21 @@ export async function generateCaptions(
       // Hold each caption until the next one starts (short gaps), so it doesn't flicker.
       const end = next && next.start - group[group.length - 1].end < 0.6 ? next.start : group[group.length - 1].end + 0.2;
       captions.push({
-        ...style,
+        ...base,
+        ...look,
         id: uid(),
         text: group.map((w) => w.text).join(' '),
         start,
         duration: Math.max(0.2, Math.min(end, lc.end) - start),
         x: 0.5,
+        y: styleId === 'cinematic' || styleId === 'plain' ? 0.84 : 0.72,
         rotation: 0,
-        ...(cs ? { words: group, highlight: { ...cs.highlight }, animIn: 'pop' as const, animOut: 'none' as const } : {}),
+        words: group,
+        animIn: 'none',
+        animOut: 'none',
+        emoji: withEmoji ? emojiFor(group) : undefined,
       });
     }
   }
-  onProgress(videos.length, videos.length);
   return captions;
 }

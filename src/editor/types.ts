@@ -214,10 +214,28 @@ export interface TextClip {
   words?: { text: string; start: number; end: number }[];
   /** How the spoken word stands out in a word-timed caption. */
   highlight?: CaptionHighlight;
+  /** CAPTION_STYLES id the caption was styled with. */
+  captionStyle?: string;
+  /** Emoji shown above the caption. */
+  emoji?: string;
 }
 
+export type CaptionHighlightStyle =
+  | 'none'
+  | 'color'
+  | 'box'
+  | 'pop'
+  | 'karaoke'
+  | 'beast'
+  | 'neon'
+  | 'single'
+  | 'underline'
+  | 'bubble'
+  | 'gradient'
+  | 'comic';
+
 export interface CaptionHighlight {
-  style: 'color' | 'box' | 'pop' | 'karaoke';
+  style: CaptionHighlightStyle;
   color: string;
 }
 
