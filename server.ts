@@ -493,14 +493,21 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
 
       let extractedWords: Array<{ word: string; start: number; end: number }> = [];
       let transcriptionFailure: string | null = null;
-      try {
-        console.log(`Transcribing with faster-whisper (${process.env.FASTER_WHISPER_MODEL || "small"})...`);
-        extractedWords = await transcribeWithFasterWhisper(fileToTranscribe);
-        console.log(`faster-whisper transcription completed with ${extractedWords.length} words.`);
-      } catch (fasterWhisperErr: any) {
-        transcriptionFailure = fasterWhisperErr?.message || String(fasterWhisperErr);
-        console.warn("faster-whisper transcription failed, trying OpenRouter fallback:", fasterWhisperErr?.message || fasterWhisperErr);
-      }
+      const runFasterWhisper = async () => {
+        try {
+          console.log(`Transcribing with faster-whisper (${process.env.FASTER_WHISPER_MODEL || "small"})...`);
+          extractedWords = await transcribeWithFasterWhisper(fileToTranscribe);
+          console.log(`faster-whisper transcription completed with ${extractedWords.length} words.`);
+        } catch (fasterWhisperErr: any) {
+          // As a fallback, keep the preferred engine's error: it is the one worth reporting.
+          transcriptionFailure ??= fasterWhisperErr?.message || String(fasterWhisperErr);
+          console.warn("faster-whisper transcription failed:", fasterWhisperErr?.message || fasterWhisperErr);
+        }
+      };
+      // With an OpenRouter key, use it first: small hosts (e.g. Render's free plan) can't run
+      // the local Whisper model. TRANSCRIBE_ENGINE=whisper keeps the local model first.
+      const preferOpenRouter = !!openRouterClient && process.env.TRANSCRIBE_ENGINE !== "whisper";
+      if (!preferOpenRouter) await runFasterWhisper();
 
       if (extractedWords.length === 0 && openRouterClient) {
         try {
@@ -566,6 +573,8 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
           console.error("OpenRouter transcription error:", openRouterErr?.message || openRouterErr);
         }
       }
+
+      if (extractedWords.length === 0 && preferOpenRouter) await runFasterWhisper();
 
       if (extractedWords.length === 0) {
         if (transcriptionFailure) {
