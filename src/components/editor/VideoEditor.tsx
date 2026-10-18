@@ -518,7 +518,6 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
 
   const isEmpty = project.clips.length === 0 && project.texts.length === 0 && project.audios.length === 0;
   const desktopPanel: PanelId = panel === 'edit' ? 'media' : panel;
-  const fileInput = useRef<HTMLInputElement>(null);
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-[#0b0d12] text-slate-100" dir="rtl">
@@ -625,24 +624,19 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
                   <p className="mb-5 text-xs leading-relaxed text-slate-400">
                     استورد مقاطع الفيديو والصور والموسيقى، ثم قصّها ورتبها وأضف النصوص والفلاتر والانتقالات وصدّر الفيديو بجودة عالية.
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => fileInput.current?.click()}
-                    className="rounded-xl bg-gradient-to-l from-cyan-400 to-sky-500 px-6 py-3 text-sm font-bold text-slate-950 hover:brightness-110"
-                  >
+                  <label className="relative inline-block cursor-pointer rounded-xl bg-gradient-to-l from-cyan-400 to-sky-500 px-6 py-3 text-sm font-bold text-slate-950 hover:brightness-110">
                     {loading > 0 ? 'جاري التحميل...' : 'استيراد ملفات'}
-                  </button>
-                  <input
-                    ref={fileInput}
-                    type="file"
-                    accept="video/*,image/*,audio/*"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => {
-                      addFiles(Array.from(e.target.files ?? []), true);
-                      e.target.value = '';
-                    }}
-                  />
+                    <input
+                      type="file"
+                      accept="video/*,image/*,audio/*"
+                      multiple
+                      className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                      onChange={(e) => {
+                        addFiles(Array.from(e.target.files ?? []), true);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
                 </div>
               </div>
             )}

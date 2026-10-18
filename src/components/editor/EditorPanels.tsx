@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React from 'react';
 import { Check, Film, Image as ImageIcon, Loader2, Music, Plus, Upload } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { FILTER_PRESETS, TEXT_PRESETS, TRANSITIONS, presetAdjustments } from '../../editor/constants';
@@ -19,30 +19,24 @@ function UploadButton({
   onFiles: (files: File[]) => void;
   loading: number;
 }) {
-  const input = useRef<HTMLInputElement>(null);
+  // The input covers the whole card so the tap reaches it directly; some in-app
+  // browsers refuse to open the picker from a script-triggered click.
   return (
-    <>
-      <button
-        type="button"
-        onClick={() => input.current?.click()}
-        className="flex w-full flex-col items-center gap-1.5 rounded-xl border border-dashed border-cyan-400/40 bg-cyan-400/5 px-4 py-5 text-center transition-colors hover:bg-cyan-400/10"
-      >
-        {loading > 0 ? <Loader2 className="h-6 w-6 animate-spin text-cyan-300" /> : <Upload className="h-6 w-6 text-cyan-300" />}
-        <span className="text-sm font-bold text-white">{loading > 0 ? `جاري التحميل (${loading})...` : label}</span>
-        <span className="text-[11px] text-slate-400">{hint}</span>
-      </button>
+    <label className="relative flex w-full cursor-pointer flex-col items-center gap-1.5 rounded-xl border border-dashed border-cyan-400/40 bg-cyan-400/5 px-4 py-5 text-center transition-colors hover:bg-cyan-400/10">
+      {loading > 0 ? <Loader2 className="h-6 w-6 animate-spin text-cyan-300" /> : <Upload className="h-6 w-6 text-cyan-300" />}
+      <span className="text-sm font-bold text-white">{loading > 0 ? `جاري التحميل (${loading})...` : label}</span>
+      <span className="text-[11px] text-slate-400">{hint}</span>
       <input
-        ref={input}
         type="file"
         accept={accept}
         multiple
-        className="hidden"
+        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
         onChange={(e) => {
           onFiles(Array.from(e.target.files ?? []));
           e.target.value = '';
         }}
       />
-    </>
+    </label>
   );
 }
 
