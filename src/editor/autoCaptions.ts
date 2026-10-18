@@ -1,4 +1,4 @@
-import { TEXT_PRESETS } from './constants';
+import { CAPTION_STYLES, TEXT_PRESETS } from './constants';
 import { uid } from './timeline';
 import { LaidOutClip, TextClip } from './types';
 
@@ -38,13 +38,19 @@ async function transcribe(file: File): Promise<Word[]> {
 export async function generateCaptions(
   layout: LaidOutClip[],
   wordsPerCaption: number,
+  /** A CAPTION_STYLES id for word-by-word highlighting, or 'plain' for a simple subtitle. */
+  styleId: string,
   onProgress: (done: number, total: number) => void
 ): Promise<TextClip[]> {
   const videos = layout.filter((lc) => lc.asset.kind === 'video' && lc.asset.hasAudio && !lc.clip.muted);
   if (!videos.length) throw new Error('لا يوجد مقطع فيديو فيه صوت لتفريغه.');
 
   const cache = new Map<string, Word[]>();
-  const style = (TEXT_PRESETS.find((p) => p.id === 'subtitle') ?? TEXT_PRESETS[0]).style;
+  const plain = (TEXT_PRESETS.find((p) => p.id === 'subtitle') ?? TEXT_PRESETS[0]).style;
+  const cs = CAPTION_STYLES.find((c) => c.id === styleId);
+  const style = cs
+    ? { ...plain, font: cs.font, color: cs.color, strokeColor: '#000000', strokeWidth: cs.stroke, background: null, fontSize: 76, bold: true, shadow: cs.stroke === 0, y: 0.72 }
+    : plain;
   const captions: TextClip[] = [];
 
   for (let i = 0; i < videos.length; i++) {
@@ -74,6 +80,7 @@ export async function generateCaptions(
         duration: Math.max(0.2, Math.min(end, lc.end) - start),
         x: 0.5,
         rotation: 0,
+        ...(cs ? { words: group, highlight: { ...cs.highlight }, animIn: 'pop' as const, animOut: 'none' as const } : {}),
       });
     }
   }

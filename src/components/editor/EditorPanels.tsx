@@ -1,7 +1,7 @@
 import React from 'react';
-import { Captions, Check, Film, Image as ImageIcon, Layers, Loader2, Music, Plus, Upload } from 'lucide-react';
+import { Captions, Check, Film, Image as ImageIcon, Layers, Loader2, Mic, Music, Plus, Square, Upload } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { FILTER_PRESETS, STICKERS, TEXT_PRESETS, TRANSITIONS, presetAdjustments } from '../../editor/constants';
+import { CAPTION_STYLES, FILTER_PRESETS, STICKERS, TEXT_PRESETS, TRANSITIONS, presetAdjustments } from '../../editor/constants';
 import { PROJECT_TEMPLATES, templatePreview } from '../../editor/templates';
 import { FilterThumb, TemplateThumb, TransitionThumb } from './previews';
 import { cssFilter } from '../../editor/renderer';
@@ -94,13 +94,16 @@ interface MediaPanelProps {
   onFiles: (files: File[]) => void;
   onAdd: (asset: MediaAsset) => void;
   onOverlay?: (asset: MediaAsset) => void;
+  /** Shown above the upload button (the audio panel puts the voice recorder here). */
+  extra?: React.ReactNode;
 }
 
-export function MediaPanel({ assets, kinds, loading, onFiles, onAdd, onOverlay }: MediaPanelProps) {
+export function MediaPanel({ assets, kinds, loading, onFiles, onAdd, onOverlay, extra }: MediaPanelProps) {
   const isAudio = kinds.includes('audio');
   const list = assets.filter((a) => kinds.includes(a.kind));
   return (
     <div className="space-y-4 p-4">
+      {extra}
       <UploadButton
         accept={isAudio ? 'audio/*' : 'video/*,image/*'}
         label={isAudio ? 'رفع موسيقى أو مؤثر صوتي' : 'استيراد فيديو أو صور'}
@@ -132,11 +135,12 @@ export function MediaPanel({ assets, kinds, loading, onFiles, onAdd, onOverlay }
 interface CaptionTool {
   busy: boolean;
   status: string | null;
-  run: (wordsPerCaption: number) => void;
+  run: (wordsPerCaption: number, styleId: string) => void;
 }
 
 export function TextPanel({ onAdd, captions }: { onAdd: (presetId: string) => void; captions: CaptionTool }) {
   const [words, setWords] = React.useState(3);
+  const [style, setStyle] = React.useState('hormozi');
   return (
     <div className="space-y-4 p-4">
       <div className="space-y-2 rounded-xl bg-violet-500/10 p-3 ring-1 ring-violet-400/20">
@@ -144,6 +148,22 @@ export function TextPanel({ onAdd, captions }: { onAdd: (presetId: string) => vo
           <Captions className="h-4 w-4" /> كابشن تلقائي بالذكاء الاصطناعي
         </div>
         <p className="text-[11px] leading-relaxed text-violet-200/70">يفرّغ كلام الفيديو ويضيفه كنصوص متزامنة على الخط الزمني.</p>
+        <div className="grid grid-cols-5 gap-1">
+          {[{ id: 'plain', label: 'عادي', font: 'Tajawal', color: '#fff', hl: '#fff' }, ...CAPTION_STYLES.map((c) => ({ id: c.id, label: c.label, font: c.font, color: c.color, hl: c.highlight.color }))].map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => setStyle(c.id)}
+              className={cn('flex flex-col items-center gap-0.5 rounded-lg py-1.5 text-[10px]', style === c.id ? 'bg-violet-400/25 text-white ring-1 ring-violet-300' : 'bg-white/5 text-slate-300')}
+            >
+              <span className="text-xs font-black" style={{ fontFamily: `"${c.font}", sans-serif` }}>
+                <span style={{ color: c.color }}>أ</span>
+                <span style={{ color: c.hl }}>ب</span>
+              </span>
+              {c.label}
+            </button>
+          ))}
+        </div>
         <div className="flex items-center gap-2 text-[11px] text-slate-300">
           <span>كلمات في كل سطر:</span>
           {[1, 2, 3, 5].map((n) => (
@@ -156,7 +176,7 @@ export function TextPanel({ onAdd, captions }: { onAdd: (presetId: string) => vo
         <button
           type="button"
           disabled={captions.busy}
-          onClick={() => captions.run(words)}
+          onClick={() => captions.run(words, style)}
           className="flex w-full items-center justify-center gap-2 rounded-lg bg-violet-500 py-2 text-xs font-bold text-white hover:bg-violet-400 disabled:opacity-60"
         >
           {captions.busy && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -347,6 +367,86 @@ export function TemplatesPanel({ disabled, frames, onApply }: { disabled: boolea
           </div>
         </button>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Records a voiceover from the microphone. The preview plays (muted) while recording,
+ * so you can talk over the video; the clip lands where recording started.
+ */
+export function VoiceRecorder({ onStart, onStop }: { onStart: () => void; onStop: (file: File | null) => void }) {
+  const [state, setState] = React.useState<'idle' | 'recording' | 'error'>('idle');
+  const [error, setError] = React.useState<string | null>(null);
+  const [seconds, setSeconds] = React.useState(0);
+  const recRef = React.useRef<MediaRecorder | null>(null);
+
+  React.useEffect(() => {
+    if (state !== 'recording') return;
+    const started = Date.now();
+    const id = window.setInterval(() => setSeconds((Date.now() - started) / 1000), 200);
+    return () => window.clearInterval(id);
+  }, [state]);
+
+  React.useEffect(() => () => recRef.current?.stream.getTracks().forEach((t) => t.stop()), []);
+
+  const start = async () => {
+    setError(null);
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setState('error');
+      setError('تسجيل الصوت غير متاح في هذه الصفحة. جرّبه على الموقع الكامل.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      const type = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg'].find((t) => MediaRecorder.isTypeSupported(t));
+      const rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+      const chunks: Blob[] = [];
+      rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const mime = rec.mimeType || 'audio/webm';
+        const ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm';
+        const stamp = new Date().toLocaleTimeString('en-GB').replace(/:/g, '-');
+        onStop(chunks.length ? new File(chunks, `تعليق-صوتي-${stamp}.${ext}`, { type: mime }) : null);
+        setState('idle');
+      };
+      recRef.current = rec;
+      rec.start(250);
+      setSeconds(0);
+      setState('recording');
+      onStart();
+    } catch {
+      setState('error');
+      setError('لم يُسمح باستخدام الميكروفون. اسمح به من إعدادات المتصفح ثم حاول مجدداً.');
+    }
+  };
+
+  const stop = () => recRef.current?.state === 'recording' && recRef.current.stop();
+
+  return (
+    <div className="space-y-2">
+      {state === 'recording' ? (
+        <button
+          type="button"
+          onClick={stop}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-red-500 py-3 text-sm font-bold text-white"
+        >
+          <Square className="h-4 w-4 fill-white" />
+          إيقاف التسجيل · {Math.floor(seconds / 60)}:{String(Math.floor(seconds % 60)).padStart(2, '0')}
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={start}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-red-500/15 py-3 text-sm font-bold text-red-200 ring-1 ring-red-400/30 hover:bg-red-500/25"
+        >
+          <Mic className="h-4 w-4" />
+          تسجيل تعليق صوتي
+        </button>
+      )}
+      {state === 'recording' && <p className="text-center text-[11px] text-slate-400">الفيديو يعمل بدون صوت لتتكلم فوقه.</p>}
+      {error && <p className="text-[11px] text-red-300">{error}</p>}
     </div>
   );
 }

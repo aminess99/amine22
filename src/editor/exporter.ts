@@ -20,7 +20,7 @@ import {
 import { ASPECT_SIZES } from './constants';
 import { timeStretch } from './timeStretch';
 import { loadFonts, renderFrame } from './renderer';
-import { overlayEnd, getMainFrameState, layoutMainTrack, projectDuration } from './timeline';
+import { curveRate, overlayEnd, getMainFrameState, layoutMainTrack, projectDuration } from './timeline';
 import { LaidOutClip, MediaAsset, Project } from './types';
 
 export interface ExportOptions {
@@ -80,14 +80,15 @@ async function renderAudioMix(
     rate: number,
     volume: number,
     fadeIn: number,
-    fadeOut: number
-  ) => {
-    if (sourceDuration <= 0 || offset >= buffer.duration) return;
+    fadeOut: number,
+    timelineDuration?: number
+  ): AudioBufferSourceNode | null => {
+    if (sourceDuration <= 0 || offset >= buffer.duration) return null;
     const node = ctx.createBufferSource();
     node.buffer = buffer;
     node.playbackRate.value = rate;
     const gain = ctx.createGain();
-    const timelineDur = sourceDuration / rate;
+    const timelineDur = timelineDuration ?? sourceDuration / rate;
     const end = at + timelineDur;
     // Short ramps avoid clicks at hard cuts.
     const fi = Math.max(0.01, fadeIn);
@@ -99,14 +100,24 @@ async function renderAudioMix(
     node.connect(gain).connect(ctx.destination);
     node.start(at, offset, sourceDuration);
     scheduled++;
+    return node;
   };
 
   for (const lc of layout) {
     const { clip, asset } = lc;
-    if (asset.kind !== 'video' || !asset.hasAudio || clip.muted || clip.volume <= 0) continue;
+    if (asset.kind !== 'video' || !asset.hasAudio || clip.muted || clip.volume <= 0 || clip.freeze) continue;
     const buffer = await decode(asset);
     if (!buffer) continue;
-    if (clip.speed === 1) {
+    if (clip.speedCurve) {
+      // A speed curve varies the rate continuously; follow it with the playback rate (pitch moves with it).
+      const node = schedule(buffer, lc.start, clip.inPoint, clip.outPoint - clip.inPoint, clip.speed, clip.volume, 0, 0, lc.duration);
+      if (node) {
+        const steps = 64;
+        const curve = new Float32Array(steps);
+        for (let i = 0; i < steps; i++) curve[i] = clip.speed * curveRate(clip.speedCurve, (i + 0.5) / steps);
+        node.playbackRate.setValueCurveAtTime(curve, lc.start, lc.duration);
+      }
+    } else if (clip.speed === 1) {
       schedule(buffer, lc.start, clip.inPoint, clip.outPoint - clip.inPoint, 1, clip.volume, 0, 0);
     } else {
       // Keep the voice's pitch: stretch the clip's samples instead of resampling them.

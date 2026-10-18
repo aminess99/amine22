@@ -27,11 +27,15 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { ASPECT_SIZES, DEFAULT_TRANSITION_DURATION, FONTS, TEXT_PRESETS, presetAdjustments } from '../../editor/constants';
-import { extractVideoFrames, loadAsset } from '../../editor/media';
+import { computePeaks, extractVideoFrames, loadAsset } from '../../editor/media';
+import { VOICE_EFFECTS, VoiceEffect, applyVoiceEffect, detectBeats, encodeWav } from '../../editor/audioTools';
+import { reverseVideo } from '../../editor/reverse';
 import { loadFonts } from '../../editor/renderer';
 import {
   audioClipEnd,
   clamp,
+  clipDuration,
+  clipProgress,
   createAudioClip,
   createMainClip,
   createOverlayClip,
@@ -39,6 +43,8 @@ import {
   getMainFrameState,
   layoutMainTrack,
   projectDuration,
+  setKeyframe,
+  sourceTimeFor,
   splitAudioClip,
   splitMainClip,
   splitOverlayClip,
@@ -62,7 +68,7 @@ import {
 import { usePreviewEngine } from '../../editor/usePreviewEngine';
 import { EditorExportModal } from './EditorExportModal';
 import { AudioInspector, ClipInspector, OverlayInspector, ProjectInspector, TextInspector, TransitionInspector } from './EditorInspector';
-import { FiltersPanel, MediaPanel, StickersPanel, TemplatesPanel, TextPanel, TransitionsPanel } from './EditorPanels';
+import { FiltersPanel, MediaPanel, StickersPanel, TemplatesPanel, TextPanel, TransitionsPanel, VoiceRecorder } from './EditorPanels';
 import { EditorTimeline } from './EditorTimeline';
 import { ToolButton } from './ui';
 import { frameAt } from './previews';
@@ -131,7 +137,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
 
   const selectedId = selection?.kind === 'text' || selection?.kind === 'overlay' ? selection.id : null;
   const engine = usePreviewEngine({ canvasRef, project, assets, layout, duration, selectedId, previewScale });
-  const { time, playing, toggle, seek, pause, previewRange, captureFrame, subscribeFrame } = engine;
+  const { time, playing, toggle, seek, pause, play, previewRange, captureFrame, subscribeFrame } = engine;
 
   // The time readout follows playback frame by frame without re-rendering the editor.
   const clockRef = useRef<HTMLSpanElement>(null);
@@ -303,11 +309,203 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     [layout, update]
   );
 
+  // ---------- clip tools: freeze frame, reverse, detach audio ----------
+  const [clipTool, setClipTool] = useState<{ busy: string | null; message: string | null }>({ busy: null, message: null });
+
+  const registerAsset = useCallback(async (file: File) => {
+    const asset = await loadAsset(file);
+    setAssetList((list) => [...list, asset]);
+    saveAsset(asset).catch(() => {});
+    return asset;
+  }, []);
+
+  const freezeFrame = useCallback(
+    (clipId: string) => {
+      const lc = layout.find((l) => l.clip.id === clipId);
+      if (!lc) return;
+      const t = clamp(engine.getTime(), lc.start, lc.end);
+      const still: MainClip = {
+        ...lc.clip,
+        id: uid(),
+        inPoint: sourceTimeFor(lc, Math.min(t, lc.end - 1e-3)),
+        freeze: 2,
+        speedCurve: null,
+        transition: { ...lc.clip.transition, type: 'none' },
+        animIn: { ...lc.clip.animIn, type: 'none' },
+        animOut: { ...lc.clip.animOut, type: 'none' },
+      };
+      const parts = splitMainClip(lc, t);
+      update((p) => ({
+        ...p,
+        clips: p.clips.flatMap((c) => {
+          if (c.id !== clipId) return [c];
+          if (parts) return [parts[0], still, parts[1]];
+          return t - lc.start < lc.duration / 2 ? [still, c] : [c, still];
+        }),
+      }));
+      setSelection({ kind: 'clip', id: still.id });
+      setClipTool({ busy: null, message: 'تمت إضافة إطار مجمّد لمدة ثانيتين، ويمكنك تغيير مدته من الأسفل.' });
+    },
+    [layout, engine, update]
+  );
+
+  const reverseClip = useCallback(
+    async (clipId: string) => {
+      const lc = layout.find((l) => l.clip.id === clipId);
+      if (!lc || lc.asset.kind !== 'video') return;
+      setClipTool({ busy: 'reverse', message: 'جاري عكس المقطع... 0%' });
+      try {
+        const file = await reverseVideo(lc.asset.file, lc.clip.inPoint, lc.clip.outPoint, lc.asset.hasAudio, (p) =>
+          setClipTool({ busy: 'reverse', message: `جاري عكس المقطع... ${Math.round(p * 100)}%` })
+        );
+        const asset = await registerAsset(file);
+        updateClip(clipId, (c) => ({ ...c, assetId: asset.id, inPoint: 0, outPoint: asset.duration, speedCurve: null, freeze: null }));
+        setClipTool({ busy: null, message: 'تم عكس المقطع. النسخة الأصلية ما زالت في مكتبة الوسائط.' });
+      } catch (err) {
+        setClipTool({ busy: null, message: err instanceof Error ? err.message : 'تعذر عكس المقطع.' });
+      }
+    },
+    [layout, registerAsset, updateClip]
+  );
+
+  const extractAudio = useCallback(
+    async (clipId: string) => {
+      const lc = layout.find((l) => l.clip.id === clipId);
+      if (!lc || lc.asset.kind !== 'video') return;
+      if (!lc.asset.hasAudio) return setClipTool({ busy: null, message: 'هذا المقطع لا يحتوي على صوت.' });
+      if (lc.clip.speed !== 1 || lc.clip.speedCurve || lc.clip.freeze) {
+        return setClipTool({ busy: null, message: 'فصل الصوت يعمل على المقاطع بسرعتها الأصلية. أعد السرعة إلى 1x أولاً.' });
+      }
+      setClipTool({ busy: 'extract', message: null });
+      let asset = lc.asset;
+      if (!asset.peaks) {
+        const peaks = await computePeaks(asset.file);
+        asset = { ...asset, peaks };
+        setAssetList((list) => list.map((a) => (a.id === asset.id ? asset : a)));
+        saveAsset(asset).catch(() => {});
+      }
+      const audio: AudioClip = { ...createAudioClip(asset, lc.start), inPoint: lc.clip.inPoint, outPoint: lc.clip.outPoint, volume: lc.clip.volume };
+      update((p) => ({ ...p, clips: replaceById(p.clips, clipId, (c) => ({ ...c, muted: true })), audios: [...p.audios, audio] }));
+      setSelection({ kind: 'audio', id: audio.id });
+      setClipTool({ busy: null, message: null });
+    },
+    [layout, update]
+  );
+
+  // ---------- audio tools: voice effects, beats ----------
+  const [audioTool, setAudioTool] = useState<{ busy: string | null; message: string | null }>({ busy: null, message: null });
+
+  const applyAudioEffect = useCallback(
+    async (audioId: string, effect: VoiceEffect) => {
+      const a = project.audios.find((x) => x.id === audioId);
+      const asset = a && assets.get(a.assetId);
+      if (!a || !asset) return;
+      setAudioTool({ busy: effect, message: null });
+      try {
+        const buffer = await applyVoiceEffect(asset.file, a.inPoint, a.outPoint, effect);
+        const label = VOICE_EFFECTS.find((v) => v.id === effect)?.label ?? effect;
+        const processed = await registerAsset(encodeWav(buffer, `${asset.name.replace(/\.[^.]+$/, '')} - ${label}.wav`));
+        updateAudio(audioId, (x) => ({ ...x, assetId: processed.id, inPoint: 0, outPoint: processed.duration }));
+        setAudioTool({ busy: null, message: `تم تطبيق "${label}".` });
+      } catch {
+        setAudioTool({ busy: null, message: 'تعذر معالجة هذا الصوت.' });
+      }
+    },
+    [project.audios, assets, registerAsset, updateAudio]
+  );
+
+  const findBeats = useCallback(
+    async (audioId: string) => {
+      const a = project.audios.find((x) => x.id === audioId);
+      const asset = a && assets.get(a.assetId);
+      if (!asset) return;
+      setAudioTool({ busy: 'beats', message: null });
+      try {
+        const beats = await detectBeats(asset.file);
+        const updated = { ...asset, beats };
+        setAssetList((list) => list.map((x) => (x.id === asset.id ? updated : x)));
+        saveAsset(updated).catch(() => {});
+        setAudioTool({ busy: null, message: beats.length ? null : 'لم أجد إيقاعاً واضحاً في هذا الصوت.' });
+      } catch {
+        setAudioTool({ busy: null, message: 'تعذر تحليل هذا الصوت.' });
+      }
+    },
+    [project.audios, assets]
+  );
+
+  /** Re-times the main track so cuts land on every Nth beat of the selected music. */
+  const syncToBeats = useCallback(
+    (audioId: string, every: number) => {
+      const a = project.audios.find((x) => x.id === audioId);
+      const asset = a && assets.get(a.assetId);
+      if (!a || !asset?.beats?.length) return;
+      const cuts = asset.beats
+        .filter((b) => b >= a.inPoint && b < a.outPoint)
+        .map((b) => a.start + (b - a.inPoint))
+        .filter((_, i) => i % every === every - 1);
+      update((p) => {
+        let cursor = 0;
+        const clips = p.clips.map((c) => {
+          const end = cuts.find((x) => x > cursor + 0.3);
+          if (end === undefined) {
+            cursor += clipDuration(c);
+            return c;
+          }
+          const want = end - cursor;
+          const src = assets.get(c.assetId);
+          let next: MainClip = c;
+          if (c.freeze) next = { ...c, freeze: want };
+          else if (src?.kind === 'image') next = { ...c, outPoint: c.inPoint + want };
+          else if (src) next = { ...c, outPoint: Math.min(src.duration, c.inPoint + want * c.speed) };
+          cursor += clipDuration(next);
+          return next;
+        });
+        return { ...p, clips };
+      });
+      setAudioTool({ busy: null, message: 'تم قص المقاطع لتتبدل مع الإيقاع.' });
+      pause();
+      seek(0);
+    },
+    [project.audios, assets, update, pause, seek]
+  );
+
+  const moveOverlay = useCallback(
+    (id: string, dir: 'up' | 'down') =>
+      update((p) => {
+        const i = p.overlays.findIndex((o) => o.id === id);
+        const j = dir === 'up' ? i + 1 : i - 1;
+        if (i < 0 || j < 0 || j >= p.overlays.length) return p;
+        const overlays = [...p.overlays];
+        [overlays[i], overlays[j]] = [overlays[j], overlays[i]];
+        return { ...p, overlays };
+      }),
+    [update]
+  );
+
+  // ---------- voiceover ----------
+  const recordStartRef = useRef(0);
+  const onRecordStart = () => {
+    recordStartRef.current = engine.getTime();
+    engine.setMuted(true);
+    play();
+  };
+  const onRecordStop = async (file: File | null) => {
+    pause();
+    engine.setMuted(false);
+    if (!file) return;
+    try {
+      const asset = await registerAsset(file);
+      addAudio(asset, recordStartRef.current);
+    } catch {
+      setErrors((e) => [...e, 'تعذر حفظ التسجيل الصوتي.']);
+    }
+  };
+
   const runCaptions = useCallback(
-    async (wordsPerCaption: number) => {
+    async (wordsPerCaption: number, styleId: string) => {
       setCaptionState({ busy: true, status: 'جاري رفع الصوت وتفريغه، قد يستغرق ذلك دقيقة...' });
       try {
-        const captions = await generateCaptions(layout, wordsPerCaption, (done, total) =>
+        const captions = await generateCaptions(layout, wordsPerCaption, styleId, (done, total) =>
           setCaptionState({ busy: true, status: `جاري التفريغ (${Math.min(done + 1, total)} من ${total})...` })
         );
         if (!captions.length) {
@@ -633,7 +831,8 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
   const applyGesture = (kind: GestureKind, id: string, item0: MainClip | TextClip | OverlayClip, d: GestureDelta, key: string) => {
     let next: MainClip | TextClip | OverlayClip;
     if (kind === 'clip') {
-      next = applyClipGesture(item0 as MainClip, d);
+      const lc = layout.find((l) => l.clip.id === id);
+      next = applyClipGesture(item0 as MainClip, d, lc ? clipProgress(lc, engine.getTime()) : undefined);
       updateClip(id, () => next as MainClip, key);
     } else if (kind === 'text') {
       next = applyTextGesture(item0 as TextClip, d);
@@ -794,11 +993,29 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     <ClipInspector
       clip={selectedClip.clip}
       asset={selectedClip.asset}
-      patch={(fn, key) => updateClip(selectedClip.clip.id, fn, key)}
+      progress={clipProgress(selectedClip, time)}
+      patch={(fn, key) =>
+        updateClip(
+          selectedClip.clip.id,
+          (c) => {
+            const n = fn(c);
+            // Auto-key: with hand-made keyframes, transform edits land on a keyframe at the playhead.
+            const moved = n.zoom !== c.zoom || n.offsetX !== c.offsetX || n.offsetY !== c.offsetY || n.rotation !== c.rotation;
+            return moved && n.motion?.preset === 'custom' ? { ...n, motion: setKeyframe(n, clipProgress(selectedClip, engine.getTime())) } : n;
+          },
+          key
+        )
+      }
       actions={actions}
       silence={{ ...silence, run: () => removeSilence(selectedClip.clip.id) }}
       frame={filterFrame}
       preview={previewSelection}
+      tools={{
+        ...clipTool,
+        onFreeze: () => freezeFrame(selectedClip.clip.id),
+        onReverse: () => reverseClip(selectedClip.clip.id),
+        onExtractAudio: () => extractAudio(selectedClip.clip.id),
+      }}
     />
   ) : selectedOverlay ? (
     <OverlayInspector
@@ -807,6 +1024,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       patch={(fn, key) => updateOverlay(selectedOverlay.id, fn, key)}
       actions={actions}
       preview={previewSelection}
+      onLayer={(dir) => moveOverlay(selectedOverlay.id, dir)}
     />
   ) : selectedText ? (
     <TextInspector text={selectedText} patch={(fn, key) => updateText(selectedText.id, fn, key)} actions={actions} preview={previewSelection} />
@@ -816,6 +1034,12 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       asset={assets.get(selectedAudio.assetId)}
       patch={(fn, key) => updateAudio(selectedAudio.id, fn, key)}
       actions={actions}
+      tools={{
+        ...audioTool,
+        onEffect: (e) => applyAudioEffect(selectedAudio.id, e),
+        onDetectBeats: () => findBeats(selectedAudio.id),
+        onBeatSync: (n) => syncToBeats(selectedAudio.id, n),
+      }}
     />
   ) : selectedCut ? (
     <TransitionInspector
@@ -853,6 +1077,15 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
             assets={assetList}
             kinds={['audio']}
             loading={loading}
+            extra={
+              <VoiceRecorder
+                onStart={() => {
+                  setSheetOpen(false);
+                  onRecordStart();
+                }}
+                onStop={onRecordStop}
+              />
+            }
             onFiles={(f) => addFiles(f, false)}
             onAdd={(a) => {
               addAudio(a);

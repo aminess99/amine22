@@ -1,5 +1,5 @@
-import { clamp } from './timeline';
-import { MainClip, OverlayClip, TextClip } from './types';
+import { clamp, setKeyframe } from './timeline';
+import { FrameTransform, MainClip, OverlayClip, TextClip } from './types';
 
 /** A gesture relative to where it started: movement as a fraction of the canvas, scale factor, rotation in degrees. */
 export interface GestureDelta {
@@ -24,21 +24,27 @@ export function snapAngle(deg: number): number {
   return Math.round(a * 10) / 10;
 }
 
-export function applyClipGesture(c0: MainClip, d: GestureDelta): MainClip {
+/**
+ * `keyAt` is the playhead's progress through the clip. A clip with hand-made keyframes
+ * gets a keyframe there (auto-keying); a preset motion moves along with the clip.
+ */
+export function applyClipGesture(c0: MainClip, d: GestureDelta, keyAt?: number): MainClip {
   const zoom = snapScale(clamp(c0.zoom * d.scale, 0.2, 5), 1);
   const rotation = snapAngle(c0.rotation + d.rotation);
   const offsetX = clamp(c0.offsetX + d.dx, -1, 1);
   const offsetY = clamp(c0.offsetY + d.dy, -1, 1);
   // A clip with keyframed motion is drawn from its keyframes, so move them along with the base.
   const ratio = zoom / c0.zoom;
-  const shift = (t: NonNullable<MainClip['motion']>['from']) => ({
+  const shift = (t: FrameTransform) => ({
     zoom: t.zoom * ratio,
     offsetX: t.offsetX + (offsetX - c0.offsetX),
     offsetY: t.offsetY + (offsetY - c0.offsetY),
     rotation: t.rotation + (rotation - c0.rotation),
   });
-  const motion = c0.motion ? { ...c0.motion, from: shift(c0.motion.from), to: shift(c0.motion.to) } : null;
-  return { ...c0, zoom, rotation, offsetX, offsetY, motion };
+  const next = { ...c0, zoom, rotation, offsetX, offsetY };
+  if (c0.motion?.preset === 'custom' && keyAt !== undefined) return { ...next, motion: setKeyframe(next, keyAt) };
+  const motion = c0.motion ? { ...c0.motion, keys: c0.motion.keys.map((k) => ({ ...k, tf: shift(k.tf) })) } : null;
+  return { ...next, motion };
 }
 
 export function applyTextGesture(t0: TextClip, d: GestureDelta): TextClip {

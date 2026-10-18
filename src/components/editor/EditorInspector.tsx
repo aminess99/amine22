@@ -1,10 +1,12 @@
 import React from 'react';
-import { AlignCenter, AlignLeft, AlignRight, Copy, Loader2, Scissors, Trash2, Volume2, VolumeX, Wand2 } from 'lucide-react';
+import { AlignCenter, AlignLeft, AlignRight, ArrowDownToLine, ArrowUpToLine, Copy, Loader2, Pause as FreezeIcon, Rewind, Scissors, Split, Trash2, Volume2, VolumeX, Wand2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import {
   ASPECT_SIZES,
   FILTER_PRESETS,
   FONTS,
+  BLEND_MODES,
+  CAPTION_STYLES,
   MAX_IMAGE_DURATION,
   MOTION_PRESETS,
   NEUTRAL_ADJUSTMENTS,
@@ -15,10 +17,12 @@ import {
   TRANSITIONS,
   presetAdjustments,
 } from '../../editor/constants';
-import { baseTransform, clipDuration, motionFromPreset } from '../../editor/timeline';
+import { clipDuration, motionFromPreset, retimeWords, setKeyframe } from '../../editor/timeline';
 import { Adjustments, AspectRatio, AudioClip, MainClip, MediaAsset, OverlayClip, OverlayShape, Project, TextClip, TransitionType } from '../../editor/types';
 import { ColorInput, Section, Segmented, SliderRow } from './ui';
 import { AnimChip, FilterThumb, MotionThumb, TransitionThumb } from './previews';
+import { ChromaSection, ClipAnimSection, CropSection, EffectSection, FlipButtons, MaskSection, SpeedCurveSection } from './ClipExtras';
+import { VOICE_EFFECTS, VoiceEffect } from '../../editor/audioTools';
 
 type Patch<T> = (fn: (item: T) => T, coalesceKey?: string) => void;
 
@@ -54,6 +58,15 @@ interface SilenceTool {
   run: () => void;
 }
 
+/** Clip operations that take a moment or change the timeline around the clip. */
+export interface ClipTools {
+  busy: string | null;
+  message: string | null;
+  onFreeze: () => void;
+  onReverse: () => void;
+  onExtractAudio: () => void;
+}
+
 export function ClipInspector({
   clip,
   asset,
@@ -62,6 +75,8 @@ export function ClipInspector({
   silence,
   frame,
   preview,
+  progress,
+  tools,
 }: {
   clip: MainClip;
   asset: MediaAsset;
@@ -71,6 +86,9 @@ export function ClipInspector({
   /** The clip's current frame, for filter and motion previews. */
   frame?: string | null;
   preview: Preview;
+  /** Playhead position through this clip (0..1), where keyframes are added. */
+  progress: number;
+  tools: ClipTools;
 }) {
   const k = (name: string) => `${clip.id}-${name}`;
   const setAdjust = (key: keyof Adjustments, v: number) =>
@@ -93,7 +111,34 @@ export function ClipInspector({
   return (
     <div>
       <ActionsBar {...actions} />
-      {isVideo ? (
+      {isVideo && (
+        <div className="border-b border-white/5 p-2">
+          <div className="flex gap-1">
+            {[
+              { label: 'تجميد إطار', icon: FreezeIcon, run: tools.onFreeze, id: 'freeze' },
+              { label: 'عكس', icon: Rewind, run: tools.onReverse, id: 'reverse' },
+              { label: 'فصل الصوت', icon: Split, run: tools.onExtractAudio, id: 'extract' },
+            ].map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                disabled={!!tools.busy}
+                onClick={b.run}
+                className="flex flex-1 flex-col items-center gap-1 rounded-lg py-2 text-[11px] text-slate-300 hover:bg-white/10 disabled:opacity-40"
+              >
+                {tools.busy === b.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <b.icon className="h-4 w-4" />}
+                {b.label}
+              </button>
+            ))}
+          </div>
+          {tools.message && <p className="px-1 pt-1 text-[11px] text-slate-400">{tools.message}</p>}
+        </div>
+      )}
+      {clip.freeze ? (
+        <Section title="تجميد الإطار">
+          <SliderRow label="مدة التجميد" value={clip.freeze} min={0.3} max={10} step={0.1} format={secs} onChange={(v) => patch((c) => ({ ...c, freeze: v }), k('frz'))} />
+        </Section>
+      ) : isVideo ? (
         <Section title="السرعة">
           <div className="flex flex-wrap gap-1">
             {SPEED_PRESETS.map((s) => (
@@ -125,6 +170,12 @@ export function ClipInspector({
           />
           <p className="text-[11px] text-slate-500">المدة الناتجة: {secs(clipDuration(clip))}</p>
         </Section>
+      ) : null}
+      {isVideo && !clip.freeze && (
+        <SpeedCurveSection curve={clip.speedCurve} onChange={(speedCurve) => { patch((c) => ({ ...c, speedCurve })); if (speedCurve) preview('whole'); }} />
+      )}
+      {isVideo || clip.freeze ? (
+        <></>
       ) : (
         <Section title="المدة">
           <SliderRow
@@ -199,6 +250,28 @@ export function ClipInspector({
         <p className="text-[11px] text-slate-500">داخل المعاينة: إصبع للتحريك، وإصبعان للتكبير والتدوير، وضغطتان سريعتان لإعادة الضبط. على الكمبيوتر: Ctrl + عجلة الفأرة للتكبير.</p>
       </Section>
 
+      <CropSection
+        crop={clip.crop}
+        flipH={clip.flipH}
+        flipV={clip.flipV}
+        coalesce={k}
+        onCrop={(crop, key) => patch((c) => ({ ...c, crop }), key)}
+        onFlip={(flipH, flipV) => patch((c) => ({ ...c, flipH, flipV }))}
+      />
+
+      <ClipAnimSection
+        animIn={clip.animIn}
+        animOut={clip.animOut}
+        onChange={(which, a) => patch((c) => ({ ...c, [which]: a }))}
+        onPreview={preview}
+      />
+
+      <EffectSection effect={clip.effect} coalesce={k} onChange={(effect, key) => { patch((c) => ({ ...c, effect }), key); if (effect && !key) preview('whole'); }} />
+
+      <MaskSection mask={clip.mask} coalesce={k} onChange={(mask, key) => patch((c) => ({ ...c, mask }), key)} />
+
+      <ChromaSection chroma={clip.chroma} coalesce={k} onChange={(chroma, key) => patch((c) => ({ ...c, chroma }), key)} />
+
       <Section title="حركة المقطع (إطارات مفتاحية)">
         <div className="grid grid-cols-3 gap-1.5">
           <button
@@ -224,7 +297,7 @@ export function ClipInspector({
                 className="text-center text-[10px] text-slate-300"
               >
                 <div className={cn('aspect-square overflow-hidden rounded-md ring-2', clip.motion?.preset === m.id ? 'ring-cyan-400' : 'ring-transparent')}>
-                  <MotionThumb src={frame ?? undefined} from={tf(motion.from, { zoom: 1 })} to={tf(motion.to, { zoom: 1 })} />
+                  <MotionThumb src={frame ?? undefined} from={tf(motion.keys[0].tf, { zoom: 1 })} to={tf(motion.keys[motion.keys.length - 1].tf, { zoom: 1 })} />
                 </div>
                 <span className="mt-0.5 block">{m.label}</span>
               </button>
@@ -232,26 +305,37 @@ export function ClipInspector({
           })}
         </div>
         <p className="text-[11px] leading-relaxed text-slate-500">
-          حركة مخصصة: اضبط التكبير والموضع بالأعلى ثم احفظه كبداية، ثم اضبطه مرة أخرى واحفظه كنهاية.
+          إطارات مفتاحية: حرّك مؤشر التشغيل، واضبط التكبير والموضع والدوران (أو حرّك المقطع بأصابعك)، ثم أضف إطاراً. بعد أول إطار، كل تعديل يُحفظ تلقائياً عند المؤشر.
         </p>
-        <div className="flex gap-1.5">
-          {(['from', 'to'] as const).map((k) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() =>
-                patch((c) => {
-                  const now = baseTransform(c);
-                  const prev = c.motion ?? { preset: 'custom', from: now, to: now };
-                  return { ...c, motion: { ...prev, preset: 'custom', [k]: now } };
-                })
-              }
-              className="flex-1 rounded-lg bg-white/5 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-white/10"
-            >
-              {k === 'from' ? 'حفظ كإطار البداية' : 'حفظ كإطار النهاية'}
-            </button>
-          ))}
-        </div>
+        <button
+          type="button"
+          onClick={() => patch((c) => ({ ...c, motion: setKeyframe(c, progress) }))}
+          className="w-full rounded-lg bg-cyan-400/15 py-2 text-xs font-bold text-cyan-200 hover:bg-cyan-400/25"
+        >
+          ◆ إضافة إطار مفتاحي عند المؤشر ({Math.round(progress * 100)}%)
+        </button>
+        {clip.motion && clip.motion.keys.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {clip.motion.keys.map((k, i) => (
+              <span key={i} className="flex items-center gap-1 rounded-md bg-white/5 px-2 py-1 text-[10px] text-slate-300">
+                ◆ {Math.round(k.at * 100)}%
+                <button
+                  type="button"
+                  title="حذف الإطار"
+                  onClick={() =>
+                    patch((c) => {
+                      const keys = (c.motion?.keys ?? []).filter((_, j) => j !== i);
+                      return { ...c, motion: keys.length ? { preset: 'custom', keys } : null };
+                    })
+                  }
+                  className="text-slate-500 hover:text-red-300"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </Section>
 
       <Section title="الفلتر">
@@ -305,7 +389,10 @@ export function TextInspector({ text, patch, actions, preview }: { text: TextCli
           value={text.text}
           dir="auto"
           rows={3}
-          onChange={(e) => patch((t) => ({ ...t, text: e.target.value }), k('text'))}
+          onChange={(e) => {
+            const value = e.target.value;
+            patch((t) => ({ ...t, text: value, words: t.words ? retimeWords(t.words, value) : undefined }), k('text'));
+          }}
           className="w-full resize-none rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm focus:border-cyan-400 focus:outline-none"
         />
         <div className="grid grid-cols-2 gap-1.5">
@@ -377,6 +464,28 @@ export function TextInspector({ text, patch, actions, preview }: { text: TextCli
         </label>
       </Section>
 
+      {text.words?.length ? (
+        <Section title="تمييز الكلمة المنطوقة">
+          <div className="grid grid-cols-4 gap-1">
+            {CAPTION_STYLES.map((cs) => (
+              <button
+                key={cs.id}
+                type="button"
+                onClick={() => patch((t) => ({ ...t, highlight: { ...cs.highlight }, font: cs.font, color: cs.color, strokeWidth: cs.stroke }))}
+                className={cn('rounded-lg px-1 py-1.5 text-[11px] font-semibold', text.highlight?.style === cs.highlight.style ? 'bg-cyan-400 text-slate-950' : 'bg-white/5 text-slate-300 hover:bg-white/10')}
+              >
+                {cs.label}
+              </button>
+            ))}
+          </div>
+          {text.highlight && (
+            <ColorInput label="لون التمييز" value={text.highlight.color} onChange={(v) => patch((t) => ({ ...t, highlight: { ...t.highlight!, color: v } }), k('hl'))} />
+          )}
+          <button type="button" onClick={() => patch((t) => ({ ...t, words: undefined, highlight: undefined }))} className="text-[11px] text-slate-400 hover:text-red-300">
+            تحويل إلى نص عادي
+          </button>
+        </Section>
+      ) : null}
       <Section title="حركة الدخول">
         <div className="grid grid-cols-3 gap-1.5">
           {TEXT_ANIMS_IN.map((a) => (
@@ -406,7 +515,28 @@ export function TextInspector({ text, patch, actions, preview }: { text: TextCli
   );
 }
 
-export function AudioInspector({ audio, asset, patch, actions }: { audio: AudioClip; asset?: MediaAsset; patch: Patch<AudioClip>; actions: Actions }) {
+export interface AudioTools {
+  busy: string | null;
+  message: string | null;
+  onEffect: (effect: VoiceEffect) => void;
+  onDetectBeats: () => void;
+  onBeatSync: (everyBeats: number) => void;
+}
+
+export function AudioInspector({
+  audio,
+  asset,
+  patch,
+  actions,
+  tools,
+}: {
+  audio: AudioClip;
+  asset?: MediaAsset;
+  patch: Patch<AudioClip>;
+  actions: Actions;
+  tools: AudioTools;
+}) {
+  const beats = asset?.beats?.filter((b) => b >= audio.inPoint && b < audio.outPoint).length ?? 0;
   const k = (name: string) => `${audio.id}-${name}`;
   const len = audio.outPoint - audio.inPoint;
   return (
@@ -421,6 +551,48 @@ export function AudioInspector({ audio, asset, patch, actions }: { audio: AudioC
           onChange={(v) => patch((a) => ({ ...a, fadeOut: v }), k('fo'))} />
         <p className="text-[11px] text-slate-500">المدة: {secs(len)} · اسحب الأطراف في الخط الزمني للقص.</p>
       </Section>
+      <Section title="مؤثرات صوتية">
+        <div className="grid grid-cols-2 gap-1">
+          {VOICE_EFFECTS.map((e) => (
+            <button
+              key={e.id}
+              type="button"
+              disabled={!!tools.busy}
+              onClick={() => tools.onEffect(e.id)}
+              className="flex items-center justify-center gap-1 rounded-lg bg-white/5 py-1.5 text-[11px] text-slate-200 hover:bg-white/10 disabled:opacity-40"
+            >
+              {tools.busy === e.id && <Loader2 className="h-3 w-3 animate-spin" />}
+              {e.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-[11px] text-slate-500">يُنشئ نسخة معدّلة من الصوت ويضعها مكانه، والأصل يبقى في مكتبتك. يمكنك التراجع بـ Ctrl+Z.</p>
+      </Section>
+      <Section title="إيقاع الموسيقى">
+        <button
+          type="button"
+          disabled={!!tools.busy}
+          onClick={tools.onDetectBeats}
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-amber-400/15 py-2 text-xs font-bold text-amber-200 hover:bg-amber-400/25 disabled:opacity-40"
+        >
+          {tools.busy === 'beats' && <Loader2 className="h-4 w-4 animate-spin" />}
+          {beats ? `تم كشف ${beats} نبضة · إعادة الكشف` : 'كشف النبضات'}
+        </button>
+        {beats > 0 && (
+          <>
+            <p className="text-[11px] text-slate-500">النبضات تظهر كنقاط صفراء على الخط الزمني، والقص والسحب يلتصقان بها.</p>
+            <p className="text-[11px] font-semibold text-slate-300">قص المقاطع على الإيقاع:</p>
+            <div className="grid grid-cols-4 gap-1">
+              {[1, 2, 4, 8].map((n) => (
+                <button key={n} type="button" onClick={() => tools.onBeatSync(n)} className="rounded-lg bg-white/5 py-1.5 text-[11px] text-slate-200 hover:bg-white/10">
+                  كل {n}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        {tools.message && <p className="text-[11px] text-slate-400">{tools.message}</p>}
+      </Section>
     </div>
   );
 }
@@ -431,12 +603,15 @@ export function OverlayInspector({
   patch,
   actions,
   preview,
+  onLayer,
 }: {
   overlay: OverlayClip;
   asset?: MediaAsset;
   patch: Patch<OverlayClip>;
   actions: Actions;
   preview: Preview;
+  /** Moves the overlay above or below the other overlays. */
+  onLayer: (dir: 'up' | 'down') => void;
 }) {
   const k = (name: string) => `${overlay.id}-${name}`;
   const chips = (phase: 'in' | 'out') => (
@@ -488,6 +663,28 @@ export function OverlayInspector({
         </div>
         <p className="text-[11px] text-slate-500">داخل المعاينة: إصبع للتحريك، وإصبعان للتكبير والتدوير.</p>
       </Section>
+      <Section title="الطبقة والدمج">
+        <div className="flex gap-1.5">
+          <button type="button" onClick={() => onLayer('up')} className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-white/5 py-1.5 text-[11px] text-slate-200 hover:bg-white/10">
+            <ArrowUpToLine className="h-3.5 w-3.5" /> للأمام
+          </button>
+          <button type="button" onClick={() => onLayer('down')} className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-white/5 py-1.5 text-[11px] text-slate-200 hover:bg-white/10">
+            <ArrowDownToLine className="h-3.5 w-3.5" /> للخلف
+          </button>
+        </div>
+        <label className="block text-[11px] text-slate-400">
+          وضع الدمج
+          <select
+            value={overlay.blend}
+            onChange={(e) => patch((o) => ({ ...o, blend: e.target.value as OverlayClip['blend'] }))}
+            className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1.5 text-xs text-slate-100"
+          >
+            {BLEND_MODES.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+          </select>
+        </label>
+        <FlipButtons flipH={overlay.flipH} onChange={(flipH) => patch((o) => ({ ...o, flipH }))} />
+      </Section>
+      <ChromaSection chroma={overlay.chroma} coalesce={k} onChange={(chroma, key) => patch((o) => ({ ...o, chroma }), key)} />
       <Section title="حركة الدخول">{chips('in')}</Section>
       <Section title="حركة الخروج">{chips('out')}</Section>
       {asset?.kind === 'video' && asset.hasAudio && (

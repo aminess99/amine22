@@ -43,7 +43,7 @@ async function hasAudioTrack(file: File): Promise<boolean> {
   }
 }
 
-async function computePeaks(file: File): Promise<number[] | undefined> {
+export async function computePeaks(file: File): Promise<number[] | undefined> {
   try {
     const ctx = new OfflineAudioContext(1, 1, 44100);
     const buffer = await ctx.decodeAudioData(await file.arrayBuffer());

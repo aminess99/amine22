@@ -1,4 +1,4 @@
-import { Adjustments, AspectRatio, FrameTransform, OverlayAnim, TextAnimIn, TextAnimOut, TextClip, TransitionType } from './types';
+import { Adjustments, AspectRatio, BlendMode, ClipAnimType, EffectType, FrameTransform, MaskShape, OverlayAnim, TextAnimIn, TextAnimOut, TextClip, TransitionType } from './types';
 
 export const PEAKS_PER_SECOND = 20;
 export const DEFAULT_IMAGE_DURATION = 3;
@@ -201,4 +201,64 @@ export const STICKERS: { group: string; items: string[] }[] = [
   { group: 'رموز', items: ['❤️', '💯', '⭐', '✨', '⚡', '💥', '✅', '❌', '⚠️', '💡', '🎯', '🚀'] },
   { group: 'أسهم وأشكال', items: ['⬅️', '➡️', '⬆️', '⬇️', '↩️', '🔴', '🟡', '🟢', '🔵', '⬛', '⭕', '🔻'] },
   { group: 'مناسبات', items: ['🎉', '🎁', '🎂', '🌙', '🕌', '🏆', '📍', '📢', '🛒', '💰', '📸', '🎬'] },
+];
+
+export const CLIP_ANIMS: { id: ClipAnimType; label: string }[] = [
+  { id: 'none', label: 'بدون' },
+  { id: 'fade', label: 'تلاشي' },
+  { id: 'zoom-in', label: 'تكبير' },
+  { id: 'zoom-out', label: 'تصغير' },
+  { id: 'slide-left', label: 'من اليمين' },
+  { id: 'slide-right', label: 'من اليسار' },
+  { id: 'slide-up', label: 'من الأسفل' },
+  { id: 'slide-down', label: 'من الأعلى' },
+  { id: 'spin', label: 'دوران' },
+  { id: 'shake', label: 'اهتزاز' },
+];
+
+export const EFFECTS: { id: EffectType; label: string }[] = [
+  { id: 'shake', label: 'اهتزاز' },
+  { id: 'zoom-pulse', label: 'نبض' },
+  { id: 'flash', label: 'وميض' },
+  { id: 'glitch', label: 'تشويش' },
+  { id: 'rgb-split', label: 'فصل ألوان' },
+  { id: 'vhs', label: 'شريط قديم' },
+  { id: 'strobe', label: 'ستروب' },
+];
+
+export const MASKS: { id: MaskShape; label: string }[] = [
+  { id: 'circle', label: 'دائرة' },
+  { id: 'rounded', label: 'مستطيل' },
+  { id: 'heart', label: 'قلب' },
+  { id: 'star', label: 'نجمة' },
+  { id: 'band', label: 'شريط' },
+];
+
+export const BLEND_MODES: { id: BlendMode; label: string }[] = [
+  { id: 'source-over', label: 'عادي' },
+  { id: 'screen', label: 'تفتيح (Screen)' },
+  { id: 'multiply', label: 'تعتيم (Multiply)' },
+  { id: 'overlay', label: 'تراكب' },
+  { id: 'soft-light', label: 'ضوء ناعم' },
+  { id: 'lighten', label: 'الأفتح' },
+  { id: 'darken', label: 'الأغمق' },
+  { id: 'color-dodge', label: 'توهج' },
+  { id: 'difference', label: 'فرق' },
+];
+
+/** Speed multipliers at evenly spaced points through the clip; normalised so the clip keeps its length. */
+export const SPEED_CURVES: { id: string; label: string; points: number[] }[] = [
+  { id: 'montage', label: 'مونتاج', points: [1.6, 0.5, 1.6, 0.5, 1.6] },
+  { id: 'hero', label: 'بطل', points: [1.5, 1.5, 0.25, 1.5, 1.5] },
+  { id: 'bullet', label: 'رصاصة', points: [2, 0.3, 0.3, 0.3, 2] },
+  { id: 'jump-cut', label: 'قفزة', points: [0.4, 2.5, 0.4, 2.5, 0.4] },
+  { id: 'flash-in', label: 'تسارع', points: [0.3, 0.6, 1, 2, 3] },
+  { id: 'flash-out', label: 'تباطؤ', points: [3, 2, 1, 0.6, 0.3] },
+];
+
+export const CAPTION_STYLES: { id: string; label: string; font: string; color: string; stroke: number; highlight: { style: 'color' | 'box' | 'pop' | 'karaoke'; color: string } }[] = [
+  { id: 'hormozi', label: 'هورموزي', font: 'Rubik', color: '#ffffff', stroke: 8, highlight: { style: 'color', color: '#facc15' } },
+  { id: 'box', label: 'صندوق', font: 'Cairo', color: '#ffffff', stroke: 0, highlight: { style: 'box', color: '#7c3aed' } },
+  { id: 'pop', label: 'قفزة', font: 'Almarai', color: '#ffffff', stroke: 6, highlight: { style: 'pop', color: '#22d3ee' } },
+  { id: 'karaoke', label: 'كاريوكي', font: 'Tajawal', color: '#94a3b8', stroke: 4, highlight: { style: 'karaoke', color: '#ffffff' } },
 ];

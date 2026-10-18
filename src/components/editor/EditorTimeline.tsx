@@ -116,7 +116,7 @@ const Filmstrip = React.memo(function Filmstrip({ lc, width, pps }: { lc: LaidOu
   const count = Math.min(200, Math.ceil(width / tileW));
   const tiles = [];
   for (let i = 0; i < count; i++) {
-    const src = clip.inPoint + ((i * tileW + tileW / 2) / pps) * clip.speed;
+    const src = clip.freeze ? clip.inPoint : clip.inPoint + ((i * tileW + tileW / 2) / pps) * clip.speed;
     const frame = frames[Math.min(frames.length - 1, Math.max(0, Math.floor(src / asset.frameInterval!)))];
     tiles.push(
       <div key={i} className="h-full shrink-0 bg-cover bg-center" style={{ width: tileW, backgroundImage: frame ? `url(${frame})` : undefined }} />
@@ -247,14 +247,24 @@ export function EditorTimeline(props: TimelineProps) {
     return Math.max(0, (clientX - rect.left + el.scrollLeft - PAD) / pps);
   };
 
+  // Detected beats of every music clip, in timeline seconds.
+  const beatTimes = useMemo(() => {
+    const out: number[] = [];
+    for (const a of project.audios) {
+      for (const b of assets.get(a.assetId)?.beats ?? []) if (b >= a.inPoint && b < a.outPoint) out.push(a.start + b - a.inPoint);
+    }
+    return out;
+  }, [project.audios, assets]);
+
   const snapPoints = useMemo(() => {
     const pts = [0, time];
     for (const lc of layout) pts.push(lc.start, lc.end);
     for (const t of project.texts) pts.push(t.start, t.start + t.duration);
     for (const a of project.audios) pts.push(a.start, audioClipEnd(a));
     for (const o of project.overlays) pts.push(o.start, overlayEnd(o));
+    for (const b of beatTimes) pts.push(b);
     return pts;
-  }, [layout, project.texts, project.audios, project.overlays, time]);
+  }, [layout, project.texts, project.audios, project.overlays, time, beatTimes]);
 
   const scrub = (e: React.PointerEvent) => {
     onSeek(timeAtClientX(e.clientX));
@@ -541,7 +551,11 @@ export function EditorTimeline(props: TimelineProps) {
                   <div className="pointer-events-none absolute left-3.5 right-3.5 top-1 flex items-center gap-1 text-[10px] font-semibold text-white">
                     {lc.asset.kind === 'image' && <ImageIcon className="h-3 w-3 shrink-0" />}
                     {lc.clip.muted && <VolumeX className="h-3 w-3 shrink-0 text-red-300" />}
-                    {lc.clip.speed !== 1 && <span className="rounded bg-amber-400 px-1 text-slate-900">{lc.clip.speed}x</span>}
+                    {lc.clip.speed !== 1 && !lc.clip.freeze && <span className="rounded bg-amber-400 px-1 text-slate-900">{lc.clip.speed}x</span>}
+                    {lc.clip.freeze && <span className="rounded bg-sky-300 px-1 text-slate-900">❄</span>}
+                    {lc.clip.speedCurve && <span className="rounded bg-amber-300 px-1 text-slate-900">〰</span>}
+                    {lc.clip.effect && <span className="rounded bg-fuchsia-300 px-1 text-slate-900">✦</span>}
+                    {lc.clip.motion && <span className="text-cyan-200">◆</span>}
                     {lc.clip.filterId !== 'none' && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-300" />}
                   </div>
                   <span className="pointer-events-none absolute bottom-1 left-3.5 text-[10px] tabular-nums text-white/90">
@@ -612,6 +626,11 @@ export function EditorTimeline(props: TimelineProps) {
                   style={{ left: PAD + a.start * pps, width, top: 4 + lane * LANE_H, height: LANE_H - 4 }}
                 >
                   <Waveform peaks={asset?.peaks} from={a.inPoint} to={a.outPoint} width={width} />
+                  {asset?.beats
+                    ?.filter((b) => b >= a.inPoint && b < a.outPoint)
+                    .map((b) => (
+                      <span key={b} className="pointer-events-none absolute bottom-0.5 h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-amber-300" style={{ left: (b - a.inPoint) * pps }} />
+                    ))}
                   <span className="pointer-events-none absolute left-3.5 top-0.5 max-w-[80%] truncate text-[10px] font-semibold text-white" dir="auto">
                     {asset?.name ?? 'صوت'}
                   </span>

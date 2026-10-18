@@ -15,8 +15,10 @@ export interface MediaAsset {
   frames?: string[];
   frameInterval?: number;
   hasAudio: boolean;
-  /** Normalized (0..1) audio peaks, PEAKS_PER_SECOND per second. Audio assets only. */
+  /** Normalized (0..1) audio peaks, PEAKS_PER_SECOND per second. */
   peaks?: number[];
+  /** Detected beat times in seconds (music). */
+  beats?: number[];
 }
 
 export type AspectRatio = '9:16' | '16:9' | '1:1' | '4:5' | '3:4';
@@ -58,12 +60,73 @@ export interface FrameTransform {
   rotation: number;
 }
 
+export interface Keyframe {
+  /** Position through the clip, 0..1. */
+  at: number;
+  tf: FrameTransform;
+}
+
 export interface ClipMotion {
   /** Preset that produced the keyframes, for the UI ('custom' when set by hand). */
   preset: string;
-  from: FrameTransform;
-  to: FrameTransform;
+  /** Sorted by `at`; at least two. */
+  keys: Keyframe[];
 }
+
+export interface CropRect {
+  x: number; // fractions of the source frame
+  y: number;
+  w: number;
+  h: number;
+}
+
+export type ClipAnimType =
+  | 'none'
+  | 'fade'
+  | 'zoom-in'
+  | 'zoom-out'
+  | 'slide-left'
+  | 'slide-right'
+  | 'slide-up'
+  | 'slide-down'
+  | 'spin'
+  | 'shake';
+
+export interface ClipAnim {
+  type: ClipAnimType;
+  duration: number;
+}
+
+export type EffectType = 'shake' | 'zoom-pulse' | 'flash' | 'glitch' | 'rgb-split' | 'vhs' | 'strobe';
+
+export interface ClipEffect {
+  type: EffectType;
+  intensity: number; // 0..1
+}
+
+export type MaskShape = 'circle' | 'rounded' | 'heart' | 'star' | 'band';
+
+export interface ClipMask {
+  shape: MaskShape;
+  size: number; // 0.1..1.5, relative to the frame
+}
+
+export interface ChromaKey {
+  color: string;
+  similarity: number; // 0..1
+  smoothness: number; // 0..1
+}
+
+export type BlendMode =
+  | 'source-over'
+  | 'multiply'
+  | 'screen'
+  | 'overlay'
+  | 'darken'
+  | 'lighten'
+  | 'color-dodge'
+  | 'difference'
+  | 'soft-light';
 
 /** A clip on the main (sequential) video track. */
 export interface MainClip {
@@ -86,6 +149,18 @@ export interface MainClip {
   transition: Transition;
   /** Animates the frame transform across the clip; null keeps it static. */
   motion: ClipMotion | null;
+  crop: CropRect;
+  flipH: boolean;
+  flipV: boolean;
+  animIn: ClipAnim;
+  animOut: ClipAnim;
+  effect: ClipEffect | null;
+  mask: ClipMask | null;
+  chroma: ChromaKey | null;
+  /** When set, the clip holds the frame at `inPoint` for this many seconds (a freeze frame). */
+  freeze: number | null;
+  /** Speed curve preset id; redistributes speed across the clip without changing its length. */
+  speedCurve: string | null;
 }
 
 export type OverlayShape = 'rect' | 'rounded' | 'circle';
@@ -108,6 +183,9 @@ export interface OverlayClip {
   muted: boolean;
   animIn: OverlayAnim;
   animOut: OverlayAnim;
+  blend: BlendMode;
+  flipH: boolean;
+  chroma: ChromaKey | null;
 }
 
 export type TextAnimIn = 'none' | 'fade' | 'pop' | 'slide-up' | 'zoom' | 'typewriter';
@@ -132,6 +210,15 @@ export interface TextClip {
   rotation: number; // degrees
   animIn: TextAnimIn;
   animOut: TextAnimOut;
+  /** Word timings (timeline seconds) for animated captions; plain text when absent. */
+  words?: { text: string; start: number; end: number }[];
+  /** How the spoken word stands out in a word-timed caption. */
+  highlight?: CaptionHighlight;
+}
+
+export interface CaptionHighlight {
+  style: 'color' | 'box' | 'pop' | 'karaoke';
+  color: string;
 }
 
 export interface AudioClip {
@@ -176,6 +263,8 @@ export interface LaidOutClip {
 export interface FrameRef {
   lc: LaidOutClip;
   sourceTime: number;
+  /** Timeline seconds since the clip's start (negative/over-long inside transition handles). */
+  localTime: number;
 }
 
 export interface MainFrameState {

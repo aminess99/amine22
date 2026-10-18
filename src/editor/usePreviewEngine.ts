@@ -2,7 +2,7 @@ import { RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { ASPECT_SIZES } from './constants';
 import { filmstripFrame } from './media';
 import { renderFrame } from './renderer';
-import { audioClipEnd, audioGainAt, clamp, getMainFrameState, overlayEnd, sourceTimeFor } from './timeline';
+import { audioClipEnd, audioGainAt, clamp, getMainFrameState, overlayEnd, sourceInfo, sourceTimeFor } from './timeline';
 import { FrameRef, LaidOutClip, MediaAsset, Project, TextBounds } from './types';
 
 interface EngineInput {
@@ -57,6 +57,8 @@ export function usePreviewEngine(input: EngineInput) {
   const clockRef = useRef({ wall: 0, media: 0 });
   const textBoundsRef = useRef<TextBounds[]>([]);
   const frameListeners = useRef(new Set<(t: number) => void>());
+  /** Silences the preview, e.g. while recording a voiceover over it. */
+  const mutedRef = useRef(false);
 
   const holderRef = useRef<HTMLDivElement | null>(null);
   const videos = useRef(new Map<string, HTMLVideoElement>());
@@ -318,9 +320,9 @@ export function usePreviewEngine(input: EngineInput) {
       if (playNow && state.primary && state.primary.lc.asset.kind === 'video') {
         const lc = state.primary.lc;
         const el = videos.current.get(lc.clip.id);
-        const raw = lc.clip.inPoint + (t - lc.start) * lc.clip.speed;
-        const frozen = Math.abs(raw - state.primary.sourceTime) > 1e-3;
-        if (el && !el.paused && !el.seeking && el.readyState >= 3 && !frozen) {
+        const info = sourceInfo(lc, t);
+        // Only a plain constant-speed clip maps its video time straight back to the timeline.
+        if (el && !el.paused && !el.seeking && el.readyState >= 3 && info.rate > 0 && !lc.clip.speedCurve) {
           const videoT = lc.start + (el.currentTime - lc.clip.inPoint) / lc.clip.speed;
           if (Math.abs(videoT - t) < 1 && videoT >= lc.start && videoT < lc.end) {
             // Never step backwards: if the video is still catching up (a clip that just
@@ -359,12 +361,14 @@ export function usePreviewEngine(input: EngineInput) {
           continue;
         }
         const clip = ref.lc.clip;
-        const raw = clip.inPoint + (t - ref.lc.start) * clip.speed;
-        const frozen = Math.abs(raw - ref.sourceTime) > 1e-3;
+        const info = sourceInfo(ref.lc, t);
         const isPrimary = state.primary?.lc.clip.id === id;
-        el.muted = !isPrimary || clip.muted || !ref.lc.asset.hasAudio;
+        el.muted = mutedRef.current || !isPrimary || clip.muted || !ref.lc.asset.hasAudio;
         el.volume = clamp(clip.volume, 0, 1);
-        syncMedia(el, ref.sourceTime, playNow, clip.speed, frozen);
+        // Speed curves change the rate continuously; small changes aren't worth a media update.
+        const rate = Math.abs(el.playbackRate - info.rate) / Math.max(0.01, info.rate) < 0.04 ? el.playbackRate : info.rate;
+        el.muted = el.muted || !!clip.freeze;
+        syncMedia(el, ref.sourceTime, playNow, clamp(rate, 0.0625, 16), info.rate === 0);
       }
 
       // --- sync audio track elements
@@ -377,6 +381,7 @@ export function usePreviewEngine(input: EngineInput) {
           continue;
         }
         el.volume = clamp(audioGainAt(a, t), 0, 1);
+        el.muted = mutedRef.current;
         syncMedia(el, a.inPoint + (t - a.start), playNow, 1, false);
       }
 
@@ -388,7 +393,7 @@ export function usePreviewEngine(input: EngineInput) {
           if (!el.paused) el.pause();
           continue;
         }
-        el.muted = o.muted || !assets.get(o.assetId)?.hasAudio;
+        el.muted = mutedRef.current || o.muted || !assets.get(o.assetId)?.hasAudio;
         el.volume = clamp(o.volume, 0, 1);
         syncMedia(el, o.inPoint + (t - o.start), playNow, 1, false);
       }
@@ -434,5 +439,5 @@ export function usePreviewEngine(input: EngineInput) {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  return { time, playing, play, pause, toggle, seek, previewRange, captureFrame, subscribeFrame, textBoundsRef, getTime: () => timeRef.current };
+  return { time, playing, play, pause, toggle, seek, previewRange, captureFrame, subscribeFrame, setMuted: (m: boolean) => { mutedRef.current = m; }, textBoundsRef, getTime: () => timeRef.current };
 }

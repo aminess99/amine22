@@ -1,3 +1,4 @@
+import { chromaKey, clipAnimState, drawChannelSplit, effectState, maskPath } from './clipFx';
 import { activeOverlays, activeTexts, clamp, getMainFrameState, transformAt } from './timeline';
 import {
   Adjustments,
@@ -73,37 +74,80 @@ function drawClipFrame(
   // Every clip paints its own backdrop so letterboxed areas behave during transitions.
   ctx.fillStyle = background;
   ctx.fillRect(0, 0, W, H);
-  const src = getFrame(ref);
-  if (!src) return;
-  const [sw, sh] = sourceSize(src);
-  if (!sw || !sh) return;
+  const raw = getFrame(ref);
+  if (!raw) return;
+  const [rw, rh] = sourceSize(raw);
+  if (!rw || !rh) return;
   const clip: MainClip = ref.lc.clip;
-  const span = clip.outPoint - clip.inPoint;
-  const tf = transformAt(clip, span > 0 ? (ref.sourceTime - clip.inPoint) / span : 0);
+  const duration = ref.lc.duration;
+  const tf = transformAt(clip, duration > 0 ? ref.localTime / duration : 0);
+  const anim = clipAnimState(clip.animIn, clip.animOut, ref.localTime, duration);
+  const fx = effectState(clip.effect, ref.lc.start + ref.localTime);
 
-  const base = clip.fit === 'cover' ? Math.max(W / sw, H / sh) : Math.min(W / sw, H / sh);
+  // Green screen works on the whole frame, then the crop picks the region to show.
+  const src: CanvasImageSource = clip.chroma ? chromaKey(raw, rw, rh, clip.chroma) : raw;
+  const [sw, sh] = clip.chroma ? sourceSize(src) : [rw, rh];
+  const crop = clip.crop;
+  const sx = crop.x * sw;
+  const sy = crop.y * sh;
+  const cw = Math.max(1, crop.w * sw);
+  const ch = Math.max(1, crop.h * sh);
+  const cropW = crop.w * rw;
+  const cropH = crop.h * rh;
+
+  const base = clip.fit === 'cover' ? Math.max(W / cropW, H / cropH) : Math.min(W / cropW, H / cropH);
   const scale = base * tf.zoom;
-  const dw = sw * scale;
-  const dh = sh * scale;
+  const dw = cropW * scale;
+  const dh = cropH * scale;
 
   ctx.save();
-  ctx.translate(W / 2 + tf.offsetX * W, H / 2 + tf.offsetY * H);
-  if (tf.rotation) ctx.rotate((tf.rotation * Math.PI) / 180);
+  ctx.globalAlpha *= anim.alpha;
+  ctx.translate(W / 2 + (tf.offsetX + anim.dx + fx.dx) * W, H / 2 + (tf.offsetY + anim.dy + fx.dy) * H);
+  const rot = tf.rotation + anim.rotation + fx.rotation;
+  if (rot) ctx.rotate((rot * Math.PI) / 180);
+  const s = anim.scale * fx.scale;
+  if (s !== 1) ctx.scale(s, s);
+  if (clip.flipH || clip.flipV) ctx.scale(clip.flipH ? -1 : 1, clip.flipV ? -1 : 1);
+  if (clip.mask) {
+    maskPath(ctx, clip.mask, dw, dh);
+    ctx.clip();
+  }
   // ctx.filter blur is applied in device pixels, so compensate for the context scale.
-  const deviceScale = ctx.getTransform().a || 1;
+  const deviceScale = Math.abs(ctx.getTransform().a) || 1;
   const filter = cssFilter(clip.adjust, deviceScale);
-  ctx.filter = extraFilter ? (filter === 'none' ? extraFilter : `${filter} ${extraFilter}`) : filter;
-  ctx.drawImage(src, -dw / 2, -dh / 2, dw, dh);
-  ctx.filter = 'none';
+  const fullFilter = extraFilter ? (filter === 'none' ? extraFilter : `${filter} ${extraFilter}`) : filter;
+  if (fx.split > 0) {
+    drawChannelSplit(
+      ctx,
+      (target, w, h) => {
+        target.filter = fullFilter;
+        target.drawImage(src, sx, sy, cw, ch, 0, 0, w, h);
+        target.filter = 'none';
+      },
+      dw,
+      dh,
+      fx.split * W
+    );
+  } else {
+    ctx.filter = fullFilter;
+    ctx.drawImage(src, sx, sy, cw, ch, -dw / 2, -dh / 2, dw, dh);
+    ctx.filter = 'none';
+  }
+  // Glitch: a few horizontal bands of the frame knocked sideways.
+  for (const [y, hgt, shift] of fx.slices) {
+    const by = sy + y * ch;
+    const bh = Math.min(hgt * ch, sy + ch - by);
+    if (bh <= 0) continue;
+    ctx.drawImage(src, sx, by, cw, bh, -dw / 2 + shift * W, -dh / 2 + (by - sy) * (dh / ch), dw, bh * (dh / ch));
+  }
 
   const { warmth, vignette } = clip.adjust;
   if (warmth !== 0) {
     ctx.globalCompositeOperation = 'soft-light';
-    ctx.globalAlpha = Math.min(1, Math.abs(warmth) / 100) * 0.6;
+    ctx.globalAlpha = Math.min(1, Math.abs(warmth) / 100) * 0.6 * anim.alpha;
     ctx.fillStyle = warmth > 0 ? '#ff8a00' : '#0077ff';
     ctx.fillRect(-dw / 2, -dh / 2, dw, dh);
     ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = 1;
   }
   ctx.restore();
 
@@ -113,6 +157,25 @@ function drawClipFrame(
     g.addColorStop(1, `rgba(0,0,0,${(vignette / 100) * 0.85})`);
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
+  }
+  if (fx.scanlines) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    for (let y = 0; y < H; y += 6) ctx.fillRect(0, y, W, 2);
+    const band = ((ref.lc.start + ref.localTime) * 0.35) % 1;
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(0, band * H, W, H * 0.05);
+    ctx.globalCompositeOperation = 'soft-light';
+    ctx.fillStyle = 'rgba(255,90,160,0.25)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+  if (fx.flash !== 0) {
+    ctx.save();
+    ctx.globalAlpha = Math.abs(fx.flash);
+    ctx.fillStyle = fx.flash > 0 ? '#ffffff' : '#000000';
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
   }
 }
 
@@ -289,6 +352,12 @@ function drawText(ctx: Ctx, t: TextClip, time: number, W: number, H: number): Te
   if (t.rotation) ctx.rotate((t.rotation * Math.PI) / 180);
   ctx.scale(scale, scale);
 
+  if (t.words?.length && t.highlight) {
+    drawWordCaption(ctx, t, time, W);
+    ctx.restore();
+    return bounds;
+  }
+
   if (t.background) {
     ctx.fillStyle = t.background;
     const r = t.fontSize * 0.2;
@@ -345,10 +414,12 @@ function drawOverlay(
   H: number,
   getFrame: OverlayFrameProvider
 ): TextBounds | null {
-  const src = getFrame(o, o.inPoint + (time - o.start));
-  if (!src) return null;
-  const [sw, sh] = sourceSize(src);
-  if (!sw || !sh) return null;
+  const raw = getFrame(o, o.inPoint + (time - o.start));
+  if (!raw) return null;
+  const [rw, rh] = sourceSize(raw);
+  if (!rw || !rh) return null;
+  const src: CanvasImageSource = o.chroma ? chromaKey(raw, rw, rh, o.chroma) : raw;
+  const [sw, sh] = [rw, rh];
 
   const dur = o.outPoint - o.inPoint;
   const local = time - o.start;
@@ -382,9 +453,11 @@ function drawOverlay(
 
   ctx.save();
   ctx.globalAlpha = clamp(alpha, 0, 1);
+  ctx.globalCompositeOperation = o.blend ?? 'source-over';
   ctx.translate(cx, cy + dy);
   if (o.rotation) ctx.rotate((o.rotation * Math.PI) / 180);
   ctx.scale(scale, scale);
+  if (o.flipH) ctx.scale(-1, 1);
   ctx.beginPath();
   if (o.shape === 'circle') ctx.arc(0, 0, size / 2, 0, Math.PI * 2);
   else if (o.shape === 'rounded' && typeof ctx.roundRect === 'function') ctx.roundRect(-w / 2, -h / 2, w, h, Math.min(w, h) * 0.08);
@@ -399,6 +472,83 @@ function drawOverlay(
   }
   ctx.restore();
   return bounds;
+}
+
+/**
+ * A caption whose words light up as they are spoken. Words are laid out in
+ * reading order (right to left for Arabic) and wrapped to the frame width.
+ */
+function drawWordCaption(ctx: Ctx, t: TextClip, time: number, W: number) {
+  const words = t.words!;
+  const hl = t.highlight!;
+  const rtl = ctx.direction === 'rtl';
+  const space = ctx.measureText(' ').width;
+  const widths = words.map((w) => ctx.measureText(w.text).width);
+  const maxW = W * 0.88;
+  const lines: number[][] = [[]];
+  let lineW = 0;
+  widths.forEach((w, i) => {
+    const add = (lines[lines.length - 1].length ? space : 0) + w;
+    if (lineW + add > maxW && lines[lines.length - 1].length) {
+      lines.push([i]);
+      lineW = w;
+    } else {
+      lines[lines.length - 1].push(i);
+      lineW += add;
+    }
+  });
+  const lineHeight = t.fontSize * 1.35;
+  const top = (-lineHeight * lines.length) / 2;
+  ctx.textAlign = 'center';
+  lines.forEach((line, li) => {
+    const total = line.reduce((sum, i) => sum + widths[i], 0) + space * (line.length - 1);
+    let cursor = rtl ? total / 2 : -total / 2;
+    const y = top + lineHeight * (li + 0.5);
+    for (const i of line) {
+      const w = widths[i];
+      const cx = rtl ? cursor - w / 2 : cursor + w / 2;
+      cursor += (rtl ? -1 : 1) * (w + space);
+      const word = words[i];
+      const active = time >= word.start && time < word.end;
+      const spoken = time >= word.start;
+      let fill = t.color;
+      ctx.save();
+      if (hl.style === 'color' && active) fill = hl.color;
+      if (hl.style === 'karaoke' && spoken) fill = hl.color;
+      if (hl.style === 'pop' && active) {
+        fill = hl.color;
+        ctx.translate(cx, y);
+        ctx.scale(1.2, 1.2);
+        ctx.translate(-cx, -y);
+      }
+      if (hl.style === 'box' && active) {
+        const padX = t.fontSize * 0.18;
+        const padY = t.fontSize * 0.12;
+        ctx.fillStyle = hl.color;
+        ctx.beginPath();
+        const bx = cx - w / 2 - padX;
+        const by = y - t.fontSize / 2 - padY;
+        if (typeof ctx.roundRect === 'function') ctx.roundRect(bx, by, w + padX * 2, t.fontSize + padY * 2, t.fontSize * 0.18);
+        else ctx.rect(bx, by, w + padX * 2, t.fontSize + padY * 2);
+        ctx.fill();
+      }
+      if (t.shadow) {
+        ctx.shadowColor = 'rgba(0,0,0,0.6)';
+        ctx.shadowBlur = t.fontSize * 0.15;
+        ctx.shadowOffsetY = t.fontSize * 0.05;
+      }
+      if (t.strokeWidth > 0) {
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = t.strokeWidth * 2;
+        ctx.strokeStyle = t.strokeColor;
+        ctx.strokeText(word.text, cx, y);
+        ctx.shadowColor = 'transparent';
+      }
+      ctx.fillStyle = fill;
+      ctx.fillText(word.text, cx, y);
+      ctx.restore();
+    }
+  });
 }
 
 /** Draws one composed frame. Shared by the live preview and the exporter. */

@@ -1,4 +1,5 @@
-import { MediaAsset, Project } from './types';
+import { CLIP_EXTRAS, OVERLAY_EXTRAS } from './timeline';
+import { ClipMotion, MediaAsset, Project } from './types';
 
 /**
  * Autosave in IndexedDB: the media files themselves plus the project JSON,
@@ -73,10 +74,19 @@ export async function loadSaved(): Promise<{ project: Project; assets: MediaAsse
   return {
     project: {
       ...project,
-      overlays: project.overlays ?? [],
       texts: project.texts.map((t) => ({ ...t, rotation: t.rotation ?? 0 })),
-      clips: project.clips.map((c) => ({ ...c, motion: c.motion ?? null })),
+      clips: project.clips.map((c) => ({ ...CLIP_EXTRAS, ...c, motion: upgradeMotion(c.motion) })),
+      overlays: (project.overlays ?? []).map((o) => ({ ...OVERLAY_EXTRAS, ...o })),
     },
     assets,
   };
+}
+
+/** Motion was first saved as a from/to pair; it is now a list of keyframes. */
+function upgradeMotion(m: unknown): ClipMotion | null {
+  if (!m || typeof m !== 'object') return null;
+  const motion = m as Partial<ClipMotion> & { from?: ClipMotion['keys'][number]['tf']; to?: ClipMotion['keys'][number]['tf'] };
+  if (Array.isArray(motion.keys)) return motion as ClipMotion;
+  if (motion.from && motion.to) return { preset: motion.preset ?? 'custom', keys: [{ at: 0, tf: motion.from }, { at: 1, tf: motion.to }] };
+  return null;
 }

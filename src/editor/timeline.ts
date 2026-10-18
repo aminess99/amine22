@@ -1,6 +1,7 @@
 import {
   MAX_IMAGE_DURATION,
   MOTION_PRESETS,
+  SPEED_CURVES,
   DEFAULT_IMAGE_DURATION,
   DEFAULT_TRANSITION_DURATION,
   MIN_CLIP_DURATION,
@@ -37,7 +38,67 @@ export function formatTime(seconds: number, withFraction = false): string {
 }
 
 export function clipDuration(clip: MainClip): number {
+  if (clip.freeze) return clip.freeze;
   return (clip.outPoint - clip.inPoint) / clip.speed;
+}
+
+// ---------------------------------------------------------------- speed curves
+
+const CURVE_SAMPLES = 200;
+const curveCache = new Map<string, Float64Array>();
+
+/** Cumulative source progress (0..1) at each of CURVE_SAMPLES+1 timeline positions. */
+function curveTable(id: string): Float64Array | null {
+  const curve = SPEED_CURVES.find((c) => c.id === id);
+  if (!curve) return null;
+  let table = curveCache.get(id);
+  if (!table) {
+    const pts = curve.points;
+    const at = (p: number) => {
+      const x = p * (pts.length - 1);
+      const i = Math.min(pts.length - 2, Math.floor(x));
+      return pts[i] + (pts[i + 1] - pts[i]) * (x - i);
+    };
+    table = new Float64Array(CURVE_SAMPLES + 1);
+    for (let i = 1; i <= CURVE_SAMPLES; i++) table[i] = table[i - 1] + at((i - 0.5) / CURVE_SAMPLES);
+    const total = table[CURVE_SAMPLES];
+    for (let i = 0; i <= CURVE_SAMPLES; i++) table[i] /= total;
+    curveCache.set(id, table);
+  }
+  return table;
+}
+
+/** Source progress (0..1) at timeline progress p for a speed curve. */
+export function curveProgress(id: string, p: number): number {
+  const table = curveTable(id);
+  if (!table) return p;
+  const x = clamp(p, 0, 1) * CURVE_SAMPLES;
+  const i = Math.min(CURVE_SAMPLES - 1, Math.floor(x));
+  return table[i] + (table[i + 1] - table[i]) * (x - i);
+}
+
+/** Instantaneous speed multiplier of a curve at timeline progress p. */
+export function curveRate(id: string, p: number): number {
+  const table = curveTable(id);
+  if (!table) return 1;
+  const x = clamp(p, 0, 1) * CURVE_SAMPLES;
+  const i = Math.min(CURVE_SAMPLES - 1, Math.floor(x));
+  return (table[i + 1] - table[i]) * CURVE_SAMPLES;
+}
+
+/** Inverse of curveProgress: timeline progress at which the curve reaches source progress u. */
+export function curveInverse(id: string, u: number): number {
+  const table = curveTable(id);
+  if (!table) return u;
+  let lo = 0;
+  let hi = CURVE_SAMPLES;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (table[mid] <= u) lo = mid;
+    else hi = mid;
+  }
+  const span = table[hi] - table[lo] || 1;
+  return (lo + (u - table[lo]) / span) / CURVE_SAMPLES;
 }
 
 export function createMainClip(asset: MediaAsset): MainClip {
@@ -58,8 +119,32 @@ export function createMainClip(asset: MediaAsset): MainClip {
     adjust: { ...NEUTRAL_ADJUSTMENTS },
     transition: { type: 'none', duration: DEFAULT_TRANSITION_DURATION },
     motion: null,
+    ...CLIP_EXTRAS,
   };
 }
+
+/** Defaults for the clip fields added after the first release (also used to upgrade saved projects). */
+export const CLIP_EXTRAS: Pick<
+  MainClip,
+  'crop' | 'flipH' | 'flipV' | 'animIn' | 'animOut' | 'effect' | 'mask' | 'chroma' | 'freeze' | 'speedCurve'
+> = {
+  crop: { x: 0, y: 0, w: 1, h: 1 },
+  flipH: false,
+  flipV: false,
+  animIn: { type: 'none', duration: 0.5 },
+  animOut: { type: 'none', duration: 0.5 },
+  effect: null,
+  mask: null,
+  chroma: null,
+  freeze: null,
+  speedCurve: null,
+};
+
+export const OVERLAY_EXTRAS: Pick<OverlayClip, 'blend' | 'flipH' | 'chroma'> = {
+  blend: 'source-over',
+  flipH: false,
+  chroma: null,
+};
 
 export function createOverlayClip(asset: MediaAsset, start: number): OverlayClip {
   return {
@@ -78,6 +163,7 @@ export function createOverlayClip(asset: MediaAsset, start: number): OverlayClip
     muted: false,
     animIn: 'pop',
     animOut: 'fade',
+    ...OVERLAY_EXTRAS,
   };
 }
 
@@ -118,21 +204,39 @@ export function motionFromPreset(clip: MainClip, presetId: string): MainClip['mo
     offsetY: base.offsetY + (p.offsetY ?? 0),
     rotation: base.rotation + (p.rotation ?? 0),
   });
-  return { preset: presetId, from: apply(preset.from), to: apply(preset.to) };
+  return { preset: presetId, keys: [{ at: 0, tf: apply(preset.from) }, { at: 1, tf: apply(preset.to) }] };
 }
+
+/** Adds or replaces the keyframe at `at` (0..1) with the clip's current transform. */
+export function setKeyframe(clip: MainClip, at: number): MainClip['motion'] {
+  const tf = baseTransform(clip);
+  const keys = (clip.motion?.keys ?? []).filter((k) => Math.abs(k.at - at) > 0.02);
+  keys.push({ at: clamp(at, 0, 1), tf });
+  keys.sort((a, b) => a.at - b.at);
+  return { preset: 'custom', keys };
+}
+
+const ease = (p: number) => (p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2);
 
 /** The clip's frame transform at a progress (0..1) through the clip. */
 export function transformAt(clip: MainClip, progress: number): FrameTransform {
-  if (!clip.motion) return baseTransform(clip);
+  const keys = clip.motion?.keys;
+  if (!keys?.length) return baseTransform(clip);
   const p = clamp(progress, 0, 1);
-  const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-  const { from, to } = clip.motion;
-  const lerp = (a: number, b: number) => a + (b - a) * e;
+  if (keys.length === 1 || p <= keys[0].at) return keys[0].tf;
+  const last = keys[keys.length - 1];
+  if (p >= last.at) return last.tf;
+  let i = 0;
+  while (i < keys.length - 2 && keys[i + 1].at < p) i++;
+  const a = keys[i];
+  const b = keys[i + 1];
+  const e = ease((p - a.at) / Math.max(1e-6, b.at - a.at));
+  const lerp = (x: number, y: number) => x + (y - x) * e;
   return {
-    zoom: lerp(from.zoom, to.zoom),
-    offsetX: lerp(from.offsetX, to.offsetX),
-    offsetY: lerp(from.offsetY, to.offsetY),
-    rotation: lerp(from.rotation, to.rotation),
+    zoom: lerp(a.tf.zoom, b.tf.zoom),
+    offsetX: lerp(a.tf.offsetX, b.tf.offsetX),
+    offsetY: lerp(a.tf.offsetY, b.tf.offsetY),
+    rotation: lerp(a.tf.rotation, b.tf.rotation),
   };
 }
 
@@ -179,13 +283,42 @@ export function audioClipEnd(a: AudioClip): number {
   return a.start + (a.outPoint - a.inPoint);
 }
 
-export function sourceTimeFor(lc: LaidOutClip, t: number): number {
-  const raw = lc.clip.inPoint + (t - lc.start) * lc.clip.speed;
-  const max = lc.asset.kind === 'video' ? Math.max(0, lc.asset.duration - 1 / 60) : Number.POSITIVE_INFINITY;
-  return clamp(raw, 0, max);
+export interface SourceInfo {
+  /** Source seconds to show. */
+  time: number;
+  /** Source seconds per timeline second right now (0 for a held frame). */
+  rate: number;
 }
 
-const ref = (lc: LaidOutClip, t: number): FrameRef => ({ lc, sourceTime: sourceTimeFor(lc, t) });
+/** Where in its source a clip is at timeline time t, accounting for freeze frames and speed curves. */
+export function sourceInfo(lc: LaidOutClip, t: number): SourceInfo {
+  const { clip } = lc;
+  const max = lc.asset.kind === 'video' ? Math.max(0, lc.asset.duration - 1 / 60) : Number.POSITIVE_INFINITY;
+  if (clip.freeze) return { time: clamp(clip.inPoint, 0, max), rate: 0 };
+  const local = t - lc.start;
+  let raw: number;
+  let rate = clip.speed;
+  if (clip.speedCurve && local >= 0 && local <= lc.duration) {
+    const p = local / lc.duration;
+    raw = clip.inPoint + (clip.outPoint - clip.inPoint) * curveProgress(clip.speedCurve, p);
+    rate = clip.speed * curveRate(clip.speedCurve, p);
+  } else {
+    raw = clip.inPoint + local * clip.speed;
+  }
+  const time = clamp(raw, 0, max);
+  return { time, rate: time === raw ? rate : 0 };
+}
+
+export function sourceTimeFor(lc: LaidOutClip, t: number): number {
+  return sourceInfo(lc, t).time;
+}
+
+/** Timeline progress (0..1) of a clip at timeline time t. */
+export function clipProgress(lc: LaidOutClip, t: number): number {
+  return lc.duration > 0 ? clamp((t - lc.start) / lc.duration, 0, 1) : 0;
+}
+
+const ref = (lc: LaidOutClip, t: number): FrameRef => ({ lc, sourceTime: sourceTimeFor(lc, t), localTime: t - lc.start });
 
 /**
  * Transitions are centred on the cut between two clips: the outgoing clip
@@ -237,20 +370,50 @@ export function activeTexts(texts: TextClip[], t: number): TextClip[] {
 export function splitMainClip(lc: LaidOutClip, t: number): [MainClip, MainClip] | null {
   const local = t - lc.start;
   if (local < MIN_CLIP_DURATION || lc.duration - local < MIN_CLIP_DURATION) return null;
-  const cut = lc.clip.inPoint + local * lc.clip.speed;
+  const b = { ...lc.clip, id: uid(), transition: { ...lc.clip.transition, type: 'none' as const }, animIn: { ...lc.clip.animIn, type: 'none' as const } };
+  const a = { ...lc.clip, animOut: { ...lc.clip.animOut, type: 'none' as const } };
+  if (lc.clip.freeze) return [{ ...a, freeze: local }, { ...b, freeze: lc.duration - local }];
+  const cut = sourceTimeFor(lc, t);
+  // A speed curve describes the whole clip, so the halves go back to constant speed.
   return [
-    { ...lc.clip, outPoint: cut },
-    { ...lc.clip, id: uid(), inPoint: cut, transition: { ...lc.clip.transition, type: 'none' } },
+    { ...a, outPoint: cut, speedCurve: null },
+    { ...b, inPoint: cut, speedCurve: null },
   ];
 }
 
 export function splitTextClip(text: TextClip, t: number): [TextClip, TextClip] | null {
   const local = t - text.start;
   if (local < MIN_CLIP_DURATION || text.duration - local < MIN_CLIP_DURATION) return null;
-  return [
-    { ...text, duration: local },
-    { ...text, id: uid(), start: t, duration: text.duration - local },
-  ];
+  const a: TextClip = { ...text, duration: local };
+  const b: TextClip = { ...text, id: uid(), start: t, duration: text.duration - local };
+  if (text.words?.length) {
+    // Each half keeps the words spoken in it.
+    const wa = text.words.filter((w) => w.start < t);
+    const wb = text.words.filter((w) => w.start >= t);
+    if (wa.length) Object.assign(a, { words: wa, text: wa.map((w) => w.text).join(' ') });
+    if (wb.length) Object.assign(b, { words: wb, text: wb.map((w) => w.text).join(' ') });
+  }
+  return [a, b];
+}
+
+/**
+ * Keeps word timings in step with an edited caption: the same number of words keep
+ * their times; otherwise the caption's span is shared out by word length.
+ */
+export function retimeWords(words: NonNullable<TextClip['words']>, text: string): TextClip['words'] {
+  const parts = text.split(/\s+/).filter(Boolean);
+  if (!parts.length || !words.length) return undefined;
+  if (parts.length === words.length) return words.map((w, i) => ({ ...w, text: parts[i] }));
+  const start = words[0].start;
+  const end = words[words.length - 1].end;
+  const total = parts.reduce((n, p) => n + p.length, 0) || 1;
+  let cursor = start;
+  return parts.map((p) => {
+    const d = ((end - start) * p.length) / total;
+    const w = { text: p, start: cursor, end: cursor + d };
+    cursor += d;
+    return w;
+  });
 }
 
 export function splitAudioClip(a: AudioClip, t: number): [AudioClip, AudioClip] | null {
