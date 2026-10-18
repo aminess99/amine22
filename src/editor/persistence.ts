@@ -74,6 +74,7 @@ export async function loadSaved(): Promise<{ project: Project; assets: MediaAsse
     project: {
       ...project,
       overlays: project.overlays ?? [],
+      texts: project.texts.map((t) => ({ ...t, rotation: t.rotation ?? 0 })),
       clips: project.clips.map((c) => ({ ...c, motion: c.motion ?? null })),
     },
     assets,

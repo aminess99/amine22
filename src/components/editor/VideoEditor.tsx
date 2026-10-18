@@ -51,6 +51,14 @@ import { clearAll, loadSaved, saveAsset, saveProject } from '../../editor/persis
 import { clipsFromRanges, findSpeechRanges } from '../../editor/silence';
 import { applyTemplate } from '../../editor/templates';
 import { useHistory } from '../../editor/useHistory';
+import {
+  GestureDelta,
+  applyClipGesture,
+  applyOverlayGesture,
+  applyTextGesture,
+  gestureLabel,
+  resetClipTransform,
+} from '../../editor/gestures';
 import { usePreviewEngine } from '../../editor/usePreviewEngine';
 import { EditorExportModal } from './EditorExportModal';
 import { AudioInspector, ClipInspector, OverlayInspector, ProjectInspector, TextInspector, TransitionInspector } from './EditorInspector';
@@ -243,6 +251,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
         shadow: false,
         x: 0.5,
         y: 0.35,
+        rotation: 0,
         animIn: 'pop',
         animOut: 'pop',
       };
@@ -370,7 +379,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     (presetId: string) => {
       const preset = TEXT_PRESETS.find((p) => p.id === presetId) ?? TEXT_PRESETS[0];
       const start = engine.getTime();
-      const text: TextClip = { ...preset.style, id: uid(), start, duration: 3, x: 0.5 };
+      const text: TextClip = { ...preset.style, id: uid(), start, duration: 3, x: 0.5, rotation: 0 };
       update((p) => ({ ...p, texts: [...p.texts, text] }));
       setSelection({ kind: 'text', id: text.id });
       setPanel('edit');
@@ -583,62 +592,183 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, [toggle, undo, redo, duplicateSelection, splitAtPlayhead, deleteSelection, seek, engine, duration, exporting]);
 
-  // ---------- canvas interaction (drag texts / clips directly on the preview) ----------
+  // ---------- canvas gestures ----------
+  // One finger (or the mouse) moves the item under it; two fingers also scale and rotate it.
+  // A double tap resets it. Each gesture is a single undo step.
+  type GestureKind = 'clip' | 'text' | 'overlay';
+  interface Gesture {
+    kind: GestureKind;
+    id: string;
+    key: string;
+    pointers: Map<number, { x: number; y: number }>;
+    start: Map<number, { x: number; y: number }>;
+    item0: MainClip | TextClip | OverlayClip;
+    moved: boolean;
+    multi: boolean;
+  }
+  const gestureRef = useRef<Gesture | null>(null);
+  const lastTapRef = useRef<{ id: string; time: number } | null>(null);
+  const projectRef = useRef(project);
+  projectRef.current = project;
+  const [hud, setHud] = useState<string | null>(null);
+
+  const findItem = (kind: GestureKind, id: string): MainClip | TextClip | OverlayClip | undefined => {
+    const p = projectRef.current;
+    if (kind === 'clip') return p.clips.find((c) => c.id === id);
+    if (kind === 'text') return p.texts.find((t) => t.id === id);
+    return p.overlays.find((o) => o.id === id);
+  };
+
+  const applyGesture = (kind: GestureKind, id: string, item0: MainClip | TextClip | OverlayClip, d: GestureDelta, key: string) => {
+    let next: MainClip | TextClip | OverlayClip;
+    if (kind === 'clip') {
+      next = applyClipGesture(item0 as MainClip, d);
+      updateClip(id, () => next as MainClip, key);
+    } else if (kind === 'text') {
+      next = applyTextGesture(item0 as TextClip, d);
+      updateText(id, () => next as TextClip, key);
+    } else {
+      next = applyOverlayGesture(item0 as OverlayClip, d);
+      updateOverlay(id, () => next as OverlayClip, key);
+    }
+    return next;
+  };
+
+  const resetItem = (kind: GestureKind, id: string) => {
+    if (kind === 'clip') updateClip(id, resetClipTransform);
+    else if (kind === 'text') updateText(id, (t) => ({ ...t, rotation: 0 }));
+    else updateOverlay(id, (o) => ({ ...o, rotation: 0, scale: 0.4 }));
+    setHud('إعادة الضبط');
+    window.setTimeout(() => setHud(null), 700);
+  };
+
+  /** Hit-tests the preview; falls back to the main clip on screen. */
+  const targetAt = (bx: number, by: number): { kind: GestureKind; id: string } | null => {
+    const hit = [...engine.textBoundsRef.current].reverse().find((b) => bx >= b.x && bx <= b.x + b.w && by >= b.y && by <= b.y + b.h);
+    if (hit) return { kind: hit.kind, id: hit.id };
+    const lc = getMainFrameState(layout, engine.getTime()).primary?.lc;
+    return lc ? { kind: 'clip', id: lc.clip.id } : null;
+  };
+
+  const rebaseline = (g: Gesture) => {
+    g.item0 = findItem(g.kind, g.id) ?? g.item0;
+    g.start = new Map(g.pointers);
+  };
+
   const onCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = e.currentTarget;
-    const rect = canvas.getBoundingClientRect();
-    const toBase = (cx: number, cy: number) => ({
-      x: ((cx - rect.left) / rect.width) * base.width,
-      y: ((cy - rect.top) / rect.height) * base.height,
-    });
-    const p0 = toBase(e.clientX, e.clientY);
-    const hit = [...engine.textBoundsRef.current].reverse().find((b) => p0.x >= b.x && p0.x <= b.x + b.w && p0.y >= b.y && p0.y <= b.y + b.h);
-    const key = `canvas-${performance.now()}`;
-    let onMove: ((dx: number, dy: number) => void) | null = null;
-
-    if (hit?.kind === 'overlay') {
-      const ov = project.overlays.find((o) => o.id === hit.id);
-      if (!ov) return;
-      setSelection({ kind: 'overlay', id: ov.id });
-      onMove = (dx, dy) =>
-        updateOverlay(ov.id, (o) => ({ ...o, x: clamp(ov.x + dx / base.width, 0, 1), y: clamp(ov.y + dy / base.height, 0, 1) }), key);
-    } else if (hit) {
-      const text = project.texts.find((t) => t.id === hit.id);
-      if (!text) return;
-      setSelection({ kind: 'text', id: text.id });
-      onMove = (dx, dy) =>
-        updateText(text.id, (t) => ({ ...t, x: clamp(text.x + dx / base.width, 0, 1), y: clamp(text.y + dy / base.height, 0, 1) }), key);
-    } else {
-      const lc = getMainFrameState(layout, engine.getTime()).primary?.lc;
-      if (!lc) {
-        setSelection(null);
-        return;
-      }
-      setSelection({ kind: 'clip', id: lc.clip.id });
-      const { offsetX, offsetY } = lc.clip;
-      onMove = (dx, dy) =>
-        updateClip(lc.clip.id, (c) => ({ ...c, offsetX: clamp(offsetX + dx / base.width, -1, 1), offsetY: clamp(offsetY + dy / base.height, -1, 1) }), key);
-    }
-
     canvas.setPointerCapture(e.pointerId);
-    let moved = false;
-    const move = (ev: PointerEvent) => {
-      const p = toBase(ev.clientX, ev.clientY);
-      const dx = p.x - p0.x;
-      const dy = p.y - p0.y;
-      if (!moved && Math.hypot(dx, dy) < 12) return;
-      moved = true;
-      onMove?.(dx, dy);
+    const pos = { x: e.clientX, y: e.clientY };
+    const g = gestureRef.current;
+    if (g) {
+      // A second finger joins the gesture on the same item.
+      g.pointers.set(e.pointerId, pos);
+      g.multi = g.pointers.size > 1;
+      rebaseline(g);
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const target = targetAt(((pos.x - rect.left) / rect.width) * base.width, ((pos.y - rect.top) / rect.height) * base.height);
+    if (!target) {
+      setSelection(null);
+      return;
+    }
+    setSelection({ kind: target.kind, id: target.id });
+    const item0 = findItem(target.kind, target.id);
+    if (!item0) return;
+    gestureRef.current = {
+      ...target,
+      key: `gesture-${performance.now()}`,
+      pointers: new Map([[e.pointerId, pos]]),
+      start: new Map([[e.pointerId, pos]]),
+      item0,
+      moved: false,
+      multi: false,
     };
-    const up = () => {
-      canvas.removeEventListener('pointermove', move);
-      canvas.removeEventListener('pointerup', up);
-      canvas.removeEventListener('pointercancel', up);
-    };
-    canvas.addEventListener('pointermove', move);
-    canvas.addEventListener('pointerup', up);
-    canvas.addEventListener('pointercancel', up);
   };
+
+  const onCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const g = gestureRef.current;
+    if (!g || !g.pointers.has(e.pointerId)) return;
+    g.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ids = [...g.start.keys()].filter((id) => g.pointers.has(id));
+    let d: GestureDelta;
+    if (ids.length >= 2) {
+      const [a0, b0] = [g.start.get(ids[0])!, g.start.get(ids[1])!];
+      const [a1, b1] = [g.pointers.get(ids[0])!, g.pointers.get(ids[1])!];
+      const dist0 = Math.hypot(b0.x - a0.x, b0.y - a0.y) || 1;
+      const dist1 = Math.hypot(b1.x - a1.x, b1.y - a1.y);
+      const ang0 = Math.atan2(b0.y - a0.y, b0.x - a0.x);
+      const ang1 = Math.atan2(b1.y - a1.y, b1.x - a1.x);
+      d = {
+        dx: ((a1.x + b1.x) / 2 - (a0.x + b0.x) / 2) / rect.width,
+        dy: ((a1.y + b1.y) / 2 - (a0.y + b0.y) / 2) / rect.height,
+        scale: dist1 / dist0,
+        rotation: ((ang1 - ang0) * 180) / Math.PI,
+      };
+    } else {
+      const p0 = g.start.get(ids[0])!;
+      const p1 = g.pointers.get(ids[0])!;
+      if (!g.moved && Math.hypot(p1.x - p0.x, p1.y - p0.y) < 6) return;
+      d = { dx: (p1.x - p0.x) / rect.width, dy: (p1.y - p0.y) / rect.height, scale: 1, rotation: 0 };
+    }
+    g.moved = true;
+    const next = applyGesture(g.kind, g.id, g.item0, d, g.key);
+    if (g.multi) setHud(gestureLabel(next, g.kind));
+  };
+
+  const onCanvasPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const g = gestureRef.current;
+    if (!g) return;
+    g.pointers.delete(e.pointerId);
+    if (g.pointers.size > 0) {
+      // Continue as a one-finger drag from where the remaining finger is.
+      rebaseline(g);
+      return;
+    }
+    gestureRef.current = null;
+    setHud(null);
+    if (g.moved || g.multi) return;
+    const now = performance.now();
+    const last = lastTapRef.current;
+    if (last && last.id === g.id && now - last.time < 320) {
+      lastTapRef.current = null;
+      resetItem(g.kind, g.id);
+    } else {
+      lastTapRef.current = { id: g.id, time: now };
+    }
+  };
+
+  // Ctrl/Cmd + wheel (and trackpad pinch, which arrives as one) scales the item under the cursor.
+  const wheelRef = useRef<(e: WheelEvent) => void>(() => {});
+  wheelRef.current = (e: WheelEvent) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const target =
+      selection && selection.kind !== 'audio' && selection.kind !== 'transition'
+        ? { kind: selection.kind as GestureKind, id: selection.id }
+        : targetAt(((e.clientX - rect.left) / rect.width) * base.width, ((e.clientY - rect.top) / rect.height) * base.height);
+    if (!target) return;
+    const item0 = findItem(target.kind, target.id);
+    if (!item0) return;
+    if (!selection) setSelection(target);
+    const next = applyGesture(target.kind, target.id, item0, { dx: 0, dy: 0, scale: Math.exp(-e.deltaY * 0.01), rotation: 0 }, `wheel-${target.id}`);
+    setHud(gestureLabel(next, target.kind));
+    window.clearTimeout(hudTimer.current);
+    hudTimer.current = window.setTimeout(() => setHud(null), 800);
+  };
+  const hudTimer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => wheelRef.current(e);
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, []);
 
   // ---------- panels ----------
   const selectedClip = selection?.kind === 'clip' ? layout.find((l) => l.clip.id === selection.id) : undefined;
@@ -904,9 +1034,17 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
             <canvas
               ref={canvasRef}
               onPointerDown={onCanvasPointerDown}
+              onPointerMove={onCanvasPointerMove}
+              onPointerUp={onCanvasPointerUp}
+              onPointerCancel={onCanvasPointerUp}
               className="relative touch-none rounded-sm shadow-2xl shadow-black/60 ring-1 ring-white/10"
               style={{ width: cssW, height: cssH }}
             />
+            {hud && (
+              <div className="pointer-events-none absolute left-1/2 top-6 -translate-x-1/2 rounded-full bg-black/75 px-3 py-1 text-xs font-bold tabular-nums text-white" dir="ltr">
+                {hud}
+              </div>
+            )}
             {isEmpty && (
               <div className="absolute inset-0 flex items-center justify-center p-6">
                 <div className="max-w-sm text-center">

@@ -55,7 +55,7 @@ export function applyTemplate(project: Project, assets: Map<string, MediaAsset>,
     return { ...base, motion: motionFromPreset(base, r.motions[i % r.motions.length]) };
   });
   const preset = TEXT_PRESETS.find((p) => p.id === r.title.preset) ?? TEXT_PRESETS[0];
-  const title: TextClip = { ...preset.style, id: uid(), text: r.title.text, start: 0, duration: r.title.duration, x: 0.5 };
+  const title: TextClip = { ...preset.style, id: uid(), text: r.title.text, start: 0, duration: r.title.duration, x: 0.5, rotation: 0 };
   return { ...project, aspect: r.aspect ?? project.aspect, clips, texts: [...project.texts, title] };
 }
 

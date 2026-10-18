@@ -73,6 +73,7 @@ export async function generateCaptions(
         start,
         duration: Math.max(0.2, Math.min(end, lc.end) - start),
         x: 0.5,
+        rotation: 0,
       });
     }
   }

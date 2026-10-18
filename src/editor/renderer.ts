@@ -286,6 +286,7 @@ function drawText(ctx: Ctx, t: TextClip, time: number, W: number, H: number): Te
 
   ctx.globalAlpha = alpha;
   ctx.translate(cx, cy + dy);
+  if (t.rotation) ctx.rotate((t.rotation * Math.PI) / 180);
   ctx.scale(scale, scale);
 
   if (t.background) {

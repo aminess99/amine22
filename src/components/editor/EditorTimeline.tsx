@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeftRight, Image as ImageIcon, Layers, Music, Type, VolumeX } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { MAX_IMAGE_DURATION, MIN_CLIP_DURATION, PEAKS_PER_SECOND } from '../../editor/constants';
@@ -49,6 +49,9 @@ function rulerStep(pps: number): number {
   return steps.find((s) => s * pps >= 70) ?? 300;
 }
 
+/** Set while two fingers pinch the timeline, so item drags under a finger stand still. */
+let pinching = false;
+
 /** Window-level pointer drag that reports horizontal movement in pixels. */
 function startDrag(
   e: React.PointerEvent,
@@ -58,13 +61,16 @@ function startDrag(
   e.stopPropagation();
   const startX = e.clientX;
   let moved = false;
+  const pointerId = e.pointerId;
   const move = (ev: PointerEvent) => {
+    if (ev.pointerId !== pointerId || pinching) return;
     const dx = ev.clientX - startX;
     if (!moved && Math.abs(dx) < 3) return;
     moved = true;
     onMove(dx);
   };
   const up = (ev: PointerEvent) => {
+    if (ev.pointerId !== pointerId) return;
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
     window.removeEventListener('pointercancel', up);
@@ -158,18 +164,70 @@ export function EditorTimeline(props: TimelineProps) {
     if (x > el.scrollLeft + el.clientWidth - 40 || x < el.scrollLeft) el.scrollLeft = x - 60;
   }, [time, playing, pps]);
 
-  // Ctrl/Cmd + wheel zooms around the pointer.
+  // Zooming keeps the moment under the fingers (or cursor) in place.
+  const anchorRef = useRef<{ time: number; offsetX: number } | null>(null);
+  const zoomAround = (nextPps: number, clientX: number, currentPps: number) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const offsetX = clientX - el.getBoundingClientRect().left;
+    anchorRef.current = { time: Math.max(0, (offsetX + el.scrollLeft - PAD) / currentPps), offsetX };
+    onZoom(clamp(nextPps, 8, 400));
+  };
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const anchor = anchorRef.current;
+    if (!el || !anchor) return;
+    el.scrollLeft = PAD + anchor.time * pps - anchor.offsetX;
+    anchorRef.current = null;
+  }, [pps]);
+
+  const zoomRef = useRef(zoomAround);
+  zoomRef.current = zoomAround;
+  const ppsRef = useRef(pps);
+  ppsRef.current = pps;
+
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    // Ctrl/Cmd + wheel, and trackpad pinch which arrives as one.
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      onZoom(clamp(pps * (e.deltaY < 0 ? 1.15 : 1 / 1.15), 8, 400));
+      zoomRef.current(ppsRef.current * Math.exp(-e.deltaY * 0.01), e.clientX, ppsRef.current);
+    };
+    // Two-finger pinch on phones; one finger keeps scrolling natively.
+    let pinch: { dist: number; pps: number } | null = null;
+    const spread = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 2) return;
+      pinching = true;
+      pinch = { dist: spread(e.touches) || 1, pps: ppsRef.current };
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (!pinch || e.touches.length !== 2) return;
+      e.preventDefault();
+      const mid = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      zoomRef.current(pinch.pps * (spread(e.touches) / pinch.dist), mid, ppsRef.current);
+    };
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) {
+        pinch = null;
+        pinching = false;
+      }
     };
     el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, [pps, onZoom]);
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd);
+    el.addEventListener('touchcancel', onTouchEnd);
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+      el.removeEventListener('touchcancel', onTouchEnd);
+    };
+  }, []);
 
   const textLanes = useMemo(() => assignLanes(project.texts, (t) => [t.start, t.start + t.duration]), [project.texts]);
   const overlayLanes = useMemo(() => assignLanes(project.overlays, (o) => [o.start, overlayEnd(o)]), [project.overlays]);
@@ -193,7 +251,9 @@ export function EditorTimeline(props: TimelineProps) {
 
   const scrub = (e: React.PointerEvent) => {
     onSeek(timeAtClientX(e.clientX));
-    const move = (ev: PointerEvent) => onSeek(timeAtClientX(ev.clientX));
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId === e.pointerId && !pinching) onSeek(timeAtClientX(ev.clientX));
+    };
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
@@ -332,7 +392,7 @@ export function EditorTimeline(props: TimelineProps) {
       ref={scrollRef}
       dir="ltr"
       className={cn(
-        'relative h-full select-none overflow-x-auto overflow-y-auto overscroll-contain bg-[#0e1117]',
+        'relative h-full touch-pan-x touch-pan-y select-none overflow-x-auto overflow-y-auto overscroll-contain bg-[#0e1117]',
         dropHover && 'ring-2 ring-inset ring-cyan-400/60'
       )}
       onDragOver={(e) => {

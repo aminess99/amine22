@@ -129,6 +129,7 @@ export interface TextClip {
   align: 'left' | 'center' | 'right';
   x: number; // 0..1, center of the text block
   y: number; // 0..1
+  rotation: number; // degrees
   animIn: TextAnimIn;
   animOut: TextAnimOut;
 }

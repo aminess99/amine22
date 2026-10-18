@@ -196,7 +196,7 @@ export function ClipInspector({
           onChange={(v) => patch((c) => ({ ...c, offsetY: v / 100 }), k('oy'))} onReset={() => patch((c) => ({ ...c, offsetY: 0 }))} />
         <SliderRow label="دوران" value={clip.rotation} min={-180} max={180} format={(v) => `${v}°`}
           onChange={(v) => patch((c) => ({ ...c, rotation: v }), k('rot'))} onReset={() => patch((c) => ({ ...c, rotation: 0 }))} />
-        <p className="text-[11px] text-slate-500">يمكنك أيضاً سحب المقطع مباشرة داخل المعاينة.</p>
+        <p className="text-[11px] text-slate-500">داخل المعاينة: إصبع للتحريك، وإصبعان للتكبير والتدوير، وضغطتان سريعتان لإعادة الضبط. على الكمبيوتر: Ctrl + عجلة الفأرة للتكبير.</p>
       </Section>
 
       <Section title="حركة المقطع (إطارات مفتاحية)">
@@ -397,8 +397,10 @@ export function TextInspector({ text, patch, actions, preview }: { text: TextCli
       <Section title="الموضع والتوقيت">
         <SliderRow label="أفقي" value={Math.round(text.x * 100)} min={0} max={100} format={pct} onChange={(v) => patch((t) => ({ ...t, x: v / 100 }), k('x'))} />
         <SliderRow label="عمودي" value={Math.round(text.y * 100)} min={0} max={100} format={pct} onChange={(v) => patch((t) => ({ ...t, y: v / 100 }), k('y'))} />
+        <SliderRow label="دوران" value={text.rotation} min={-180} max={180} format={(v) => `${v}°`}
+          onChange={(v) => patch((t) => ({ ...t, rotation: v }), k('rot'))} onReset={() => patch((t) => ({ ...t, rotation: 0 }))} />
         <SliderRow label="المدة" value={text.duration} min={0.3} max={30} step={0.1} format={secs} onChange={(v) => patch((t) => ({ ...t, duration: v }), k('dur'))} />
-        <p className="text-[11px] text-slate-500">اسحب النص داخل المعاينة لتغيير مكانه.</p>
+        <p className="text-[11px] text-slate-500">على الهاتف: اسحب النص بإصبع لتحريكه، وبإصبعين لتكبيره وتدويره. ضغطتان سريعتان تعيدان الدوران.</p>
       </Section>
     </div>
   );
@@ -484,7 +486,7 @@ export function OverlayInspector({
             </button>
           ))}
         </div>
-        <p className="text-[11px] text-slate-500">يمكنك سحب الطبقة مباشرة داخل المعاينة.</p>
+        <p className="text-[11px] text-slate-500">داخل المعاينة: إصبع للتحريك، وإصبعان للتكبير والتدوير.</p>
       </Section>
       <Section title="حركة الدخول">{chips('in')}</Section>
       <Section title="حركة الخروج">{chips('out')}</Section>

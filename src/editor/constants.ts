@@ -98,7 +98,7 @@ export const TEXT_ANIMS_OUT: { id: TextAnimOut; label: string }[] = [
   { id: 'slide-down', label: 'هبوط' },
 ];
 
-type TextStyle = Omit<TextClip, 'id' | 'start' | 'duration' | 'x' | 'y'> & { y: number };
+type TextStyle = Omit<TextClip, 'id' | 'start' | 'duration' | 'x' | 'y' | 'rotation'> & { y: number };
 
 export const TEXT_PRESETS: { id: string; label: string; style: TextStyle }[] = [
   {
