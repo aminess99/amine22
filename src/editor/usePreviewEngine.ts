@@ -1,7 +1,7 @@
 import { RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { ASPECT_SIZES } from './constants';
 import { renderFrame } from './renderer';
-import { audioClipEnd, audioGainAt, clamp, getMainFrameState, overlayEnd } from './timeline';
+import { audioClipEnd, audioGainAt, clamp, getMainFrameState, overlayEnd, sourceTimeFor } from './timeline';
 import { FrameRef, LaidOutClip, MediaAsset, Project, TextBounds } from './types';
 
 interface EngineInput {
@@ -15,7 +15,9 @@ interface EngineInput {
   previewScale: number;
 }
 
-const DRIFT_PLAYING = 0.25;
+const DRIFT_PLAYING = 0.3;
+/** Clips starting this soon are pre-seeked so the cut doesn't wait on a seek. */
+const PRELOAD_AHEAD = 1.5;
 const DRIFT_PAUSED = 0.02;
 
 function syncMedia(el: HTMLMediaElement, target: number, playing: boolean, rate: number, frozen: boolean) {
@@ -47,6 +49,7 @@ export function usePreviewEngine(input: EngineInput) {
   const playingRef = useRef(false);
   const clockRef = useRef({ wall: 0, media: 0 });
   const textBoundsRef = useRef<TextBounds[]>([]);
+  const frameListeners = useRef(new Set<(t: number) => void>());
 
   const holderRef = useRef<HTMLDivElement | null>(null);
   const videos = useRef(new Map<string, HTMLVideoElement>());
@@ -168,6 +171,14 @@ export function usePreviewEngine(input: EngineInput) {
 
   const stopAtRef = useRef<number | null>(null);
 
+  /** Called every animation frame during playback, without re-rendering React. */
+  const subscribeFrame = useCallback((fn: (t: number) => void) => {
+    frameListeners.current.add(fn);
+    return () => {
+      frameListeners.current.delete(fn);
+    };
+  }, []);
+
   const pause = useCallback(() => {
     stopAtRef.current = null;
     timeRef.current = clamp(currentTime(), 0, latest.current.duration);
@@ -238,8 +249,7 @@ export function usePreviewEngine(input: EngineInput) {
 
   useEffect(() => {
     let raf = 0;
-    let lastUiUpdate = 0;
-    const tick = (now: number) => {
+    const tick = () => {
       raf = requestAnimationFrame(tick);
       const { canvasRef, project, layout, duration, selectedId, previewScale, assets } = latest.current;
       let t = currentTime();
@@ -252,24 +262,49 @@ export function usePreviewEngine(input: EngineInput) {
         playingRef.current = false;
         setPlaying(false);
         setTime(stopAt);
-      } else if (isPlaying) {
-        timeRef.current = t;
-        if (now - lastUiUpdate > 30) {
-          lastUiUpdate = now;
-          setTime(t);
-        }
       }
       const playNow = playingRef.current;
 
+      // While playing, the clock follows the clip being heard rather than the wall clock.
+      // Phones decode slower than real time now and then; seeking the video to catch up
+      // would stall it again, so the timeline waits for the video instead.
+      let state = getMainFrameState(layout, t);
+      if (playNow && state.primary && state.primary.lc.asset.kind === 'video') {
+        const lc = state.primary.lc;
+        const el = videos.current.get(lc.clip.id);
+        const raw = lc.clip.inPoint + (t - lc.start) * lc.clip.speed;
+        const frozen = Math.abs(raw - state.primary.sourceTime) > 1e-3;
+        if (el && !el.paused && !el.seeking && el.readyState >= 3 && !frozen) {
+          const videoT = lc.start + (el.currentTime - lc.clip.inPoint) / lc.clip.speed;
+          if (Math.abs(videoT - t) < 1 && videoT >= lc.start && videoT < lc.end) {
+            t = videoT;
+            clockRef.current = { wall: performance.now(), media: t };
+            state = getMainFrameState(layout, t);
+          }
+        }
+      }
+      if (playNow) {
+        // React state is left alone during playback (re-rendering the editor every frame
+        // stutters phones); the playhead and clock follow through these listeners instead.
+        timeRef.current = t;
+        for (const fn of frameListeners.current) fn(t);
+      }
+
       // --- sync main track video elements
-      const state = getMainFrameState(layout, t);
       const visible = new Map<string, FrameRef>();
       if (state.from) visible.set(state.from.lc.clip.id, state.from);
       if (state.to) visible.set(state.to.lc.clip.id, state.to);
+      const byId = new Map<string, LaidOutClip>(layout.map((l: LaidOutClip) => [l.clip.id, l]));
       for (const [id, el] of videos.current) {
         const ref = visible.get(id);
         if (!ref) {
           if (!el.paused) el.pause();
+          // Get the next clip to its first frame ahead of the cut.
+          const lc = byId.get(id);
+          if (lc && lc.start > t && lc.start - t <= PRELOAD_AHEAD && !el.seeking) {
+            const first = sourceTimeFor(lc, lc.start);
+            if (Math.abs(el.currentTime - first) > 0.05) el.currentTime = first;
+          }
           continue;
         }
         const clip = ref.lc.clip;
@@ -349,5 +384,5 @@ export function usePreviewEngine(input: EngineInput) {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  return { time, playing, play, pause, toggle, seek, previewRange, captureFrame, textBoundsRef, getTime: () => timeRef.current };
+  return { time, playing, play, pause, toggle, seek, previewRange, captureFrame, subscribeFrame, textBoundsRef, getTime: () => timeRef.current };
 }

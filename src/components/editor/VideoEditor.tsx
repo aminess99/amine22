@@ -124,12 +124,23 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
   const fit = Math.min(stage.w / base.width, stage.h / base.height);
   const cssW = Math.max(1, Math.floor(base.width * fit));
   const cssH = Math.max(1, Math.floor(base.height * fit));
-  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-  const previewScale = clamp((cssW * dpr) / base.width, 0.1, 1);
+  // Phones report a pixel ratio of 3; past 2 the preview just costs more to draw each frame.
+  const dpr = typeof window !== 'undefined' ? Math.min(2, window.devicePixelRatio || 1) : 1;
+  const PREVIEW_MAX_SIDE = 1280;
+  const previewScale = clamp(Math.min((cssW * dpr) / base.width, PREVIEW_MAX_SIDE / Math.max(base.width, base.height)), 0.1, 1);
 
   const selectedId = selection?.kind === 'text' || selection?.kind === 'overlay' ? selection.id : null;
   const engine = usePreviewEngine({ canvasRef, project, assets, layout, duration, selectedId, previewScale });
-  const { time, playing, toggle, seek, pause, previewRange, captureFrame } = engine;
+  const { time, playing, toggle, seek, pause, previewRange, captureFrame, subscribeFrame } = engine;
+
+  // The time readout follows playback frame by frame without re-rendering the editor.
+  const clockRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!playing) return;
+    return subscribeFrame((t) => {
+      if (clockRef.current) clockRef.current.textContent = formatTime(t, true);
+    });
+  }, [playing, subscribeFrame]);
 
   useEffect(() => {
     loadFonts(FONTS);
@@ -1097,7 +1108,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
                 <SkipForward className="h-4 w-4" />
               </button>
               <span className="ml-1 text-[11px] tabular-nums text-slate-400">
-                <span className="text-white">{formatTime(time, true)}</span> / {formatTime(duration, true)}
+                <span ref={clockRef} className="text-white">{formatTime(time, true)}</span> / {formatTime(duration, true)}
               </span>
             </div>
             <div className="hidden items-center gap-1 sm:flex">
@@ -1149,6 +1160,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
               onDropAsset={onDropAsset}
               onAddText={() => addText('basic')}
               onAddAudio={() => openPanel('audio')}
+              subscribeFrame={subscribeFrame}
             />
           </div>
 

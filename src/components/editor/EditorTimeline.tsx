@@ -36,6 +36,8 @@ interface TimelineProps {
   onDropAsset: (assetId: string, time: number) => void;
   onAddText: () => void;
   onAddAudio: () => void;
+  /** Per-frame playhead updates during playback, applied directly to the DOM. */
+  subscribeFrame: (fn: (t: number) => void) => () => void;
 }
 
 const PAD = 16;
@@ -105,7 +107,7 @@ function Waveform({ peaks, from, to, width }: { peaks?: number[]; from: number; 
 }
 
 /** Frames sampled along a clip's source range, so you can see where to cut. */
-function Filmstrip({ lc, width, pps }: { lc: LaidOutClip; width: number; pps: number }) {
+const Filmstrip = React.memo(function Filmstrip({ lc, width, pps }: { lc: LaidOutClip; width: number; pps: number }) {
   const { asset, clip } = lc;
   const frames = asset.frames;
   if (asset.kind !== 'video' || !frames?.length || !asset.frameInterval) return null;
@@ -121,7 +123,7 @@ function Filmstrip({ lc, width, pps }: { lc: LaidOutClip; width: number; pps: nu
     );
   }
   return <div className="pointer-events-none absolute inset-0 flex overflow-hidden">{tiles}</div>;
-}
+});
 
 function TrimHandle({ side, onPointerDown }: { side: 'start' | 'end'; onPointerDown: (e: React.PointerEvent) => void }) {
   return (
@@ -140,7 +142,7 @@ function TrimHandle({ side, onPointerDown }: { side: 'start' | 'end'; onPointerD
 export function EditorTimeline(props: TimelineProps) {
   const {
     project, layout, assets, duration, time, playing, pxPerSec: pps, onZoom, selection, onSelect, onSeek,
-    onUpdateClip, onUpdateText, onUpdateAudio, onUpdateOverlay, onReorder, onDropAsset, onAddText, onAddAudio,
+    onUpdateClip, onUpdateText, onUpdateAudio, onUpdateOverlay, onReorder, onDropAsset, onAddText, onAddAudio, subscribeFrame,
   } = props;
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -156,13 +158,18 @@ export function EditorTimeline(props: TimelineProps) {
     return () => ro.disconnect();
   }, []);
 
-  // Follow the playhead during playback.
+  // During playback the playhead moves every frame without re-rendering the tracks,
+  // and the view follows it.
+  const playheadRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || !playing) return;
-    const x = PAD + time * pps;
-    if (x > el.scrollLeft + el.clientWidth - 40 || x < el.scrollLeft) el.scrollLeft = x - 60;
-  }, [time, playing, pps]);
+    if (!playing) return;
+    return subscribeFrame((t) => {
+      const x = PAD + t * pps;
+      if (playheadRef.current) playheadRef.current.style.left = `${x}px`;
+      const el = scrollRef.current;
+      if (el && (x > el.scrollLeft + el.clientWidth - 40 || x < el.scrollLeft)) el.scrollLeft = x - 60;
+    });
+  }, [playing, pps, subscribeFrame]);
 
   // Zooming keeps the moment under the fingers (or cursor) in place.
   const anchorRef = useRef<{ time: number; offsetX: number } | null>(null);
@@ -617,7 +624,7 @@ export function EditorTimeline(props: TimelineProps) {
         </div>
 
         {/* Playhead */}
-        <div className="pointer-events-none absolute bottom-0 top-0 z-40" style={{ left: PAD + time * pps }}>
+        <div ref={playheadRef} className="pointer-events-none absolute bottom-0 top-0 z-40" style={{ left: PAD + time * pps }}>
           <div className="absolute -left-[6px] top-0 h-3 w-3 rotate-45 rounded-sm bg-white" />
           <div className="absolute -left-px top-0 h-full w-0.5 bg-white shadow-[0_0_6px_rgba(255,255,255,0.6)]" />
         </div>
