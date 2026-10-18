@@ -98,6 +98,25 @@ function Waveform({ peaks, from, to, width }: { peaks?: number[]; from: number; 
   );
 }
 
+/** Frames sampled along a clip's source range, so you can see where to cut. */
+function Filmstrip({ lc, width, pps }: { lc: LaidOutClip; width: number; pps: number }) {
+  const { asset, clip } = lc;
+  const frames = asset.frames;
+  if (asset.kind !== 'video' || !frames?.length || !asset.frameInterval) return null;
+  const aspect = asset.width && asset.height ? asset.width / asset.height : 9 / 16;
+  const tileW = Math.max(24, Math.round((MAIN_H - 4) * aspect));
+  const count = Math.min(200, Math.ceil(width / tileW));
+  const tiles = [];
+  for (let i = 0; i < count; i++) {
+    const src = clip.inPoint + ((i * tileW + tileW / 2) / pps) * clip.speed;
+    const frame = frames[Math.min(frames.length - 1, Math.max(0, Math.floor(src / asset.frameInterval!)))];
+    tiles.push(
+      <div key={i} className="h-full shrink-0 bg-cover bg-center" style={{ width: tileW, backgroundImage: frame ? `url(${frame})` : undefined }} />
+    );
+  }
+  return <div className="pointer-events-none absolute inset-0 flex overflow-hidden">{tiles}</div>;
+}
+
 function TrimHandle({ side, onPointerDown }: { side: 'start' | 'end'; onPointerDown: (e: React.PointerEvent) => void }) {
   return (
     <div
@@ -446,10 +465,11 @@ export function EditorTimeline(props: TimelineProps) {
                     left: PAD + lc.start * pps,
                     width,
                     transform: isDragging ? `translateX(${reorder!.dx}px)` : undefined,
-                    backgroundImage: lc.asset.thumbnail ? `url(${lc.asset.thumbnail})` : undefined,
+                    backgroundImage: lc.asset.thumbnail && !lc.asset.frames?.length ? `url(${lc.asset.thumbnail})` : undefined,
                     backgroundSize: 'auto 100%',
                   }}
                 >
+                  <Filmstrip lc={lc} width={width} pps={pps} />
                   <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/30" />
                   <div className="pointer-events-none absolute left-3.5 right-3.5 top-1 flex items-center gap-1 text-[10px] font-semibold text-white">
                     {lc.asset.kind === 'image' && <ImageIcon className="h-3 w-3 shrink-0" />}

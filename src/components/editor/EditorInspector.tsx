@@ -18,8 +18,15 @@ import {
 import { baseTransform, clipDuration, motionFromPreset } from '../../editor/timeline';
 import { Adjustments, AspectRatio, AudioClip, MainClip, MediaAsset, OverlayClip, OverlayShape, Project, TextClip, TransitionType } from '../../editor/types';
 import { ColorInput, Section, Segmented, SliderRow } from './ui';
+import { AnimChip, FilterThumb, MotionThumb, TransitionThumb } from './previews';
 
 type Patch<T> = (fn: (item: T) => T, coalesceKey?: string) => void;
+
+/** Plays the part of the selected item an edit affects, so the change is seen right away. */
+type Preview = (part: 'in' | 'out' | 'whole') => void;
+
+const tf = (t: { zoom: number; offsetX: number; offsetY: number; rotation: number }, base: { zoom: number }) =>
+  `translate(${t.offsetX * 100}%, ${t.offsetY * 100}%) scale(${t.zoom / base.zoom}) rotate(${t.rotation}deg)`;
 
 interface Actions {
   onSplit: () => void;
@@ -53,12 +60,17 @@ export function ClipInspector({
   patch,
   actions,
   silence,
+  frame,
+  preview,
 }: {
   clip: MainClip;
   asset: MediaAsset;
   patch: Patch<MainClip>;
   actions: Actions;
   silence: SilenceTool;
+  /** The clip's current frame, for filter and motion previews. */
+  frame?: string | null;
+  preview: Preview;
 }) {
   const k = (name: string) => `${clip.id}-${name}`;
   const setAdjust = (key: keyof Adjustments, v: number) =>
@@ -88,7 +100,10 @@ export function ClipInspector({
               <button
                 key={s}
                 type="button"
-                onClick={() => patch((c) => ({ ...c, speed: s }))}
+                onClick={() => {
+                  patch((c) => ({ ...c, speed: s }));
+                  preview('whole');
+                }}
                 className={cn(
                   'rounded-md px-2 py-1 text-[11px] font-semibold tabular-nums',
                   clip.speed === s ? 'bg-amber-400 text-slate-900' : 'bg-white/5 text-slate-300 hover:bg-white/10'
@@ -185,27 +200,36 @@ export function ClipInspector({
       </Section>
 
       <Section title="حركة المقطع (إطارات مفتاحية)">
-        <div className="grid grid-cols-3 gap-1">
+        <div className="grid grid-cols-3 gap-1.5">
           <button
             type="button"
             onClick={() => patch((c) => ({ ...c, motion: null }))}
-            className={cn('rounded-md px-1 py-1.5 text-[11px]', !clip.motion ? 'bg-cyan-400 text-slate-950' : 'bg-white/5 text-slate-300 hover:bg-white/10')}
+            className="text-center text-[10px] text-slate-300"
           >
-            بدون
+            <div className={cn('aspect-square overflow-hidden rounded-md ring-2', !clip.motion ? 'ring-cyan-400' : 'ring-transparent')}>
+              <MotionThumb src={frame ?? undefined} from="none" to="none" />
+            </div>
+            <span className="mt-0.5 block">بدون</span>
           </button>
-          {MOTION_PRESETS.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              onClick={() => patch((c) => ({ ...c, motion: motionFromPreset(c, m.id) }))}
-              className={cn(
-                'rounded-md px-1 py-1.5 text-[11px]',
-                clip.motion?.preset === m.id ? 'bg-cyan-400 text-slate-950' : 'bg-white/5 text-slate-300 hover:bg-white/10'
-              )}
-            >
-              {m.label}
-            </button>
-          ))}
+          {MOTION_PRESETS.map((m) => {
+            const motion = motionFromPreset({ ...clip, zoom: 1, offsetX: 0, offsetY: 0, rotation: 0 }, m.id)!;
+            return (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => {
+                  patch((c) => ({ ...c, motion: motionFromPreset(c, m.id) }));
+                  preview('whole');
+                }}
+                className="text-center text-[10px] text-slate-300"
+              >
+                <div className={cn('aspect-square overflow-hidden rounded-md ring-2', clip.motion?.preset === m.id ? 'ring-cyan-400' : 'ring-transparent')}>
+                  <MotionThumb src={frame ?? undefined} from={tf(motion.from, { zoom: 1 })} to={tf(motion.to, { zoom: 1 })} />
+                </div>
+                <span className="mt-0.5 block">{m.label}</span>
+              </button>
+            );
+          })}
         </div>
         <p className="text-[11px] leading-relaxed text-slate-500">
           حركة مخصصة: اضبط التكبير والموضع بالأعلى ثم احفظه كبداية، ثم اضبطه مرة أخرى واحفظه كنهاية.
@@ -231,15 +255,21 @@ export function ClipInspector({
       </Section>
 
       <Section title="الفلتر">
-        <select
-          value={clip.filterId}
-          onChange={(e) => patch((c) => ({ ...c, filterId: e.target.value, adjust: presetAdjustments(e.target.value) }))}
-          className="w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1.5 text-xs"
-        >
+        <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
           {FILTER_PRESETS.map((f) => (
-            <option key={f.id} value={f.id}>{f.label}</option>
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => patch((c) => ({ ...c, filterId: f.id, adjust: presetAdjustments(f.id) }))}
+              className="w-14 shrink-0 text-center text-[10px] text-slate-300"
+            >
+              <div className={cn('aspect-square overflow-hidden rounded-md ring-2', clip.filterId === f.id ? 'ring-cyan-400' : 'ring-transparent')}>
+                <FilterThumb src={frame} adjust={presetAdjustments(f.id)} />
+              </div>
+              <span className="mt-0.5 block truncate">{f.label}</span>
+            </button>
           ))}
-        </select>
+        </div>
       </Section>
 
       <Section
@@ -265,7 +295,7 @@ export function ClipInspector({
   );
 }
 
-export function TextInspector({ text, patch, actions }: { text: TextClip; patch: Patch<TextClip>; actions: Actions }) {
+export function TextInspector({ text, patch, actions, preview }: { text: TextClip; patch: Patch<TextClip>; actions: Actions; preview: Preview }) {
   const k = (name: string) => `${text.id}-${name}`;
   return (
     <div>
@@ -278,16 +308,24 @@ export function TextInspector({ text, patch, actions }: { text: TextClip; patch:
           onChange={(e) => patch((t) => ({ ...t, text: e.target.value }), k('text'))}
           className="w-full resize-none rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm focus:border-cyan-400 focus:outline-none"
         />
-        <select
-          value={text.font}
-          onChange={(e) => patch((t) => ({ ...t, font: e.target.value }))}
-          className="w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1.5 text-xs"
-          style={{ fontFamily: `"${text.font}"` }}
-        >
+        <div className="grid grid-cols-2 gap-1.5">
           {FONTS.map((f) => (
-            <option key={f} value={f} style={{ fontFamily: `"${f}"` }}>{f}</option>
+            <button
+              key={f}
+              type="button"
+              onClick={() => patch((t) => ({ ...t, font: f }))}
+              className={cn(
+                'rounded-lg px-2 py-1.5 text-center transition',
+                text.font === f ? 'bg-cyan-400/15 text-white ring-1 ring-cyan-400' : 'bg-white/5 text-slate-200 hover:bg-white/10'
+              )}
+            >
+              <span className="block truncate text-base leading-tight" style={{ fontFamily: `"${f}", sans-serif`, fontWeight: text.bold ? 800 : 400 }}>
+                أبجد Aa
+              </span>
+              <span className="block text-[9px] text-slate-400" dir="ltr">{f}</span>
+            </button>
           ))}
-        </select>
+        </div>
         <SliderRow label="الحجم" value={text.fontSize} min={20} max={260} onChange={(v) => patch((t) => ({ ...t, fontSize: v }), k('size'))} />
         <div className="flex gap-2">
           <Segmented
@@ -339,21 +377,21 @@ export function TextInspector({ text, patch, actions }: { text: TextClip; patch:
         </label>
       </Section>
 
-      <Section title="الحركة">
-        <label className="block text-[11px] text-slate-400">
-          دخول
-          <select value={text.animIn} onChange={(e) => patch((t) => ({ ...t, animIn: e.target.value as TextClip['animIn'] }))}
-            className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1.5 text-xs text-slate-100">
-            {TEXT_ANIMS_IN.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
-          </select>
-        </label>
-        <label className="block text-[11px] text-slate-400">
-          خروج
-          <select value={text.animOut} onChange={(e) => patch((t) => ({ ...t, animOut: e.target.value as TextClip['animOut'] }))}
-            className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1.5 text-xs text-slate-100">
-            {TEXT_ANIMS_OUT.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
-          </select>
-        </label>
+      <Section title="حركة الدخول">
+        <div className="grid grid-cols-3 gap-1.5">
+          {TEXT_ANIMS_IN.map((a) => (
+            <AnimChip key={a.id} id={a.id} label={a.label} phase="in" active={text.animIn === a.id}
+              onClick={() => { patch((t) => ({ ...t, animIn: a.id })); preview('in'); }} />
+          ))}
+        </div>
+      </Section>
+      <Section title="حركة الخروج">
+        <div className="grid grid-cols-4 gap-1.5">
+          {TEXT_ANIMS_OUT.map((a) => (
+            <AnimChip key={a.id} id={a.id} label={a.label} phase="out" active={text.animOut === a.id}
+              onClick={() => { patch((t) => ({ ...t, animOut: a.id })); preview('out'); }} />
+          ))}
+        </div>
       </Section>
 
       <Section title="الموضع والتوقيت">
@@ -390,21 +428,26 @@ export function OverlayInspector({
   asset,
   patch,
   actions,
+  preview,
 }: {
   overlay: OverlayClip;
   asset?: MediaAsset;
   patch: Patch<OverlayClip>;
   actions: Actions;
+  preview: Preview;
 }) {
   const k = (name: string) => `${overlay.id}-${name}`;
-  const select = (label: string, value: string, onChange: (v: string) => void) => (
-    <label className="block text-[11px] text-slate-400">
-      {label}
-      <select value={value} onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1.5 text-xs text-slate-100">
-        {OVERLAY_ANIMS.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
-      </select>
-    </label>
+  const chips = (phase: 'in' | 'out') => (
+    <div className="grid grid-cols-4 gap-1.5">
+      {OVERLAY_ANIMS.map((a) => (
+        <AnimChip key={a.id} id={a.id} label={a.label} phase={phase} sample="🖼️"
+          active={(phase === 'in' ? overlay.animIn : overlay.animOut) === a.id}
+          onClick={() => {
+            patch((o) => (phase === 'in' ? { ...o, animIn: a.id } : { ...o, animOut: a.id }));
+            preview(phase);
+          }} />
+      ))}
+    </div>
   );
   return (
     <div>
@@ -443,10 +486,8 @@ export function OverlayInspector({
         </div>
         <p className="text-[11px] text-slate-500">يمكنك سحب الطبقة مباشرة داخل المعاينة.</p>
       </Section>
-      <Section title="الحركة">
-        {select('دخول', overlay.animIn, (v) => patch((o) => ({ ...o, animIn: v as OverlayClip['animIn'] })))}
-        {select('خروج', overlay.animOut, (v) => patch((o) => ({ ...o, animOut: v as OverlayClip['animOut'] })))}
-      </Section>
+      <Section title="حركة الدخول">{chips('in')}</Section>
+      <Section title="حركة الخروج">{chips('out')}</Section>
       {asset?.kind === 'video' && asset.hasAudio && (
         <Section
           title="الصوت"
@@ -469,25 +510,32 @@ export function OverlayInspector({
 export function TransitionInspector({
   clip,
   onChange,
+  frames,
+  preview,
 }: {
   clip: MainClip;
   onChange: (fn: (c: MainClip) => MainClip, coalesceKey?: string) => void;
+  frames: { a?: string; b?: string };
+  preview: () => void;
 }) {
   return (
     <div>
       <Section title="الانتقال">
-        <div className="grid grid-cols-2 gap-1.5">
+        <div className="grid grid-cols-3 gap-1.5">
           {TRANSITIONS.map((t) => (
             <button
               key={t.id}
               type="button"
-              onClick={() => onChange((c) => ({ ...c, transition: { ...c.transition, type: t.id as TransitionType } }))}
-              className={cn(
-                'rounded-lg px-2 py-2 text-[11px] font-semibold',
-                clip.transition.type === t.id ? 'bg-cyan-400 text-slate-950' : 'bg-white/5 text-slate-300 hover:bg-white/10'
-              )}
+              onClick={() => {
+                onChange((c) => ({ ...c, transition: { ...c.transition, type: t.id as TransitionType } }));
+                if (t.id !== 'none') preview();
+              }}
+              className="text-center text-[10px] text-slate-300"
             >
-              {t.label}
+              <div className={cn('aspect-[3/4] overflow-hidden rounded-md ring-2', clip.transition.type === t.id ? 'ring-cyan-400' : 'ring-transparent')}>
+                <TransitionThumb a={frames.a} b={frames.b} type={t.id} />
+              </div>
+              <span className="mt-0.5 block">{t.label}</span>
             </button>
           ))}
         </div>

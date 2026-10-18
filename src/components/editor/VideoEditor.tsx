@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { ASPECT_SIZES, DEFAULT_TRANSITION_DURATION, FONTS, TEXT_PRESETS, presetAdjustments } from '../../editor/constants';
-import { loadAsset } from '../../editor/media';
+import { extractVideoFrames, loadAsset } from '../../editor/media';
 import { loadFonts } from '../../editor/renderer';
 import {
   audioClipEnd,
@@ -57,6 +57,7 @@ import { AudioInspector, ClipInspector, OverlayInspector, ProjectInspector, Text
 import { FiltersPanel, MediaPanel, StickersPanel, TemplatesPanel, TextPanel, TransitionsPanel } from './EditorPanels';
 import { EditorTimeline } from './EditorTimeline';
 import { ToolButton } from './ui';
+import { frameAt } from './previews';
 
 type PanelId = 'media' | 'audio' | 'text' | 'stickers' | 'filters' | 'transitions' | 'templates' | 'edit';
 
@@ -120,7 +121,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
 
   const selectedId = selection?.kind === 'text' || selection?.kind === 'overlay' ? selection.id : null;
   const engine = usePreviewEngine({ canvasRef, project, assets, layout, duration, selectedId, previewScale });
-  const { time, playing, toggle, seek, pause } = engine;
+  const { time, playing, toggle, seek, pause, previewRange, captureFrame } = engine;
 
   useEffect(() => {
     loadFonts(FONTS);
@@ -149,6 +150,28 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       alive = false;
     };
   }, [reset]);
+
+  // Older saves (or a failed first attempt) may lack the timeline filmstrip; rebuild it in the background.
+  useEffect(() => {
+    if (!restored) return;
+    const missing = assetList.filter((a) => a.kind === 'video' && !a.frames?.length);
+    if (!missing.length) return;
+    let alive = true;
+    (async () => {
+      for (const asset of missing) {
+        const strip = await extractVideoFrames(asset.file, asset.duration).catch(() => null);
+        if (!alive || !strip) continue;
+        const updated = { ...asset, ...strip };
+        setAssetList((list) => list.map((a) => (a.id === asset.id ? updated : a)));
+        saveAsset(updated).catch(() => {});
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+    // Only on restore: newly imported assets already carry their filmstrip.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restored]);
 
   useEffect(() => {
     if (!restored) return;
@@ -225,8 +248,9 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       };
       update((p) => ({ ...p, texts: [...p.texts, text] }));
       setSelection({ kind: 'text', id: text.id });
+      previewRange(text.start, text.start + 1);
     },
-    [update, engine]
+    [update, engine, previewRange]
   );
 
   const removeSilence = useCallback(
@@ -351,8 +375,9 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       setSelection({ kind: 'text', id: text.id });
       setPanel('edit');
       loadFonts([text.font]);
+      previewRange(start, start + 1.3);
     },
-    [update, engine]
+    [update, engine, previewRange]
   );
 
   const deleteSelection = useCallback(() => {
@@ -469,9 +494,54 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     if (!targetCut) return;
     updateClip(targetCut.clip.id, (c) => ({ ...c, transition: { type, duration: c.transition.duration || DEFAULT_TRANSITION_DURATION } }));
     setSelection({ kind: 'transition', id: targetCut.clip.id });
-    pause();
-    seek(Math.max(0, targetCut.start - 0.8));
+    if (type !== 'none') previewRange(Math.max(0, targetCut.start - 1), targetCut.start + 1);
   };
+
+  // Frames either side of a cut, for transition previews.
+  const cutFrames = (cut: typeof targetCut) => {
+    if (!cut) return {};
+    const prev = layout[cut.index - 1];
+    return {
+      a: prev ? frameAt(prev.asset, Math.max(prev.clip.inPoint, prev.clip.outPoint - 0.5)) : undefined,
+      b: frameAt(cut.asset, cut.clip.inPoint + 0.2),
+    };
+  };
+
+  // Plays the stretch of the selected item that an edit affects.
+  const previewSelection = (part: 'in' | 'out' | 'whole') => {
+    let start = 0;
+    let end = 0;
+    if (selection?.kind === 'clip') {
+      const lc = layout.find((l) => l.clip.id === selection.id);
+      if (!lc) return;
+      // The project hasn't re-rendered yet, so estimate the clip span from the current layout.
+      start = lc.start;
+      end = lc.start + Math.min(3, lc.duration);
+    } else if (selection?.kind === 'text') {
+      const t = project.texts.find((x) => x.id === selection.id);
+      if (!t) return;
+      start = t.start;
+      end = t.start + t.duration;
+    } else if (selection?.kind === 'overlay') {
+      const o = project.overlays.find((x) => x.id === selection.id);
+      if (!o) return;
+      start = o.start;
+      end = o.start + o.outPoint - o.inPoint;
+    } else return;
+    if (part === 'in') previewRange(start, Math.min(end, start + 1.2));
+    else if (part === 'out') previewRange(Math.max(start, end - 1.2), end);
+    else previewRange(start, end);
+  };
+
+  // A clean still of the clip being filtered, taken from the live preview.
+  const [clipFrame, setClipFrame] = useState<string | null>(null);
+  const frameClipId = targetClip?.clip.id ?? null;
+  useEffect(() => {
+    if (!frameClipId || playing) return;
+    const id = window.setTimeout(() => setClipFrame(captureFrame(frameClipId)), 300);
+    return () => window.clearTimeout(id);
+  }, [frameClipId, time, playing, captureFrame]);
+  const filterFrame = clipFrame ?? (targetClip ? frameAt(targetClip.asset, targetClip.clip.inPoint) : undefined);
 
   // ---------- keyboard ----------
   useEffect(() => {
@@ -586,6 +656,8 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       patch={(fn, key) => updateClip(selectedClip.clip.id, fn, key)}
       actions={actions}
       silence={{ ...silence, run: () => removeSilence(selectedClip.clip.id) }}
+      frame={filterFrame}
+      preview={previewSelection}
     />
   ) : selectedOverlay ? (
     <OverlayInspector
@@ -593,9 +665,10 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       asset={assets.get(selectedOverlay.assetId)}
       patch={(fn, key) => updateOverlay(selectedOverlay.id, fn, key)}
       actions={actions}
+      preview={previewSelection}
     />
   ) : selectedText ? (
-    <TextInspector text={selectedText} patch={(fn, key) => updateText(selectedText.id, fn, key)} actions={actions} />
+    <TextInspector text={selectedText} patch={(fn, key) => updateText(selectedText.id, fn, key)} actions={actions} preview={previewSelection} />
   ) : selectedAudio ? (
     <AudioInspector
       audio={selectedAudio}
@@ -604,7 +677,12 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       actions={actions}
     />
   ) : selectedCut ? (
-    <TransitionInspector clip={selectedCut.clip} onChange={(fn, key) => updateClip(selectedCut.clip.id, fn, key)} />
+    <TransitionInspector
+      clip={selectedCut.clip}
+      onChange={(fn, key) => updateClip(selectedCut.clip.id, fn, key)}
+      frames={cutFrames(selectedCut)}
+      preview={() => previewRange(Math.max(0, selectedCut.start - 1), selectedCut.start + 1)}
+    />
   ) : (
     <ProjectInspector project={project} onChange={update} />
   );
@@ -664,19 +742,19 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
         return (
           <TemplatesPanel
             disabled={!project.clips.length}
+            frames={layout.slice(0, 3).map((lc) => frameAt(lc.asset, lc.clip.inPoint + 0.3)).filter((f): f is string => !!f)}
             onApply={(id) => {
               update((p) => applyTemplate(p, assets, id));
-              setNotice('تم تطبيق القالب. اضغط تشغيل للمشاهدة، أو تراجع بـ Ctrl+Z.');
-              pause();
-              seek(0);
+              setNotice('تم تطبيق القالب. يمكنك التراجع بـ Ctrl+Z.');
               setSheetOpen(false);
+              previewRange(0, 6);
             }}
           />
         );
       case 'filters':
         return (
           <FiltersPanel
-            thumbnail={targetClip?.asset.thumbnail}
+            thumbnail={filterFrame}
             currentId={targetClip?.clip.filterId ?? null}
             disabled={!targetClip}
             onApply={(fid) => targetClip && updateClip(targetClip.clip.id, (c) => ({ ...c, filterId: fid, adjust: presetAdjustments(fid) }))}
@@ -688,6 +766,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       case 'transitions':
         return (
           <TransitionsPanel
+            frames={cutFrames(targetCut)}
             currentType={targetCut?.clip.transition.type ?? null}
             disabled={!targetCut}
             onApply={applyTransition}

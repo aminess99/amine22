@@ -1,4 +1,4 @@
-import { ALL_FORMATS, BlobSource, Input } from 'mediabunny';
+import { ALL_FORMATS, BlobSource, CanvasSink, Input } from 'mediabunny';
 import { PEAKS_PER_SECOND } from './constants';
 import { uid } from './timeline';
 import { AssetKind, MediaAsset } from './types';
@@ -88,31 +88,116 @@ export async function loadAsset(file: File): Promise<MediaAsset> {
     }
 
     const video = document.createElement('video');
-    video.preload = 'auto';
+    video.preload = 'metadata';
     video.muted = true;
     video.playsInline = true;
     video.src = url;
     await waitFor(video, 'loadedmetadata');
     const duration = video.duration;
     if (!Number.isFinite(duration) || duration <= 0) throw new Error('مدة الفيديو غير معروفة');
-    video.currentTime = Math.min(1, duration / 3);
-    await waitFor(video, 'seeked');
-
-    const thumbH = 120;
-    const thumbW = Math.max(1, Math.round((video.videoWidth / video.videoHeight) * thumbH));
-    const canvas = document.createElement('canvas');
-    canvas.width = thumbW;
-    canvas.height = thumbH;
-    canvas.getContext('2d')?.drawImage(video, 0, 0, thumbW, thumbH);
-    const thumbnail = canvas.toDataURL('image/jpeg', 0.7);
     const width = video.videoWidth;
     const height = video.videoHeight;
     video.removeAttribute('src');
     video.load();
 
-    return { ...base, duration, width, height, thumbnail, hasAudio: await hasAudioTrack(file) };
+    const strip = await extractVideoFrames(file, duration).catch(() => null);
+    return {
+      ...base,
+      duration,
+      width,
+      height,
+      thumbnail: strip?.thumbnail ?? (await thumbnailFromElement(url, duration).catch(() => undefined)),
+      frames: strip?.frames,
+      frameInterval: strip?.frameInterval,
+      hasAudio: await hasAudioTrack(file),
+    };
   } catch (err) {
     URL.revokeObjectURL(url);
     throw err;
+  }
+}
+
+const STRIP_HEIGHT = 96;
+const MAX_STRIP_FRAMES = 40;
+
+/**
+ * Decodes real frames with WebCodecs. Mobile browsers often return a black
+ * image when a <video> element is drawn right after seeking, so the element
+ * is only a fallback.
+ */
+export async function extractVideoFrames(
+  file: File,
+  duration: number
+): Promise<{ thumbnail: string; frames: string[]; frameInterval: number }> {
+  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  try {
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) throw new Error('no video track');
+    const aspect = track.displayWidth / track.displayHeight || 9 / 16;
+    const height = STRIP_HEIGHT;
+    const width = Math.max(2, Math.round(height * aspect));
+    const sink = new CanvasSink(track, { width, height, fit: 'cover', poolSize: 1 });
+    const first = await track.getFirstTimestamp();
+
+    const frameInterval = Math.max(0.5, duration / MAX_STRIP_FRAMES);
+    const times: number[] = [];
+    for (let t = 0; t < duration; t += frameInterval) times.push(first + t);
+
+    const frames: string[] = [];
+    for await (const wrapped of sink.canvasesAtTimestamps(times)) {
+      const canvas = wrapped?.canvas as HTMLCanvasElement | OffscreenCanvas | undefined;
+      if (!canvas) {
+        frames.push(frames[frames.length - 1] ?? '');
+        continue;
+      }
+      frames.push(await canvasToDataUrl(canvas));
+    }
+    if (!frames.some(Boolean)) throw new Error('no frames decoded');
+    const thumbIndex = Math.min(frames.length - 1, Math.floor(Math.min(1, duration / 3) / frameInterval));
+    return { thumbnail: frames[thumbIndex] || frames.find(Boolean)!, frames, frameInterval };
+  } finally {
+    input.dispose();
+  }
+}
+
+async function canvasToDataUrl(canvas: HTMLCanvasElement | OffscreenCanvas): Promise<string> {
+  if ('toDataURL' in canvas) return canvas.toDataURL('image/jpeg', 0.7);
+  const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.7 });
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** Fallback thumbnail: waits for a frame to actually be presented before drawing it. */
+async function thumbnailFromElement(url: string, duration: number): Promise<string> {
+  const video = document.createElement('video');
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = 'auto';
+  video.src = url;
+  try {
+    await waitFor(video, 'loadeddata');
+    video.currentTime = Math.min(1, duration / 3);
+    await waitFor(video, 'seeked');
+    const v = video as HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number };
+    if (v.requestVideoFrameCallback) {
+      await Promise.race([
+        new Promise<void>((resolve) => v.requestVideoFrameCallback!(() => resolve())),
+        new Promise<void>((resolve) => setTimeout(resolve, 500)),
+      ]);
+    }
+    const h = STRIP_HEIGHT;
+    const w = Math.max(1, Math.round((video.videoWidth / video.videoHeight) * h));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext('2d')?.drawImage(video, 0, 0, w, h);
+    return canvas.toDataURL('image/jpeg', 0.7);
+  } finally {
+    video.removeAttribute('src');
+    video.load();
   }
 }

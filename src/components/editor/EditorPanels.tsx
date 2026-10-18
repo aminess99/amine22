@@ -2,7 +2,8 @@ import React from 'react';
 import { Captions, Check, Film, Image as ImageIcon, Layers, Loader2, Music, Plus, Upload } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { FILTER_PRESETS, STICKERS, TEXT_PRESETS, TRANSITIONS, presetAdjustments } from '../../editor/constants';
-import { PROJECT_TEMPLATES } from '../../editor/templates';
+import { PROJECT_TEMPLATES, templatePreview } from '../../editor/templates';
+import { FilterThumb, TemplateThumb, TransitionThumb } from './previews';
 import { cssFilter } from '../../editor/renderer';
 import { formatTime } from '../../editor/timeline';
 import { AssetKind, MediaAsset, TransitionType } from '../../editor/types';
@@ -209,7 +210,7 @@ export function FiltersPanel({ thumbnail, currentId, disabled, onApply, onApplyA
       {disabled ? (
         <p className="mb-3 rounded-lg bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">أضف مقطعاً إلى الخط الزمني أولاً.</p>
       ) : (
-        <p className="mb-3 text-[11px] text-slate-500">يُطبَّق على المقطع المحدد (أو المقطع عند مؤشر التشغيل).</p>
+        <p className="mb-3 text-[11px] text-slate-500">المعاينة على الإطار الحالي من فيديوك. الفلتر يُطبَّق على المقطع المحدد أو المقطع عند مؤشر التشغيل.</p>
       )}
       <div className="grid grid-cols-3 gap-2">
         {FILTER_PRESETS.map((f) => {
@@ -228,10 +229,7 @@ export function FiltersPanel({ thumbnail, currentId, disabled, onApply, onApplyA
                   active ? 'ring-cyan-400' : 'ring-transparent group-hover:ring-white/30'
                 )}
               >
-                {thumbnail && (
-                  <img src={thumbnail} alt="" className="h-full w-full object-cover" style={{ filter: cssFilter(presetAdjustments(f.id), 0.3) }} />
-                )}
-                {!thumbnail && <div className="absolute inset-0" style={{ backdropFilter: cssFilter(presetAdjustments(f.id), 0.3) }} />}
+                <FilterThumb src={thumbnail} adjust={presetAdjustments(f.id)} />
                 {active && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/30">
                     <Check className="h-5 w-5 text-cyan-300" />
@@ -256,26 +254,14 @@ export function FiltersPanel({ thumbnail, currentId, disabled, onApply, onApplyA
 }
 
 interface TransitionsPanelProps {
+  frames: { a?: string; b?: string };
   currentType: TransitionType | null;
   disabled: boolean;
   onApply: (type: TransitionType) => void;
   onApplyAll: (type: TransitionType) => void;
 }
 
-const TRANSITION_PREVIEW: Record<TransitionType, string> = {
-  none: '',
-  fade: 'linear-gradient(90deg,#0ea5e9 0%,#a855f7 100%)',
-  'fade-black': 'linear-gradient(90deg,#0ea5e9 0%,#000 50%,#a855f7 100%)',
-  'fade-white': 'linear-gradient(90deg,#0ea5e9 0%,#fff 50%,#a855f7 100%)',
-  'slide-left': 'linear-gradient(90deg,#0ea5e9 50%,#a855f7 50%)',
-  'slide-right': 'linear-gradient(270deg,#0ea5e9 50%,#a855f7 50%)',
-  'slide-up': 'linear-gradient(180deg,#0ea5e9 50%,#a855f7 50%)',
-  'zoom-in': 'radial-gradient(circle,#a855f7 30%,#0ea5e9 31%)',
-  wipe: 'linear-gradient(90deg,#a855f7 40%,#fff 40%,#fff 44%,#0ea5e9 44%)',
-  blur: 'linear-gradient(90deg,#0ea5e9,#7c87e9,#a855f7)',
-};
-
-export function TransitionsPanel({ currentType, disabled, onApply, onApplyAll }: TransitionsPanelProps) {
+export function TransitionsPanel({ frames, currentType, disabled, onApply, onApplyAll }: TransitionsPanelProps) {
   return (
     <div className="p-4">
       {disabled ? (
@@ -292,12 +278,11 @@ export function TransitionsPanel({ currentType, disabled, onApply, onApplyAll }:
             <button key={t.id} type="button" disabled={disabled} onClick={() => onApply(t.id)} className="group text-center disabled:opacity-40">
               <div
                 className={cn(
-                  'flex aspect-video items-center justify-center rounded-lg bg-slate-800 ring-2 transition',
+                  'relative aspect-[3/4] overflow-hidden rounded-lg bg-slate-800 ring-2 transition',
                   active ? 'ring-cyan-400' : 'ring-transparent group-hover:ring-white/30'
                 )}
-                style={{ background: TRANSITION_PREVIEW[t.id] || undefined }}
               >
-                {t.id === 'none' && <span className="text-lg text-slate-500">⊘</span>}
+                <TransitionThumb a={frames.a} b={frames.b} type={t.id} />
               </div>
               <span className="mt-1 block text-[11px] text-slate-300">{t.label}</span>
             </button>
@@ -325,7 +310,7 @@ export function StickersPanel({ onAdd }: { onAdd: (emoji: string) => void }) {
           <div className="grid grid-cols-6 gap-1.5">
             {g.items.map((e) => (
               <button key={e} type="button" onClick={() => onAdd(e)}
-                className="flex aspect-square items-center justify-center rounded-lg bg-white/5 text-2xl transition hover:scale-110 hover:bg-white/10">
+                className="flex aspect-square items-center justify-center rounded-lg bg-white/5 text-2xl transition hover:scale-110 hover:bg-white/10 active:scale-150">
                 {e}
               </button>
             ))}
@@ -337,7 +322,7 @@ export function StickersPanel({ onAdd }: { onAdd: (emoji: string) => void }) {
   );
 }
 
-export function TemplatesPanel({ disabled, onApply }: { disabled: boolean; onApply: (id: string) => void }) {
+export function TemplatesPanel({ disabled, frames, onApply }: { disabled: boolean; frames: string[]; onApply: (id: string) => void }) {
   return (
     <div className="space-y-3 p-4">
       {disabled ? (
@@ -353,7 +338,9 @@ export function TemplatesPanel({ disabled, onApply }: { disabled: boolean; onApp
           onClick={() => onApply(t.id)}
           className="flex w-full items-center gap-3 rounded-xl bg-white/5 p-2.5 text-right ring-1 ring-white/5 transition hover:ring-cyan-400/50 disabled:opacity-40"
         >
-          <div className="h-14 w-10 shrink-0 rounded-md" style={{ background: `linear-gradient(160deg, ${t.colors[0]}, ${t.colors[1]})` }} />
+          <div className="h-20 w-12 shrink-0 overflow-hidden rounded-md">
+            <TemplateThumb frames={frames} colors={t.colors} {...templatePreview(t.id)} />
+          </div>
           <div className="min-w-0">
             <p className="text-sm font-bold text-white">{t.label}</p>
             <p className="text-[11px] text-slate-400">{t.description}</p>

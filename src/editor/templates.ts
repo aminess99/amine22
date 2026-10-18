@@ -1,4 +1,5 @@
 import { DEFAULT_TRANSITION_DURATION, TEXT_PRESETS, presetAdjustments } from './constants';
+import { cssFilter } from './renderer';
 import { motionFromPreset, uid } from './timeline';
 import { MediaAsset, Project, TextClip, TransitionType } from './types';
 
@@ -56,4 +57,19 @@ export function applyTemplate(project: Project, assets: Map<string, MediaAsset>,
   const preset = TEXT_PRESETS.find((p) => p.id === r.title.preset) ?? TEXT_PRESETS[0];
   const title: TextClip = { ...preset.style, id: uid(), text: r.title.text, start: 0, duration: r.title.duration, x: 0.5 };
   return { ...project, aspect: r.aspect ?? project.aspect, clips, texts: [...project.texts, title] };
+}
+
+/** What a template's thumbnail needs to show: its colour treatment and title look. */
+export function templatePreview(templateId: string) {
+  const r = RECIPES[templateId];
+  const preset = TEXT_PRESETS.find((p) => p.id === r?.title.preset) ?? TEXT_PRESETS[0];
+  return {
+    filter: cssFilter(presetAdjustments(r?.filter ?? 'none'), 0.25),
+    title: {
+      text: r?.title.text ?? '',
+      font: preset.style.font,
+      color: preset.style.color,
+      stroke: preset.style.strokeWidth ? preset.style.strokeColor : '',
+    },
+  };
 }

@@ -11,6 +11,9 @@ export interface MediaAsset {
   width: number;
   height: number;
   thumbnail?: string;
+  /** Filmstrip for the timeline: small frames sampled every `frameInterval` seconds. Videos only. */
+  frames?: string[];
+  frameInterval?: number;
   hasAudio: boolean;
   /** Normalized (0..1) audio peaks, PEAKS_PER_SECOND per second. Audio assets only. */
   peaks?: number[];

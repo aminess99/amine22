@@ -166,7 +166,10 @@ export function usePreviewEngine(input: EngineInput) {
     return clockRef.current.media + (performance.now() - clockRef.current.wall) / 1000;
   };
 
+  const stopAtRef = useRef<number | null>(null);
+
   const pause = useCallback(() => {
+    stopAtRef.current = null;
     timeRef.current = clamp(currentTime(), 0, latest.current.duration);
     playingRef.current = false;
     setPlaying(false);
@@ -174,6 +177,7 @@ export function usePreviewEngine(input: EngineInput) {
   }, []);
 
   const play = useCallback(() => {
+    stopAtRef.current = null;
     if (latest.current.duration <= 0) return;
     if (timeRef.current >= latest.current.duration - 0.02) timeRef.current = 0;
     clockRef.current = { wall: performance.now(), media: timeRef.current };
@@ -190,6 +194,43 @@ export function usePreviewEngine(input: EngineInput) {
     setTime(next);
   }, []);
 
+  /**
+   * Plays a short stretch so a just-applied effect can be seen, then stops.
+   * Deferred a moment so a project change made in the same event is rendered first.
+   */
+  const previewRange = useCallback(
+    (from: number, to: number) => {
+      window.setTimeout(() => {
+        seek(from);
+        play();
+        stopAtRef.current = to;
+      }, 80);
+    },
+    [seek, play]
+  );
+
+  /** A small still of a clip's current frame, without effects, for panel previews. */
+  const captureFrame = useCallback((clipId: string, maxSize = 220): string | null => {
+    const lc = latest.current.layout.find((l) => l.clip.id === clipId);
+    if (!lc) return null;
+    const src: HTMLVideoElement | HTMLImageElement | undefined =
+      lc.asset.kind === 'image' ? images.current.get(lc.asset.id) : videos.current.get(clipId);
+    if (!src) return null;
+    const w = src instanceof HTMLVideoElement ? src.videoWidth : src.naturalWidth;
+    const h = src instanceof HTMLVideoElement ? src.videoHeight : src.naturalHeight;
+    if (!w || !h || (src instanceof HTMLVideoElement && src.readyState < 2)) return null;
+    const scale = Math.min(1, maxSize / Math.max(w, h));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(w * scale));
+    canvas.height = Math.max(1, Math.round(h * scale));
+    try {
+      canvas.getContext('2d')?.drawImage(src, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.75);
+    } catch {
+      return null;
+    }
+  }, []);
+
   // Keep the playhead in range when the project gets shorter.
   useEffect(() => {
     if (timeRef.current > input.duration) seek(input.duration);
@@ -203,12 +244,14 @@ export function usePreviewEngine(input: EngineInput) {
       const { canvasRef, project, layout, duration, selectedId, previewScale, assets } = latest.current;
       let t = currentTime();
       const isPlaying = playingRef.current;
-      if (isPlaying && t >= duration) {
-        t = duration;
-        timeRef.current = duration;
+      const stopAt = Math.min(duration, stopAtRef.current ?? duration);
+      if (isPlaying && t >= stopAt) {
+        t = stopAt;
+        timeRef.current = stopAt;
+        stopAtRef.current = null;
         playingRef.current = false;
         setPlaying(false);
-        setTime(duration);
+        setTime(stopAt);
       } else if (isPlaying) {
         timeRef.current = t;
         if (now - lastUiUpdate > 30) {
@@ -306,5 +349,5 @@ export function usePreviewEngine(input: EngineInput) {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  return { time, playing, play, pause, toggle, seek, textBoundsRef, getTime: () => timeRef.current };
+  return { time, playing, play, pause, toggle, seek, previewRange, captureFrame, textBoundsRef, getTime: () => timeRef.current };
 }
