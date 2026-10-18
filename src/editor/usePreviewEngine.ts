@@ -19,12 +19,14 @@ const DRIFT_PLAYING = 0.3;
 /** Clips starting this soon are pre-seeked so the cut doesn't wait on a seek. */
 const PRELOAD_AHEAD = 1.5;
 const DRIFT_PAUSED = 0.02;
+const START_TOLERANCE = 0.12;
 
 function syncMedia(el: HTMLMediaElement, target: number, playing: boolean, rate: number, frozen: boolean) {
   if (playing && !frozen) {
     if (el.playbackRate !== rate) el.playbackRate = rate;
     if (el.paused) {
-      el.currentTime = target;
+      // A pre-seeked element is already in place; seeking it again would stall the start.
+      if (Math.abs(el.currentTime - target) > START_TOLERANCE) el.currentTime = target;
       el.play().catch(() => {});
     } else if (Math.abs(el.currentTime - target) > DRIFT_PLAYING) {
       el.currentTime = target;
@@ -277,7 +279,10 @@ export function usePreviewEngine(input: EngineInput) {
         if (el && !el.paused && !el.seeking && el.readyState >= 3 && !frozen) {
           const videoT = lc.start + (el.currentTime - lc.clip.inPoint) / lc.clip.speed;
           if (Math.abs(videoT - t) < 1 && videoT >= lc.start && videoT < lc.end) {
-            t = videoT;
+            // Never step backwards: if the video is still catching up (a clip that just
+            // started), hold the clock where it is until the video passes it.
+            const prev = timeRef.current;
+            t = Math.max(videoT, Math.min(t, prev));
             clockRef.current = { wall: performance.now(), media: t };
             state = getMainFrameState(layout, t);
           }
@@ -299,11 +304,13 @@ export function usePreviewEngine(input: EngineInput) {
         const ref = visible.get(id);
         if (!ref) {
           if (!el.paused) el.pause();
-          // Get the next clip to its first frame ahead of the cut.
+          // Park the next clip on the first frame it will show. With a transition it
+          // appears half a transition before its cut, so that is where it must wait.
           const lc = byId.get(id);
-          if (lc && lc.start > t && lc.start - t <= PRELOAD_AHEAD && !el.seeking) {
-            const first = sourceTimeFor(lc, lc.start);
-            if (Math.abs(el.currentTime - first) > 0.05) el.currentTime = first;
+          const visibleFrom = lc ? lc.start - lc.transitionIn / 2 : 0;
+          if (lc && visibleFrom > t && visibleFrom - t <= PRELOAD_AHEAD && !el.seeking) {
+            const first = sourceTimeFor(lc, visibleFrom);
+            if (Math.abs(el.currentTime - first) > 0.04) el.currentTime = first;
           }
           continue;
         }
