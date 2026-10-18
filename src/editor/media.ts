@@ -44,6 +44,11 @@ async function hasAudioTrack(file: File): Promise<boolean> {
 }
 
 export async function computePeaks(file: File): Promise<number[] | undefined> {
+  return (await analyzeAudio(file))?.peaks;
+}
+
+/** Decodes a file's audio for its waveform and exact length (recordings often report no duration). */
+async function analyzeAudio(file: File): Promise<{ peaks: number[]; duration: number } | undefined> {
   try {
     const ctx = new OfflineAudioContext(1, 1, 44100);
     const buffer = await ctx.decodeAudioData(await file.arrayBuffer());
@@ -58,7 +63,7 @@ export async function computePeaks(file: File): Promise<number[] | undefined> {
       peaks.push(peak);
       max = Math.max(max, peak);
     }
-    return max > 0 ? peaks.map((p) => p / max) : peaks;
+    return { peaks: max > 0 ? peaks.map((p) => p / max) : peaks, duration: buffer.duration };
   } catch {
     return undefined;
   }
@@ -83,8 +88,10 @@ export async function loadAsset(file: File): Promise<MediaAsset> {
       audio.preload = 'metadata';
       audio.src = url;
       await waitFor(audio, 'loadedmetadata');
-      const peaks = await computePeaks(file);
-      return { ...base, duration: audio.duration, width: 0, height: 0, hasAudio: true, peaks };
+      const analysis = await analyzeAudio(file);
+      const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : analysis?.duration;
+      if (!duration) throw new Error('تعذر قراءة مدة الملف الصوتي');
+      return { ...base, duration, width: 0, height: 0, hasAudio: true, peaks: analysis?.peaks };
     }
 
     const video = document.createElement('video');

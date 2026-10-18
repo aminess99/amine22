@@ -28,7 +28,7 @@ import {
 import { cn } from '../../lib/utils';
 import { ASPECT_SIZES, DEFAULT_TRANSITION_DURATION, FONTS, TEXT_PRESETS, presetAdjustments } from '../../editor/constants';
 import { computePeaks, extractVideoFrames, loadAsset } from '../../editor/media';
-import { VOICE_EFFECTS, VoiceEffect, applyVoiceEffect, detectBeats, encodeWav } from '../../editor/audioTools';
+import { VOICE_EFFECTS, VoiceEffect, applyVoiceEffect, decodeFile, detectBeats, encodeWav } from '../../editor/audioTools';
 import { reverseVideo } from '../../editor/reverse';
 import { loadFonts } from '../../editor/renderer';
 import {
@@ -494,7 +494,9 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     engine.setMuted(false);
     if (!file) return;
     try {
-      const asset = await registerAsset(file);
+      // Browser recordings carry no duration and seek poorly; store them as WAV.
+      const decoded = await decodeFile(file);
+      const asset = await registerAsset(encodeWav(decoded, file.name.replace(/\.[^.]+$/, '.wav')));
       addAudio(asset, recordStartRef.current);
     } catch {
       setErrors((e) => [...e, 'تعذر حفظ التسجيل الصوتي.']);
