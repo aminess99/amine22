@@ -1,8 +1,9 @@
 import React, { useEffect, useRef } from 'react';
 import { captionStyleFields } from '../../editor/constants';
-import { cssFilter, drawText } from '../../editor/renderer';
+import { cssFilter, drawText, drawTransition, renderFrame } from '../../editor/renderer';
+import { createMainClip, layoutMainTrack } from '../../editor/timeline';
 import { ensureFonts } from '../../editor/fonts';
-import { Adjustments, TextClip, TransitionType } from '../../editor/types';
+import { Adjustments, MainClip, MediaAsset, Project, TextClip, TransitionType } from '../../editor/types';
 
 const LOOP_MS = 2400;
 
@@ -65,95 +66,84 @@ export function FilterThumb({ src, adjust }: { src?: string | null; adjust: Adju
 // ---------------------------------------------------------------- transitions
 
 type Frames = Keyframe[];
-const T0 = 0.3;
-const T1 = 0.7;
 const steady = (k: Keyframe): Frames => [{ ...k, offset: 0 }, { ...k, offset: 1 }];
 
-function transitionFrames(type: TransitionType): { a: Frames; b: Frames; veil?: { color: string; frames: Frames } } {
-  const ab = (from: Keyframe, to: Keyframe): Frames => [
-    { ...from, offset: 0 },
-    { ...from, offset: T0 },
-    { ...to, offset: T1 },
-    { ...to, offset: 1 },
-  ];
-  switch (type) {
-    case 'fade':
-      return { a: steady({ opacity: 1 }), b: ab({ opacity: 0 }, { opacity: 1 }) };
-    case 'fade-black':
-    case 'fade-white':
-      return {
-        a: ab({ opacity: 1 }, { opacity: 0 }).map((k) => (k.offset === T1 ? { ...k, offset: 0.5 } : k)),
-        b: ab({ opacity: 0 }, { opacity: 1 }).map((k) => (k.offset === T0 ? { ...k, offset: 0.5 } : k)),
-        veil: {
-          color: type === 'fade-black' ? '#000' : '#fff',
-          frames: [
-            { opacity: 0, offset: 0 },
-            { opacity: 0, offset: T0 },
-            { opacity: 1, offset: 0.5 },
-            { opacity: 0, offset: T1 },
-            { opacity: 0, offset: 1 },
-          ],
-        },
-      };
-    case 'slide-left':
-      return { a: ab({ transform: 'translateX(0)' }, { transform: 'translateX(-100%)' }), b: ab({ transform: 'translateX(100%)' }, { transform: 'translateX(0)' }) };
-    case 'slide-right':
-      return { a: ab({ transform: 'translateX(0)' }, { transform: 'translateX(100%)' }), b: ab({ transform: 'translateX(-100%)' }, { transform: 'translateX(0)' }) };
-    case 'slide-up':
-      return { a: ab({ transform: 'translateY(0)' }, { transform: 'translateY(-100%)' }), b: ab({ transform: 'translateY(100%)' }, { transform: 'translateY(0)' }) };
-    case 'zoom-in':
-      return { a: ab({ transform: 'scale(1)', opacity: 1 }, { transform: 'scale(1.6)', opacity: 0 }), b: steady({ opacity: 1 }) };
-    case 'wipe':
-      return { a: steady({ opacity: 1 }), b: ab({ clipPath: 'inset(0 100% 0 0)' }, { clipPath: 'inset(0 0% 0 0)' }) };
-    case 'blur':
-      return {
-        a: [
-          { filter: 'blur(0px)', opacity: 1, offset: 0 },
-          { filter: 'blur(0px)', opacity: 1, offset: T0 },
-          { filter: 'blur(10px)', opacity: 1, offset: 0.5 },
-          { filter: 'blur(10px)', opacity: 0, offset: 0.501 },
-          { filter: 'blur(0px)', opacity: 0, offset: 1 },
-        ],
-        b: [
-          { filter: 'blur(10px)', opacity: 0, offset: 0 },
-          { filter: 'blur(10px)', opacity: 0, offset: 0.5 },
-          { filter: 'blur(10px)', opacity: 1, offset: 0.501 },
-          { filter: 'blur(0px)', opacity: 1, offset: T1 },
-          { filter: 'blur(0px)', opacity: 1, offset: 1 },
-        ],
-      };
-    default:
-      return { a: [{ opacity: 1, offset: 0 }, { opacity: 1, offset: 0.5 }, { opacity: 0, offset: 0.501 }, { opacity: 0, offset: 1 }], b: steady({ opacity: 1 }) };
-  }
+/** Loads an image once (null while loading or when there is none). */
+function useImage(src?: string) {
+  const [img, setImg] = React.useState<HTMLImageElement | null>(null);
+  useEffect(() => {
+    setImg(null);
+    if (!src) return;
+    const el = new Image();
+    el.onload = () => setImg(el);
+    el.src = src;
+  }, [src]);
+  return img;
 }
 
-/** Two frames looping through a transition: the end of the outgoing clip into the start of the next. */
+/**
+ * Two frames looping through a transition: the end of the outgoing clip into the
+ * start of the next, drawn by the same code as the video.
+ */
 export function TransitionThumb({ a, b, type }: { a?: string; b?: string; type: TransitionType }) {
-  const aRef = useRef<HTMLDivElement>(null);
-  const bRef = useRef<HTMLDivElement>(null);
-  const veilRef = useRef<HTMLDivElement>(null);
-  const spec = transitionFrames(type);
-  useLoop(aRef, spec.a, { duration: LOOP_MS }, [type]);
-  useLoop(bRef, spec.b, { duration: LOOP_MS }, [type]);
-  useLoop(veilRef, spec.veil?.frames ?? steady({ opacity: 0 }), { duration: LOOP_MS }, [type]);
-  // Transitions that reveal the incoming frame need it above the outgoing one.
-  const bOnTop = ['fade', 'slide-left', 'slide-right', 'slide-up', 'wipe'].includes(type);
-  const layerA = (
-    <div key="a" ref={aRef} className="absolute inset-0">
-      <Still src={a} className="h-full w-full" />
-    </div>
-  );
-  const layerB = (
-    <div key="b" ref={bRef} className="absolute inset-0">
-      <Still src={b} className="h-full w-full" style={!b ? { filter: 'hue-rotate(160deg)' } : undefined} />
-    </div>
-  );
-  return (
-    <div className="relative h-full w-full overflow-hidden bg-black" dir="ltr">
-      {bOnTop ? [layerA, layerB] : [layerB, layerA]}
-      {spec.veil && <div ref={veilRef} className="absolute inset-0" style={{ background: spec.veil.color, opacity: 0 }} />}
-    </div>
-  );
+  const ref = useRef<HTMLCanvasElement>(null);
+  const imgA = useImage(a);
+  const imgB = useImage(b);
+  useEffect(() => {
+    const canvas = ref.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const paint = (img: HTMLImageElement | null, colors: [string, string], W: number, H: number, filter?: string) => {
+      ctx.filter = filter || 'none';
+      if (img) {
+        const k = Math.max(W / img.width, H / img.height);
+        ctx.drawImage(img, (W - img.width * k) / 2, (H - img.height * k) / 2, img.width * k, img.height * k);
+      } else {
+        const g = ctx.createLinearGradient(0, 0, W, H);
+        g.addColorStop(0, colors[0]);
+        g.addColorStop(1, colors[1]);
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, W, H);
+      }
+      ctx.filter = 'none';
+    };
+    const draw = (ms: number) => {
+      const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
+      const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, w, h);
+      const t = (ms % LOOP_MS) / LOOP_MS;
+      const progress = Math.min(1, Math.max(0, (t - 0.2) / 0.5));
+      const layerA = (f?: string) => paint(imgA, ['#0ea5e9', '#a855f7'], w, h, f);
+      const layerB = (f?: string) => paint(imgB, ['#f59e0b', '#ef4444'], w, h, f);
+      if (progress <= 0) layerA();
+      else if (progress >= 1) layerB();
+      else drawTransition(ctx, type, progress, w, h, layerA, layerB);
+    };
+    draw(LOOP_MS * 0.45);
+    if (reducedMotion()) return;
+    let stop: (() => void) | null = null;
+    const start = performance.now();
+    const io = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && !stop) stop = addTicker((now) => draw(now - start));
+      else if (!entry.isIntersecting && stop) {
+        stop();
+        stop = null;
+      }
+    });
+    io.observe(canvas);
+    return () => {
+      io.disconnect();
+      stop?.();
+    };
+  }, [imgA, imgB, type]);
+  return <canvas ref={ref} className="block h-full w-full" />;
 }
 
 // ---------------------------------------------------------------- clip motion
@@ -296,6 +286,8 @@ export function CaptionStyleThumb({ styleId }: { key?: React.Key; styleId: strin
     const ctx = canvas?.getContext('2d');
     if (!canvas || !ctx) return;
     const look = captionStyleFields(styleId);
+    // The loop redraws every frame, so the style's font appears as soon as it loads.
+    ensureFonts([look.font]).then(() => reducedMotion() && draw(per * 1.5));
     const per = (SAMPLE_LOOP - 0.3) / SAMPLE_WORDS.length;
     const clip: TextClip = {
       ...look,
@@ -438,4 +430,81 @@ export function TextThumb({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature, loop, width, height, still]);
   return <canvas ref={ref} className={className ?? 'block h-full w-full'} />;
+}
+
+// ---------------------------------------------------------------- clip effects, animations and masks
+
+let sampleImage: HTMLCanvasElement | null = null;
+/** A colourful stand-in frame for clips without a picture yet. */
+function sampleFrame(): HTMLCanvasElement {
+  if (sampleImage) return sampleImage;
+  const c = document.createElement('canvas');
+  c.width = 320;
+  c.height = 320;
+  const ctx = c.getContext('2d')!;
+  const g = ctx.createLinearGradient(0, 0, 320, 320);
+  g.addColorStop(0, '#0ea5e9');
+  g.addColorStop(0.55, '#a855f7');
+  g.addColorStop(1, '#f59e0b');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 320, 320);
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.beginPath();
+  ctx.arc(160, 140, 60, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(70, 230, 180, 26);
+  sampleImage = c;
+  return c;
+}
+
+/**
+ * A clip's frame drawn by the real renderer with one setting changed (an
+ * animation, effect or mask), looping, so each option shows what it does.
+ */
+export function ClipFxThumb({ src, patch, loop = 2 }: { key?: React.Key; src?: string | null; patch: Partial<MainClip>; loop?: number }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const img = useImage(src ?? undefined);
+  const signature = JSON.stringify(patch);
+  useEffect(() => {
+    const canvas = ref.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    const frame: CanvasImageSource = img ?? sampleFrame();
+    const fw = img?.width ?? 320;
+    const fh = img?.height ?? 320;
+    const asset = { id: 'thumb', kind: 'image', name: '', file: null as unknown as File, url: '', duration: 0, width: fw, height: fh, hasAudio: false } as MediaAsset;
+    const clip: MainClip = { ...createMainClip(asset), fit: 'cover', outPoint: loop, ...patch };
+    const project: Project = { aspect: '1:1', background: '#0b0f17', clips: [clip], texts: [], audios: [], overlays: [] };
+    const layout = layoutMainTrack([clip], new Map([['thumb', asset]]));
+    const W = 320;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const draw = (time: number) => {
+      const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
+      const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      ctx.setTransform(w / W, 0, 0, h / W, 0, 0);
+      renderFrame(ctx, { width: W, height: W, project, layout, time: Math.min(time, loop - 0.001), getFrame: () => frame, getOverlayFrame: () => null });
+    };
+    draw(loop * 0.5);
+    if (reducedMotion()) return;
+    let stop: (() => void) | null = null;
+    const start = performance.now();
+    const io = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && !stop) stop = addTicker((now) => draw(((now - start) / 1000) % loop));
+      else if (!entry.isIntersecting && stop) {
+        stop();
+        stop = null;
+      }
+    });
+    io.observe(canvas);
+    return () => {
+      io.disconnect();
+      stop?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [img, signature, loop]);
+  return <canvas ref={ref} className="block h-full w-full" />;
 }

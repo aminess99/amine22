@@ -44,6 +44,34 @@ export const FILTER_PRESETS: FilterPreset[] = [
   { id: 'cinema', label: 'سينمائي', adjust: { contrast: 118, saturation: 90, warmth: -15, vignette: 40 } },
   { id: 'sunset', label: 'غروب', adjust: { warmth: 70, saturation: 125, hue: -8 } },
   { id: 'dream', label: 'حالم', adjust: { brightness: 112, blur: 1.5, saturation: 115 } },
+  { id: 'teal-orange', label: 'تركواز وبرتقالي', adjust: { contrast: 115, saturation: 120, warmth: 25, hue: -6, vignette: 25 } },
+  { id: 'moody', label: 'كئيب', adjust: { brightness: 88, contrast: 125, saturation: 70, warmth: -20, vignette: 60 } },
+  { id: 'golden', label: 'ساعة ذهبية', adjust: { warmth: 60, brightness: 106, saturation: 118, contrast: 105 } },
+  { id: 'summer', label: 'صيفي', adjust: { brightness: 108, saturation: 135, warmth: 30 } },
+  { id: 'winter', label: 'شتوي', adjust: { warmth: -60, saturation: 80, brightness: 108, contrast: 95 } },
+  { id: 'night', label: 'ليلي', adjust: { brightness: 75, contrast: 120, warmth: -50, saturation: 85, vignette: 50 } },
+  { id: 'neon', label: 'نيون', adjust: { saturation: 190, contrast: 130, hue: 15 } },
+  { id: 'pastel', label: 'باستيل', adjust: { saturation: 70, brightness: 115, contrast: 85 } },
+  { id: 'matte', label: 'مطفي', adjust: { contrast: 82, brightness: 104, saturation: 90, sepia: 8 } },
+  { id: 'film', label: 'فيلم', adjust: { contrast: 110, saturation: 85, sepia: 15, warmth: 10, vignette: 35 } },
+  { id: 'polaroid', label: 'بولارويد', adjust: { brightness: 110, contrast: 90, saturation: 85, warmth: 20, sepia: 12 } },
+  { id: 'kodak', label: 'كوداك', adjust: { warmth: 35, contrast: 112, saturation: 112, sepia: 6 } },
+  { id: 'noir', label: 'نوار', adjust: { grayscale: 100, contrast: 160, brightness: 90, vignette: 70 } },
+  { id: 'silver', label: 'فضي', adjust: { grayscale: 100, brightness: 112, contrast: 95 } },
+  { id: 'faded-bw', label: 'أبيض وأسود باهت', adjust: { grayscale: 100, contrast: 80, brightness: 110 } },
+  { id: 'cyber', label: 'سايبر', adjust: { hue: 180, saturation: 140, contrast: 120 } },
+  { id: 'purple', label: 'بنفسجي', adjust: { hue: -40, saturation: 130, warmth: -10 } },
+  { id: 'rose', label: 'وردي', adjust: { hue: -18, warmth: 20, saturation: 115, brightness: 106 } },
+  { id: 'forest', label: 'غابة', adjust: { hue: 25, saturation: 120, warmth: -10, contrast: 108 } },
+  { id: 'desert', label: 'صحراوي', adjust: { warmth: 75, sepia: 20, saturation: 110, contrast: 108 } },
+  { id: 'ocean', label: 'محيط', adjust: { hue: 12, warmth: -40, saturation: 125 } },
+  { id: 'retro', label: 'ريترو', adjust: { sepia: 40, saturation: 120, contrast: 115, hue: -10, vignette: 30 } },
+  { id: 'hdr', label: 'HDR', adjust: { contrast: 135, saturation: 125, brightness: 102, vignette: 20 } },
+  { id: 'soft', label: 'ناعم', adjust: { contrast: 88, brightness: 108, blur: 0.6 } },
+  { id: 'bright', label: 'مشرق', adjust: { brightness: 120, saturation: 110 } },
+  { id: 'food', label: 'طعام', adjust: { warmth: 30, saturation: 130, contrast: 110, brightness: 105 } },
+  { id: 'portrait', label: 'بورتريه', adjust: { warmth: 15, saturation: 95, contrast: 105, brightness: 106, vignette: 25 } },
+  { id: 'dramatic-bw', label: 'درامي أبيض وأسود', adjust: { grayscale: 100, contrast: 145, vignette: 60 } },
 ];
 
 export function filterPreset(id: string): FilterPreset {
@@ -65,6 +93,26 @@ export const TRANSITIONS: { id: TransitionType; label: string }[] = [
   { id: 'zoom-in', label: 'تكبير' },
   { id: 'wipe', label: 'مسح' },
   { id: 'blur', label: 'ضبابي' },
+  { id: 'slide-down', label: 'انزلاق لأسفل' },
+  { id: 'cover-left', label: 'تغطية يسار' },
+  { id: 'cover-right', label: 'تغطية يمين' },
+  { id: 'zoom-out', label: 'تصغير' },
+  { id: 'cross-zoom', label: 'تكبير متقاطع' },
+  { id: 'spin', label: 'دوران' },
+  { id: 'circle', label: 'دائرة' },
+  { id: 'diamond', label: 'معيّن' },
+  { id: 'heart', label: 'قلب' },
+  { id: 'wipe-right', label: 'مسح من اليمين' },
+  { id: 'wipe-up', label: 'مسح لأعلى' },
+  { id: 'wipe-down', label: 'مسح لأسفل' },
+  { id: 'clock', label: 'ساعة' },
+  { id: 'blinds', label: 'ستائر' },
+  { id: 'doors', label: 'أبواب' },
+  { id: 'whip', label: 'سحب سريع' },
+  { id: 'glitch', label: 'تشويش' },
+  { id: 'flash', label: 'وميض' },
+  { id: 'shake', label: 'اهتزاز' },
+  { id: 'squeeze', label: 'ضغط' },
 ];
 
 export const DEFAULT_TRANSITION_DURATION = 0.6;
@@ -221,6 +269,16 @@ export const MOTION_PRESETS: { id: string; label: string; from: Partial<FrameTra
   { id: 'pan-down', label: 'تحريك لأسفل', from: { zoom: 1.2, offsetY: -0.06 }, to: { zoom: 1.2, offsetY: 0.06 } },
   { id: 'punch', label: 'تقريب سريع', from: { zoom: 1 }, to: { zoom: 1.5 } },
   { id: 'spin', label: 'دوران خفيف', from: { zoom: 1.15, rotation: -4 }, to: { zoom: 1.15, rotation: 4 } },
+  { id: 'zoom-in-big', label: 'تقريب كبير', from: {}, to: { zoom: 1.6 } },
+  { id: 'zoom-out-big', label: 'إبعاد كبير', from: { zoom: 1.6 }, to: {} },
+  { id: 'diag-down', label: 'قطري لأسفل', from: { zoom: 1.25, offsetX: 0.06, offsetY: 0.05 }, to: { zoom: 1.25, offsetX: -0.06, offsetY: -0.05 } },
+  { id: 'diag-up', label: 'قطري لأعلى', from: { zoom: 1.25, offsetX: -0.06, offsetY: -0.05 }, to: { zoom: 1.25, offsetX: 0.06, offsetY: 0.05 } },
+  { id: 'tilt-left', label: 'ميلان يسار', from: { zoom: 1.15, rotation: 0 }, to: { zoom: 1.2, rotation: -6 } },
+  { id: 'tilt-right', label: 'ميلان يمين', from: { zoom: 1.15, rotation: 0 }, to: { zoom: 1.2, rotation: 6 } },
+  { id: 'push-up', label: 'دفع لأعلى', from: { zoom: 1 }, to: { zoom: 1.3, offsetY: 0.05 } },
+  { id: 'drift', label: 'انجراف', from: { zoom: 1.1, offsetX: -0.03 }, to: { zoom: 1.12, offsetX: 0.03 } },
+  { id: 'rotate-zoom', label: 'دوران وتقريب', from: { zoom: 1 }, to: { zoom: 1.35, rotation: 10 } },
+  { id: 'unwind', label: 'فك الدوران', from: { zoom: 1.35, rotation: -10 }, to: {} },
 ];
 
 export const OVERLAY_ANIMS: { id: OverlayAnim; label: string }[] = [
@@ -235,6 +293,13 @@ export const STICKERS: { group: string; items: string[] }[] = [
   { group: 'رموز', items: ['❤️', '💯', '⭐', '✨', '⚡', '💥', '✅', '❌', '⚠️', '💡', '🎯', '🚀'] },
   { group: 'أسهم وأشكال', items: ['⬅️', '➡️', '⬆️', '⬇️', '↩️', '🔴', '🟡', '🟢', '🔵', '⬛', '⭕', '🔻'] },
   { group: 'مناسبات', items: ['🎉', '🎁', '🎂', '🌙', '🕌', '🏆', '📍', '📢', '🛒', '💰', '📸', '🎬'] },
+  { group: 'أيدي', items: ['👍', '👎', '👌', '✌️', '🤞', '🤝', '🙏', '💪', '👉', '👈', '👆', '👇'] },
+  { group: 'قلوب', items: ['💖', '💕', '💔', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '💘', '💝'] },
+  { group: 'طعام', items: ['🍕', '🍔', '🍟', '🌮', '🍩', '🍰', '🍫', '☕', '🍵', '🥤', '🍉', '🍓'] },
+  { group: 'طبيعة', items: ['☀️', '🌈', '🌊', '🌸', '🌴', '🍀', '❄️', '🔥', '⛈️', '🌍', '🌻', '🦋'] },
+  { group: 'رياضة', items: ['⚽', '🏀', '🎾', '🏋️', '🏃', '🚴', '🥇', '🎮', '🎯', '🏁', '⛳', '🥊'] },
+  { group: 'سفر', items: ['✈️', '🚗', '🏖️', '🏔️', '🗺️', '🧳', '🏨', '🚀', '🚢', '🏝️', '🗽', '🕋'] },
+  { group: 'تقنية', items: ['📱', '💻', '⌚', '🎧', '📷', '🎥', '🔋', '💾', '🖥️', '🕹️', '📡', '🤖'] },
 ];
 
 export const CLIP_ANIMS: { id: ClipAnimType; label: string }[] = [
@@ -248,6 +313,15 @@ export const CLIP_ANIMS: { id: ClipAnimType; label: string }[] = [
   { id: 'slide-down', label: 'من الأعلى' },
   { id: 'spin', label: 'دوران' },
   { id: 'shake', label: 'اهتزاز' },
+  { id: 'pop', label: 'قفزة' },
+  { id: 'bounce', label: 'ارتداد' },
+  { id: 'drop', label: 'سقوط' },
+  { id: 'rise', label: 'صعود' },
+  { id: 'swing', label: 'تأرجح' },
+  { id: 'roll', label: 'تدحرج' },
+  { id: 'elastic', label: 'مطاطي' },
+  { id: 'whip-left', label: 'سحب يسار' },
+  { id: 'whip-right', label: 'سحب يمين' },
 ];
 
 export const EFFECTS: { id: EffectType; label: string }[] = [
@@ -258,6 +332,18 @@ export const EFFECTS: { id: EffectType; label: string }[] = [
   { id: 'rgb-split', label: 'فصل ألوان' },
   { id: 'vhs', label: 'شريط قديم' },
   { id: 'strobe', label: 'ستروب' },
+  { id: 'earthquake', label: 'زلزال' },
+  { id: 'zoom-shake', label: 'تقريب واهتزاز' },
+  { id: 'heartbeat', label: 'نبض قلب' },
+  { id: 'bounce', label: 'نطّ' },
+  { id: 'sway', label: 'تمايل' },
+  { id: 'flicker', label: 'رمش' },
+  { id: 'blur-pulse', label: 'ضبابية نابضة' },
+  { id: 'bw-pulse', label: 'أبيض وأسود نابض' },
+  { id: 'rainbow', label: 'قوس قزح' },
+  { id: 'invert', label: 'عكس الألوان' },
+  { id: 'old-film', label: 'فيلم قديم' },
+  { id: 'dreamy', label: 'حلم' },
 ];
 
 export const MASKS: { id: MaskShape; label: string }[] = [
@@ -266,6 +352,11 @@ export const MASKS: { id: MaskShape; label: string }[] = [
   { id: 'heart', label: 'قلب' },
   { id: 'star', label: 'نجمة' },
   { id: 'band', label: 'شريط' },
+  { id: 'triangle', label: 'مثلث' },
+  { id: 'hexagon', label: 'سداسي' },
+  { id: 'diamond', label: 'معيّن' },
+  { id: 'oval', label: 'بيضاوي' },
+  { id: 'arch', label: 'نافذة' },
 ];
 
 export const BLEND_MODES: { id: BlendMode; label: string }[] = [
@@ -288,6 +379,11 @@ export const SPEED_CURVES: { id: string; label: string; points: number[] }[] = [
   { id: 'jump-cut', label: 'قفزة', points: [0.4, 2.5, 0.4, 2.5, 0.4] },
   { id: 'flash-in', label: 'تسارع', points: [0.3, 0.6, 1, 2, 3] },
   { id: 'flash-out', label: 'تباطؤ', points: [3, 2, 1, 0.6, 0.3] },
+  { id: 'slow-mid', label: 'بطء في الوسط', points: [2, 1.2, 0.3, 1.2, 2] },
+  { id: 'fast-mid', label: 'سرعة في الوسط', points: [0.5, 1.5, 3, 1.5, 0.5] },
+  { id: 'pulse', label: 'نبض', points: [2, 0.4, 2, 0.4, 2, 0.4, 2] },
+  { id: 'ramp-up', label: 'تصاعد', points: [0.5, 0.7, 1, 1.5, 2.2] },
+  { id: 'ramp-down', label: 'تنازل', points: [2.2, 1.5, 1, 0.7, 0.5] },
 ];
 
 export interface CaptionStyle {
@@ -319,6 +415,26 @@ export const CAPTION_STYLES: CaptionStyle[] = [
   { id: 'gradient', label: 'تدرّج', font: 'Rubik', fontSize: 82, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 6, shadow: false, background: null, highlight: { style: 'gradient', color: '#f472b6' } },
   { id: 'comic', label: 'كوميك', font: 'Rubik', fontSize: 84, bold: true, color: '#fde047', strokeColor: '#000000', strokeWidth: 9, shadow: false, background: null, highlight: { style: 'comic', color: '#fb923c' } },
   { id: 'cinematic', label: 'سينمائي', font: 'Tajawal', fontSize: 56, bold: false, color: '#f8fafc', strokeColor: '#000000', strokeWidth: 0, shadow: true, background: null, highlight: { style: 'none', color: '#ffffff' } },
+  { id: 'reveal', label: 'ظهور الكلمات', font: 'Cairo', fontSize: 80, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 7, shadow: false, background: null, highlight: { style: 'reveal', color: '#facc15' } },
+  { id: 'bounce', label: 'قفز', font: 'Rubik', fontSize: 86, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 8, shadow: false, background: null, highlight: { style: 'bounce', color: '#4ade80' } },
+  { id: 'outline', label: 'مفرّغ', font: 'Lalezar', fontSize: 96, bold: false, color: '#ffffff', strokeColor: '#000000', strokeWidth: 0, shadow: false, background: null, highlight: { style: 'outline', color: '#ffffff' } },
+  { id: 'marker', label: 'قلم تحديد', font: 'Almarai', fontSize: 76, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 5, shadow: false, background: null, highlight: { style: 'marker', color: '#eab308' } },
+  { id: 'fire', label: 'نار', font: 'Lalezar', fontSize: 98, bold: false, color: '#ffffff', strokeColor: '#000000', strokeWidth: 8, shadow: false, background: null, highlight: { style: 'fire', color: '#f97316' } },
+  { id: 'shadow3d', label: 'ظل ثلاثي', font: 'Rubik', fontSize: 90, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 0, shadow: true, background: null, highlight: { style: 'shadow', color: '#ec4899' } },
+  { id: 'spotlight', label: 'تسليط', font: 'Tajawal', fontSize: 82, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 4, shadow: true, background: null, highlight: { style: 'spotlight', color: '#ffffff' } },
+  { id: 'wave', label: 'موجة', font: 'Changa', fontSize: 80, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 6, shadow: false, background: null, highlight: { style: 'wave', color: '#38bdf8' } },
+  { id: 'slide', label: 'صعود', font: 'Cairo', fontSize: 80, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 0, shadow: true, background: null, highlight: { style: 'slide', color: '#a3e635' } },
+  { id: 'glitch', label: 'تشويش', font: 'Changa', fontSize: 84, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 5, shadow: false, background: null, highlight: { style: 'glitch', color: '#22d3ee' } },
+  { id: 'green', label: 'أخضر قوي', font: 'Lalezar', fontSize: 96, bold: false, color: '#ffffff', strokeColor: '#000000', strokeWidth: 9, shadow: false, background: null, highlight: { style: 'color', color: '#22c55e' } },
+  { id: 'minimal', label: 'بسيط', font: 'Readex Pro', fontSize: 64, bold: true, color: '#94a3b8', strokeColor: '#000000', strokeWidth: 0, shadow: true, background: null, highlight: { style: 'karaoke', color: '#ffffff' } },
+  { id: 'ruqaa', label: 'رقعة', font: 'Aref Ruqaa', fontSize: 88, bold: true, color: '#fef3c7', strokeColor: '#000000', strokeWidth: 0, shadow: true, background: null, highlight: { style: 'color', color: '#f59e0b' } },
+  { id: 'kufi-box', label: 'كوفي أحمر', font: 'Reem Kufi', fontSize: 78, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 0, shadow: true, background: null, highlight: { style: 'box', color: '#dc2626' } },
+  { id: 'pink-pop', label: 'وردي', font: 'Baloo Bhaijaan 2', fontSize: 84, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 6, shadow: false, background: null, highlight: { style: 'pop', color: '#f472b6' } },
+  { id: 'gold-karaoke', label: 'كاريوكي ذهبي', font: 'Amiri', fontSize: 86, bold: true, color: '#a8a29e', strokeColor: '#000000', strokeWidth: 3, shadow: true, background: null, highlight: { style: 'karaoke', color: '#fbbf24' } },
+  { id: 'news', label: 'أخبار', font: 'Tajawal', fontSize: 62, bold: true, color: '#ffffff', strokeColor: '#000000', strokeWidth: 0, shadow: false, background: 'rgba(185,28,28,0.92)', highlight: { style: 'none', color: '#ffffff' } },
+  { id: 'yellow-sub', label: 'ترجمة صفراء', font: 'Cairo', fontSize: 70, bold: true, color: '#facc15', strokeColor: '#000000', strokeWidth: 5, shadow: false, background: null, highlight: { style: 'none', color: '#facc15' } },
+  { id: 'bubble-blue', label: 'فقاعة زرقاء', font: 'Cairo', fontSize: 70, bold: true, color: '#0f172a', strokeColor: '#000000', strokeWidth: 0, shadow: false, background: null, highlight: { style: 'bubble', color: '#38bdf8' } },
+  { id: 'neon-green', label: 'نيون أخضر', font: 'Reem Kufi', fontSize: 80, bold: true, color: '#dcfce7', strokeColor: '#000000', strokeWidth: 0, shadow: false, background: null, highlight: { style: 'neon', color: '#4ade80' } },
 ];
 
 /** The look fields a caption style sets on a text clip (position and timing are left alone). */

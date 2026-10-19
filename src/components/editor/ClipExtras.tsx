@@ -4,10 +4,14 @@ import { cn } from '../../lib/utils';
 import { CLIP_ANIMS, EFFECTS, MASKS, SPEED_CURVES } from '../../editor/constants';
 import { ChromaKey, ClipAnim, ClipAnimType, ClipEffect, ClipMask, CropRect, EffectType, MaskShape } from '../../editor/types';
 import { ColorInput, Section, SliderRow } from './ui';
+import { ClipFxThumb } from './previews';
 
 const pct = (v: number) => `${Math.round(v)}%`;
 const chip = (active: boolean) =>
   cn('rounded-lg px-2 py-1.5 text-[11px] font-semibold transition', active ? 'bg-cyan-400 text-slate-950' : 'bg-white/5 text-slate-300 hover:bg-white/10');
+/** A preview tile: the clip's frame showing the option, with its name. */
+const tile = (active: boolean) =>
+  cn('flex flex-col items-center gap-1 rounded-lg p-1 text-[10px] transition', active ? 'bg-cyan-400/15 text-cyan-100 ring-1 ring-cyan-400' : 'bg-white/5 text-slate-300 hover:bg-white/10');
 
 export function FlipButtons({ flipH, flipV, onChange }: { flipH: boolean; flipV?: boolean; onChange: (h: boolean, v: boolean) => void }) {
   return (
@@ -69,28 +73,33 @@ export function CropSection({
 export function ClipAnimSection({
   animIn,
   animOut,
+  frame,
   onChange,
   onPreview,
 }: {
   animIn: ClipAnim;
   animOut: ClipAnim;
+  frame?: string | null;
   onChange: (which: 'animIn' | 'animOut', a: ClipAnim) => void;
   onPreview: (part: 'in' | 'out') => void;
 }) {
   const row = (which: 'animIn' | 'animOut', anim: ClipAnim, title: string) => (
     <div className="space-y-2">
       <p className="text-[11px] font-semibold text-slate-400">{title}</p>
-      <div className="grid grid-cols-3 gap-1">
+      <div className="grid grid-cols-4 gap-1">
         {CLIP_ANIMS.map((a) => (
           <button
             key={a.id}
             type="button"
-            className={chip(anim.type === a.id)}
+            className={tile(anim.type === a.id)}
             onClick={() => {
               onChange(which, { ...anim, type: a.id as ClipAnimType });
               if (a.id !== 'none') onPreview(which === 'animIn' ? 'in' : 'out');
             }}
           >
+            <span className="block aspect-square w-full overflow-hidden rounded">
+              <ClipFxThumb src={frame} loop={1.8} patch={{ [which]: { type: a.id as ClipAnimType, duration: 0.7 } }} />
+            </span>
             {a.label}
           </button>
         ))}
@@ -108,15 +117,31 @@ export function ClipAnimSection({
   );
 }
 
-export function EffectSection({ effect, onChange, coalesce }: { effect: ClipEffect | null; onChange: (e: ClipEffect | null, key?: string) => void; coalesce: (n: string) => string }) {
+export function EffectSection({
+  effect,
+  frame,
+  onChange,
+  coalesce,
+}: {
+  effect: ClipEffect | null;
+  frame?: string | null;
+  onChange: (e: ClipEffect | null, key?: string) => void;
+  coalesce: (n: string) => string;
+}) {
   return (
     <Section title="تأثيرات الفيديو">
       <div className="grid grid-cols-4 gap-1">
-        <button type="button" className={chip(!effect)} onClick={() => onChange(null)}>
+        <button type="button" className={tile(!effect)} onClick={() => onChange(null)}>
+          <span className="block aspect-square w-full overflow-hidden rounded">
+            <ClipFxThumb src={frame} patch={{}} />
+          </span>
           بدون
         </button>
         {EFFECTS.map((e) => (
-          <button key={e.id} type="button" className={chip(effect?.type === e.id)} onClick={() => onChange({ type: e.id as EffectType, intensity: effect?.intensity ?? 0.6 })}>
+          <button key={e.id} type="button" className={tile(effect?.type === e.id)} onClick={() => onChange({ type: e.id as EffectType, intensity: effect?.intensity ?? 0.6 })}>
+            <span className="block aspect-square w-full overflow-hidden rounded">
+              <ClipFxThumb src={frame} patch={{ effect: { type: e.id as EffectType, intensity: 0.8 } }} />
+            </span>
             {e.label}
           </button>
         ))}
@@ -128,15 +153,31 @@ export function EffectSection({ effect, onChange, coalesce }: { effect: ClipEffe
   );
 }
 
-export function MaskSection({ mask, onChange, coalesce }: { mask: ClipMask | null; onChange: (m: ClipMask | null, key?: string) => void; coalesce: (n: string) => string }) {
+export function MaskSection({
+  mask,
+  frame,
+  onChange,
+  coalesce,
+}: {
+  mask: ClipMask | null;
+  frame?: string | null;
+  onChange: (m: ClipMask | null, key?: string) => void;
+  coalesce: (n: string) => string;
+}) {
   return (
     <Section title="القناع">
-      <div className="grid grid-cols-3 gap-1">
-        <button type="button" className={chip(!mask)} onClick={() => onChange(null)}>
+      <div className="grid grid-cols-4 gap-1">
+        <button type="button" className={tile(!mask)} onClick={() => onChange(null)}>
+          <span className="block aspect-square w-full overflow-hidden rounded">
+            <ClipFxThumb src={frame} patch={{}} />
+          </span>
           بدون
         </button>
         {MASKS.map((m) => (
-          <button key={m.id} type="button" className={chip(mask?.shape === m.id)} onClick={() => onChange({ shape: m.id as MaskShape, size: mask?.size ?? 0.8 })}>
+          <button key={m.id} type="button" className={tile(mask?.shape === m.id)} onClick={() => onChange({ shape: m.id as MaskShape, size: mask?.size ?? 0.8 })}>
+            <span className="block aspect-square w-full overflow-hidden rounded">
+              <ClipFxThumb src={frame} patch={{ mask: { shape: m.id as MaskShape, size: 0.85 } }} />
+            </span>
             {m.label}
           </button>
         ))}
