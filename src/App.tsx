@@ -1,11 +1,10 @@
 import { useState } from 'react';
 import { CaptionEditor } from './components/CaptionEditor';
-import { VideoUploader } from './components/VideoUploader';
+import { HomePage } from './components/HomePage';
 import { VideoEditor } from './components/editor/VideoEditor';
 import { Navbar, PageTab } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { TemplatesPage } from './components/pages/TemplatesPage';
-import { FeaturesPage } from './components/pages/FeaturesPage';
 import { HelpCenterPage } from './components/pages/HelpCenterPage';
 import { PrivacyPolicyPage } from './components/pages/PrivacyPolicyPage';
 import { TermsPage } from './components/pages/TermsPage';
@@ -19,7 +18,8 @@ import { TemplateType } from './types';
 
 function MainApp() {
   const [videoFile, setVideoFile] = useState<File | null>(null);
-  const [currentPage, setCurrentPage] = useState<PageTab>('studio');
+  const [currentPage, setCurrentPage] = useState<PageTab>('home');
+  const [initialFiles, setInitialFiles] = useState<File[] | undefined>();
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateType>('hormozi');
   const [isSavedProjectsOpen, setIsSavedProjectsOpen] = useState<boolean>(false);
   const [loadedProject, setLoadedProject] = useState<SavedProject | null>(null);
@@ -40,17 +40,30 @@ function MainApp() {
   }
 
   if (currentPage === 'editor') {
-    return <VideoEditor onBack={() => setCurrentPage('studio')} />;
+    return (
+      <VideoEditor
+        initialFiles={initialFiles}
+        onBack={() => {
+          setInitialFiles(undefined);
+          setCurrentPage('home');
+        }}
+      />
+    );
   }
 
   // Handle template selection from the templates showcase page
   const handleSelectTemplateToTry = (templateId: TemplateType) => {
     setSelectedTemplate(templateId);
-    setCurrentPage('studio');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setCurrentPage('editor');
   };
 
   const handleNavigate = (page: PageTab) => {
+    if (page === 'features') {
+      // Features live on the home page.
+      setCurrentPage('home');
+      setTimeout(() => document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' }), 50);
+      return;
+    }
     setCurrentPage(page);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -80,29 +93,27 @@ function MainApp() {
       
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col items-center justify-center relative w-full">
-        {currentPage === 'studio' && (
-          <VideoUploader 
-            onVideoSelect={setVideoFile} 
-            onNavigate={handleNavigate}
+        {currentPage === 'home' && (
+          <HomePage
+            onStart={() => handleNavigate('editor')}
+            onStartWithFiles={(files) => {
+              setInitialFiles(files);
+              handleNavigate('editor');
+            }}
           />
         )}
 
         {currentPage === 'templates' && (
           <TemplatesPage 
             onSelectTemplateToTry={handleSelectTemplateToTry}
-            onGoToStudio={() => handleNavigate('studio')}
+            onGoToStudio={() => handleNavigate('editor')}
           />
         )}
 
-        {currentPage === 'features' && (
-          <FeaturesPage 
-            onGoToStudio={() => handleNavigate('studio')}
-          />
-        )}
 
         {currentPage === 'pricing' && (
           <PricingPage 
-            onGoToStudio={() => handleNavigate('studio')}
+            onGoToStudio={() => handleNavigate('editor')}
             onGoToContact={() => handleNavigate('contact')}
           />
         )}
@@ -110,7 +121,7 @@ function MainApp() {
         {currentPage === 'help' && (
           <HelpCenterPage 
             onGoToContact={() => handleNavigate('contact')}
-            onGoToStudio={() => handleNavigate('studio')}
+            onGoToStudio={() => handleNavigate('editor')}
           />
         )}
 
@@ -122,7 +133,7 @@ function MainApp() {
 
         {currentPage === 'terms' && (
           <TermsPage 
-            onGoToStudio={() => handleNavigate('studio')}
+            onGoToStudio={() => handleNavigate('editor')}
           />
         )}
 

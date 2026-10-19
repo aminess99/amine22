@@ -118,9 +118,11 @@ const replaceById = <T extends { id: string }>(list: T[], id: string, fn: (item:
 
 interface VideoEditorProps {
   onBack?: () => void;
+  /** Files picked on the home page, added to the timeline once the saved project loads. */
+  initialFiles?: File[];
 }
 
-export function VideoEditor({ onBack }: VideoEditorProps) {
+export function VideoEditor({ onBack, initialFiles }: VideoEditorProps) {
   const { state: project, update: rawUpdate, undo, redo, reset, canUndo, canRedo } = useHistory<Project>(INITIAL_PROJECT);
   // Every edit goes through here: when clips change, auto captions follow their speech.
   const assetsForCaptions = useRef<Map<string, MediaAsset>>(new Map());
@@ -666,6 +668,15 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     },
     [update, project.clips.length]
   );
+
+  const initialAdded = useRef(false);
+  useEffect(() => {
+    if (!restored || initialAdded.current || !initialFiles?.length) return;
+    initialAdded.current = true;
+    if (project.clips.length) setNotice('أُضيفت ملفاتك إلى نهاية مشروعك الحالي. لبدء مشروع جديد استخدم "مشروع جديد".');
+    addFiles(initialFiles, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restored, initialFiles]);
 
   const addText = useCallback(
     (presetId: string) => {
