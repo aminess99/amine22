@@ -24,3 +24,6 @@ services:
       # Freesound API key for the sound-effects search (CC0 only); set in the dashboard.
       - key: FREESOUND_API_KEY
         sync: false
+      # Vision model that watches videos (scenes, events, highlights, reframe).
+      - key: VISION_MODEL
+        value: google/gemini-3.8-flash

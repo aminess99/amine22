@@ -19,6 +19,47 @@ export interface MediaAsset {
   peaks?: number[];
   /** Detected beat times in seconds (music). */
   beats?: number[];
+  /** Frames per second of a video's picture, for frame stepping and snapping. */
+  fps?: number;
+  /** What the vision model saw in a video (source seconds, refined to frames). */
+  analysis?: VideoAnalysis;
+}
+
+export interface VideoScene {
+  start: number;
+  end: number;
+  description: string;
+  quality: 'good' | 'blurry' | 'dark' | 'shaky' | 'boring';
+  interest: number;
+}
+
+export interface VideoEvent {
+  time: number;
+  label: string;
+  kind: 'cut' | 'action' | 'impact' | 'expression' | 'appear' | 'text' | 'gesture' | 'speech';
+  /** How the time was made frame-accurate. */
+  refined?: 'cut' | 'motion' | 'onset' | 'ai' | 'frame';
+}
+
+export interface VideoHighlight {
+  start: number;
+  end: number;
+  title: string;
+  reason: string;
+  score: number;
+}
+
+export interface VideoAnalysis {
+  summary: string;
+  scenes: VideoScene[];
+  events: VideoEvent[];
+  /** Main subject's position (fractions of the frame), about once a second. */
+  subject: { time: number; x: number; y: number }[];
+  highlights: VideoHighlight[];
+  title: string;
+  description: string;
+  hashtags: string[];
+  thumbnailTime: number;
 }
 
 export type AspectRatio = '9:16' | '16:9' | '1:1' | '4:5' | '3:4';
