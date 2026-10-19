@@ -66,6 +66,7 @@ import { applyTemplate } from '../../editor/templates';
 import { useHistory } from '../../editor/useHistory';
 import { commandContext, executeActions, requestCommand } from '../../editor/commands';
 import { synthesizeSpeech } from '../../editor/tts';
+import { autoSfxTimes, sfxFile } from '../../editor/sfx';
 import {
   GestureDelta,
   applyClipGesture,
@@ -76,6 +77,7 @@ import {
 } from '../../editor/gestures';
 import { usePreviewEngine } from '../../editor/usePreviewEngine';
 import { CommandPanel, CommandState } from './CommandPanel';
+import { SfxPanel } from './SfxPanel';
 import { EditorExportModal } from './EditorExportModal';
 import { AudioInspector, ClipInspector, OverlayInspector, ProjectInspector, TextInspector, TransitionInspector } from './EditorInspector';
 import { CaptionManager, FiltersPanel, MediaPanel, StickersPanel, TemplatesPanel, TextPanel, TextToSpeech, TransitionsPanel, VoiceRecorder } from './EditorPanels';
@@ -1178,6 +1180,17 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
                     const asset = await registerAsset(await synthesizeSpeech(text, voice, style));
                     addAudio(asset);
                     setSheetOpen(false);
+                  }}
+                />
+                <SfxPanel
+                  onAddBuiltIn={async (id) => addAudio(await registerAsset(await sfxFile(id)))}
+                  onAddFile={async (file) => addAudio(await registerAsset(file))}
+                  onAuto={async (id, where) => {
+                    const moments = where === 'cuts' ? layout.slice(1).map((l) => l.start) : project.texts.filter((t) => !t.words?.length).map((t) => t.start);
+                    if (!moments.length) throw new Error(where === 'cuts' ? 'أضف مقطعين على الأقل ليكون هناك انتقال.' : 'لا توجد نصوص أو ملصقات بعد.');
+                    const asset = await registerAsset(await sfxFile(id));
+                    const clips = autoSfxTimes(id, moments).map((t) => ({ ...createAudioClip(asset, t), volume: 0.8 }));
+                    update((p) => ({ ...p, audios: [...p.audios, ...clips] }));
                   }}
                 />
               </div>

@@ -21,3 +21,6 @@ services:
       # Text-to-speech model (returns PCM; the server wraps it as WAV).
       - key: TTS_MODEL
         value: google/gemini-3.8-flash-lite-tts
+      # Freesound API key for the sound-effects search (CC0 only); set in the dashboard.
+      - key: FREESOUND_API_KEY
+        sync: false

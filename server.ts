@@ -383,6 +383,97 @@ async function startServer() {
     }
   });
 
+  // Sound effects from Freesound, limited to CC0 (no attribution, commercial use allowed).
+  // Arabic searches are translated to English keywords first, since Freesound tags are English.
+  const sfxHits = new Map<string, number[]>();
+  const sfxTranslations = new Map<string, string>();
+  const sfxLimited = (req: express.Request, limit: number) => {
+    const ip = req.ip || "unknown";
+    const now = Date.now();
+    const hits = (sfxHits.get(ip) ?? []).filter((t) => now - t < 60_000);
+    if (hits.length >= limit) return true;
+    hits.push(now);
+    sfxHits.set(ip, hits);
+    return false;
+  };
+  const toEnglishKeywords = async (query: string) => {
+    if (!/[؀-ۿ]/.test(query)) return query;
+    const cached = sfxTranslations.get(query);
+    if (cached) return cached;
+    const client = getOpenRouterClient();
+    if (!client) return query;
+    try {
+      const response = await client.chat.completions.create({
+        model: process.env.COMMAND_MODEL || "google/gemini-2.5-flash",
+        temperature: 0,
+        max_tokens: 20,
+        messages: [
+          { role: "system", content: "Translate the sound-effect search into 1-3 English keywords for a sound library. Reply with the keywords only." },
+          { role: "user", content: query },
+        ],
+      });
+      const words = (response.choices[0]?.message?.content ?? "").replace(/[^a-zA-Z0-9 -]/g, " ").trim().slice(0, 60);
+      if (words) sfxTranslations.set(query, words);
+      return words || query;
+    } catch {
+      return query;
+    }
+  };
+
+  app.get("/api/sfx/search", async (req, res) => {
+    const key = process.env.FREESOUND_API_KEY;
+    if (!key) return res.status(503).json({ error: "FREESOUND_API_KEY is not set" });
+    const q = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 80) : "";
+    if (!q) return res.status(400).json({ error: "Missing query" });
+    if (sfxLimited(req, 30)) return res.status(429).json({ error: "Too many requests" });
+    try {
+      const query = await toEnglishKeywords(q);
+      const url = new URL("https://freesound.org/apiv2/search/text/");
+      url.searchParams.set("query", query);
+      url.searchParams.set("filter", 'license:"Creative Commons 0" duration:[0 TO 30]');
+      url.searchParams.set("fields", "id,name,duration,username");
+      url.searchParams.set("page_size", "24");
+      url.searchParams.set("token", key);
+      const response = await fetch(url);
+      if (!response.ok) {
+        console.error("Freesound search failed:", response.status, (await response.text()).slice(0, 300));
+        return res.status(502).json({ error: "Search failed" });
+      }
+      const data = await response.json();
+      res.json({
+        query,
+        results: (data.results ?? []).map((s: any) => ({ id: s.id, name: String(s.name ?? ""), duration: Number(s.duration) || 0, user: String(s.username ?? "") })),
+      });
+    } catch (error) {
+      console.error("Freesound search failed:", error);
+      res.status(502).json({ error: "Search failed" });
+    }
+  });
+
+  app.get("/api/sfx/file/:id", async (req, res) => {
+    const key = process.env.FREESOUND_API_KEY;
+    if (!key) return res.status(503).json({ error: "FREESOUND_API_KEY is not set" });
+    if (!/^\d{1,10}$/.test(req.params.id)) return res.status(400).json({ error: "Bad id" });
+    if (sfxLimited(req, 60)) return res.status(429).json({ error: "Too many requests" });
+    try {
+      // Look the sound up again so only CC0 sounds are ever served.
+      const info = await fetch(`https://freesound.org/apiv2/sounds/${req.params.id}/?fields=license,previews&token=${encodeURIComponent(key)}`);
+      if (!info.ok) return res.status(502).json({ error: "Lookup failed" });
+      const sound = await info.json();
+      if (!/publicdomain\/zero|Creative Commons 0/i.test(String(sound.license ?? ""))) return res.status(403).json({ error: "Not CC0" });
+      const preview = sound.previews?.["preview-hq-mp3"];
+      if (typeof preview !== "string" || !preview.startsWith("https://")) return res.status(502).json({ error: "No preview" });
+      const audio = await fetch(preview);
+      if (!audio.ok) return res.status(502).json({ error: "Download failed" });
+      res.setHeader("Content-Type", "audio/mpeg");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      res.send(Buffer.from(await audio.arrayBuffer()));
+    } catch (error) {
+      console.error("Freesound download failed:", error);
+      res.status(502).json({ error: "Download failed" });
+    }
+  });
+
   // SEO: robots.txt for search engines
   app.get("/robots.txt", (req, res) => {
     res.type("text/plain");

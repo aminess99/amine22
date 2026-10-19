@@ -24,6 +24,7 @@ import {
 } from './constants';
 import { MAX_REVERSE_SECONDS, reverseVideo } from './reverse';
 import { computePeaks } from './media';
+import { SFX_LIST, autoSfxTimes, freesoundFile, searchFreesound, sfxFile } from './sfx';
 import { PROJECT_TEMPLATES, applyTemplate } from './templates';
 import { MAX_TTS_CHARS, TTS_STYLES, TTS_VOICES, synthesizeSpeech } from './tts';
 import { FONT_LIST } from './fonts';
@@ -263,6 +264,14 @@ export function describeAction(a: EditAction): string | null {
       const tpl = PROJECT_TEMPLATES.find((x) => x.id === a.template);
       return tpl ? `تطبيق قالب "${tpl.label}" على الفيديو` : null;
     }
+    case 'sfx': {
+      const def = SFX_LIST.find((x) => x.id === a.sound);
+      if (!def) return null;
+      const where = a.where === 'cuts' ? 'عند كل انتقال' : a.where === 'texts' ? 'عند ظهور كل نص' : `عند ${(a.at ?? [0]).map((t) => formatTime(num(t, 0, 1e5, 0), true)).join('، ')}`;
+      return `مؤثر "${def.label}" ${where}`;
+    }
+    case 'sfx_search':
+      return typeof a.query === 'string' && a.query.trim() ? `صوت "${a.query}" من مكتبة Freesound عند ${(a.at ?? [0]).map((t) => formatTime(num(t, 0, 1e5, 0), true)).join('، ')}` : null;
     case 'seek':
       return `الانتقال إلى ${formatTime(num(a.time, 0, 1e5, 0))}`;
     case 'play':
@@ -878,6 +887,39 @@ export async function executeActions(
     const style = known(TTS_STYLES, a.style) ? a.style : TTS_STYLES[0].id;
     const speech = await register(await synthesizeSpeech(a.text.trim().slice(0, MAX_TTS_CHARS), voice, style));
     p = { ...p, audios: [...p.audios, createAudioClip(speech, num(a.start, 0, 1e5, 0))] };
+  }
+
+  // Sound effects, placed on the final cut.
+  for (const a of actions) {
+    if (a.op !== 'sfx' && a.op !== 'sfx_search') continue;
+    const layout = layoutMainTrack(p.clips, assets);
+    let asset: MediaAsset;
+    let times: number[];
+    if (a.op === 'sfx') {
+      if (!SFX_LIST.some((x) => x.id === a.sound)) continue;
+      const moments =
+        a.where === 'cuts' ? layout.slice(1).map((l) => l.start)
+        : a.where === 'texts' ? p.texts.filter((t) => !isCaption(t)).map((t) => t.start)
+        : (Array.isArray(a.at) && a.at.length ? a.at : [0]).map((t) => num(t, 0, 1e5, 0));
+      if (!moments.length) {
+        note(a.where === 'cuts' ? 'لا توجد انتقالات لإضافة المؤثر عندها.' : 'لا توجد نصوص لإضافة المؤثر عندها.');
+        continue;
+      }
+      asset = await register(await sfxFile(a.sound));
+      times = a.where ? autoSfxTimes(a.sound, moments) : moments;
+    } else {
+      if (typeof a.query !== 'string' || !a.query.trim()) continue;
+      onStatus(`جاري البحث عن "${a.query}"...`, null);
+      const hits = await searchFreesound(a.query.trim());
+      if (!hits.length) {
+        note(`لم أجد صوتاً مناسباً لـ "${a.query}".`);
+        continue;
+      }
+      asset = await register(await freesoundFile(hits[0]));
+      times = (Array.isArray(a.at) && a.at.length ? a.at : [0]).map((t) => num(t, 0, 1e5, 0));
+    }
+    const volume = num(a.volume, 0.05, 1, 0.8);
+    p = { ...p, audios: [...p.audios, ...times.slice(0, 50).map((t) => ({ ...createAudioClip(asset, t), volume }))] };
   }
 
   // 6. Captions: delete, generate on the final cut, then restyle.

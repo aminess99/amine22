@@ -21,6 +21,7 @@ import {
 import { FONT_GROUPS, FONT_LIST } from './fonts';
 import { TEXT_TEMPLATES } from './textTemplates';
 import { PROJECT_TEMPLATES } from './templates';
+import { SFX_LIST } from './sfx';
 
 /** Look and motion fields shared by add_text and text_style. */
 export interface TextStyleFields {
@@ -126,6 +127,8 @@ export type EditAction =
   | { op: 'pip_layer'; pip: number; to: 'front' | 'back' | 'forward' | 'backward' }
   | { op: 'caption_line'; line: number; text?: string; delete?: boolean }
   | { op: 'project_template'; template: string }
+  | { op: 'sfx'; sound: string; at?: number[]; where?: 'cuts' | 'texts'; volume?: number }
+  | { op: 'sfx_search'; query: string; at?: number[]; volume?: number }
   | { op: 'seek'; time: number }
   | { op: 'play' }
   | { op: 'export' };
@@ -201,6 +204,8 @@ Actions (use only these):
 - {"op":"pip_layer","pip":n,"to":"front"|"back"|"forward"|"backward"}  stacking order of picture-in-picture layers
 - {"op":"caption_line","line":n,"text":"..."}  fix the words of one caption line (n from "captions"); {"delete":true} removes it
 - {"op":"project_template","template":id}  restyle the whole video in one go: ${PROJECT_TEMPLATES.map((t) => `${t.id} (${t.label}: ${t.description})`).join(', ')}
+- {"op":"sfx","sound":id,"at":[seconds…] or "where":"cuts"|"texts","volume":0-1}  built-in sound effect at those times; "cuts" = on every transition between clips, "texts" = when each text appears. Sounds: ${SFX_LIST.map((x) => `${x.id} (${x.label})`).join(', ')}
+- {"op":"sfx_search","query":"english keywords","at":[seconds…],"volume":0-1}  a real recorded sound from the Freesound library (applause, laughter, rain, door, crowd, car…) when no built-in sound fits
 - {"op":"seek","time":s}   {"op":"play"}   {"op":"export"}
 
 Rules: use the fewest actions that do exactly what was asked. Never invent clip numbers that do not exist. Clamp values to the ranges above.
