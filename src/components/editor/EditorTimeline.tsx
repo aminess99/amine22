@@ -87,6 +87,23 @@ function startDrag(
   window.addEventListener('pointercancel', up);
 }
 
+/**
+ * Runs `fn` when the pointer lifts without travelling, i.e. a tap. If the
+ * browser takes the gesture over for scrolling it sends pointercancel instead.
+ */
+function onTap(e: React.PointerEvent, fn: () => void) {
+  e.stopPropagation();
+  const { clientX: x, clientY: y, pointerId } = e;
+  const end = (ev: PointerEvent) => {
+    if (ev.pointerId !== pointerId) return;
+    window.removeEventListener('pointerup', end);
+    window.removeEventListener('pointercancel', end);
+    if (ev.type === 'pointerup' && !pinching && Math.hypot(ev.clientX - x, ev.clientY - y) < 10) fn();
+  };
+  window.addEventListener('pointerup', end);
+  window.addEventListener('pointercancel', end);
+}
+
 function Waveform({ peaks, from, to, width }: { peaks?: number[]; from: number; to: number; width: number }) {
   const path = useMemo(() => {
     if (!peaks?.length || width <= 0) return '';
@@ -286,8 +303,30 @@ export function EditorTimeline(props: TimelineProps) {
     window.addEventListener('pointerup', up);
   };
 
+  // On phones a finger on the tracks scrolls the timeline: empty space seeks on a
+  // tap, and an item has to be tapped (selected) before it can be dragged.
+  const onLaneDown = (e: React.PointerEvent) => {
+    if (e.target !== e.currentTarget) return;
+    if (e.pointerType === 'touch') {
+      onTap(e, () => {
+        onSelect(null);
+        onSeek(timeAtClientX(e.clientX));
+      });
+      return;
+    }
+    onSelect(null);
+    scrub(e);
+  };
+  /** True when a touch lands on an unselected item: it then selects on tap and otherwise scrolls. */
+  const tapToSelect = (e: React.PointerEvent, sel: NonNullable<Selection>) => {
+    if (e.pointerType !== 'touch' || (selection?.kind === sel.kind && selection.id === sel.id)) return false;
+    onTap(e, () => onSelect(sel));
+    return true;
+  };
+
   // ---------- main track ----------
   const onMainPointerDown = (e: React.PointerEvent, lc: LaidOutClip) => {
+    if (tapToSelect(e, { kind: 'clip', id: lc.clip.id })) return;
     onSelect({ kind: 'clip', id: lc.clip.id });
     const centre = lc.start + lc.duration / 2;
     let target = lc.index;
@@ -337,6 +376,7 @@ export function EditorTimeline(props: TimelineProps) {
   };
 
   const onTextPointerDown = (e: React.PointerEvent, t: TextClip, mode: 'move' | 'start' | 'end') => {
+    if (tapToSelect(e, { kind: 'text', id: t.id })) return;
     onSelect({ kind: 'text', id: t.id });
     const key = `text-${t.id}-${performance.now()}`;
     const items = project.texts.map((x) => ({ id: x.id, s: x.start, e: x.start + x.duration }));
@@ -357,6 +397,7 @@ export function EditorTimeline(props: TimelineProps) {
   };
 
   const onEffectPointerDown = (e: React.PointerEvent, fx: EffectItem, mode: 'move' | 'start' | 'end') => {
+    if (tapToSelect(e, { kind: 'effect', id: fx.id })) return;
     onSelect({ kind: 'effect', id: fx.id });
     const key = `effect-${fx.id}-${performance.now()}`;
     const items = effects.map((x) => ({ id: x.id, s: x.start, e: x.start + x.duration }));
@@ -412,12 +453,14 @@ export function EditorTimeline(props: TimelineProps) {
   };
 
   const onAudioPointerDown = (e: React.PointerEvent, a: AudioClip, mode: 'move' | 'start' | 'end') => {
+    if (tapToSelect(e, { kind: 'audio', id: a.id })) return;
     onSelect({ kind: 'audio', id: a.id });
     const asset = assets.get(a.assetId);
     dragRanged(e, a, mode, project.audios, asset?.duration ?? a.outPoint, false, onUpdateAudio);
   };
 
   const onOverlayPointerDown = (e: React.PointerEvent, o: OverlayClip, mode: 'move' | 'start' | 'end') => {
+    if (tapToSelect(e, { kind: 'overlay', id: o.id })) return;
     onSelect({ kind: 'overlay', id: o.id });
     const asset = assets.get(o.assetId);
     dragRanged(e, o, mode, project.overlays, asset ? overlayMaxOut(asset) : o.outPoint, asset?.kind === 'image', onUpdateOverlay);
@@ -474,10 +517,10 @@ export function EditorTimeline(props: TimelineProps) {
           ))}
         </div>
 
-        <div className="space-y-1.5 py-2" onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); scrub(e); } }}>
+        <div className="space-y-1.5 py-2" onPointerDown={onLaneDown}>
           {/* Effects track: effects over everything below for a while */}
           {effects.length > 0 && (
-            <div className="relative" style={{ height: effectTrackH }} onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); scrub(e); } }}>
+            <div className="relative" style={{ height: effectTrackH }} onPointerDown={onLaneDown}>
               {effects.map((fx) => {
                 const lane = effectLanes.lanes.get(fx.id) ?? 0;
                 const selected = selection?.kind === 'effect' && selection.id === fx.id;
@@ -486,7 +529,7 @@ export function EditorTimeline(props: TimelineProps) {
                     key={fx.id}
                     onPointerDown={(e) => onEffectPointerDown(e, fx, 'move')}
                     className={cn(
-                      'absolute flex cursor-grab touch-none items-center overflow-hidden rounded-md bg-gradient-to-r from-amber-500/90 to-pink-500/90 text-[11px] font-semibold text-white active:cursor-grabbing',
+                      'absolute flex cursor-grab', selected && 'touch-none', ' items-center overflow-hidden rounded-md bg-gradient-to-r from-amber-500/90 to-pink-500/90 text-[11px] font-semibold text-white active:cursor-grabbing',
                       selected ? 'ring-2 ring-white' : 'hover:brightness-110'
                     )}
                     style={{ left: PAD + fx.start * pps, width: Math.max(6, fx.duration * pps), top: 4 + lane * LANE_H, height: LANE_H - 4 }}
@@ -502,7 +545,7 @@ export function EditorTimeline(props: TimelineProps) {
           )}
 
           {/* Text track */}
-          <div className="relative" style={{ height: textTrackH }} onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); scrub(e); } }}>
+          <div className="relative" style={{ height: textTrackH }} onPointerDown={onLaneDown}>
             {project.texts.length === 0 && (
               <button
                 type="button"
@@ -521,7 +564,7 @@ export function EditorTimeline(props: TimelineProps) {
                   key={t.id}
                   onPointerDown={(e) => onTextPointerDown(e, t, 'move')}
                   className={cn(
-                    'absolute flex cursor-grab touch-none items-center overflow-hidden rounded-md bg-fuchsia-600/80 text-[11px] font-semibold text-white active:cursor-grabbing',
+                    'absolute flex cursor-grab', selected && 'touch-none', ' items-center overflow-hidden rounded-md bg-fuchsia-600/80 text-[11px] font-semibold text-white active:cursor-grabbing',
                     selected ? 'ring-2 ring-white' : 'hover:bg-fuchsia-500/90'
                   )}
                   style={{ left: PAD + t.start * pps, width: Math.max(6, t.duration * pps), top: 4 + lane * LANE_H, height: LANE_H - 4 }}
@@ -537,7 +580,7 @@ export function EditorTimeline(props: TimelineProps) {
 
           {/* Overlay track (picture in picture) */}
           {project.overlays.length > 0 && (
-            <div className="relative" style={{ height: overlayTrackH }} onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); scrub(e); } }}>
+            <div className="relative" style={{ height: overlayTrackH }} onPointerDown={onLaneDown}>
               {project.overlays.map((o) => {
                 const asset = assets.get(o.assetId);
                 const lane = overlayLanes.lanes.get(o.id) ?? 0;
@@ -547,7 +590,7 @@ export function EditorTimeline(props: TimelineProps) {
                     key={o.id}
                     onPointerDown={(e) => onOverlayPointerDown(e, o, 'move')}
                     className={cn(
-                      'absolute flex cursor-grab touch-none items-center overflow-hidden rounded-md bg-orange-600/80 bg-repeat-x text-[11px] font-semibold text-white active:cursor-grabbing',
+                      'absolute flex cursor-grab', selected && 'touch-none', ' items-center overflow-hidden rounded-md bg-orange-600/80 bg-repeat-x text-[11px] font-semibold text-white active:cursor-grabbing',
                       selected ? 'ring-2 ring-white' : 'hover:bg-orange-500/90'
                     )}
                     style={{
@@ -570,7 +613,7 @@ export function EditorTimeline(props: TimelineProps) {
           )}
 
           {/* Main track */}
-          <div className="relative" style={{ height: MAIN_H }} onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); scrub(e); } }}>
+          <div className="relative" style={{ height: MAIN_H }} onPointerDown={onLaneDown}>
             {layout.length === 0 && (
               <div
                 className="absolute inset-y-0 flex items-center rounded-lg border border-dashed border-white/15 px-4 text-xs text-slate-500"
@@ -588,7 +631,7 @@ export function EditorTimeline(props: TimelineProps) {
                   key={lc.clip.id}
                   onPointerDown={(e) => onMainPointerDown(e, lc)}
                   className={cn(
-                    'absolute inset-y-0 cursor-grab touch-none overflow-hidden rounded-md border-2 bg-slate-800 bg-repeat-x active:cursor-grabbing',
+                    'absolute inset-y-0 cursor-grab', selected && 'touch-none', ' overflow-hidden rounded-md border-2 bg-slate-800 bg-repeat-x active:cursor-grabbing',
                     selected ? 'border-white' : 'border-slate-900 hover:border-slate-500',
                     isDragging && 'z-20 opacity-80 shadow-2xl'
                   )}
@@ -653,7 +696,7 @@ export function EditorTimeline(props: TimelineProps) {
           </div>
 
           {/* Audio track */}
-          <div className="relative" style={{ height: audioTrackH }} onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); scrub(e); } }}>
+          <div className="relative" style={{ height: audioTrackH }} onPointerDown={onLaneDown}>
             {project.audios.length === 0 && (
               <button
                 type="button"
@@ -674,7 +717,7 @@ export function EditorTimeline(props: TimelineProps) {
                   key={a.id}
                   onPointerDown={(e) => onAudioPointerDown(e, a, 'move')}
                   className={cn(
-                    'absolute cursor-grab touch-none overflow-hidden rounded-md bg-emerald-700/80 text-emerald-200 active:cursor-grabbing',
+                    'absolute cursor-grab', selected && 'touch-none', ' overflow-hidden rounded-md bg-emerald-700/80 text-emerald-200 active:cursor-grabbing',
                     selected ? 'ring-2 ring-white' : 'hover:bg-emerald-600/80'
                   )}
                   style={{ left: PAD + a.start * pps, width, top: 4 + lane * LANE_H, height: LANE_H - 4 }}

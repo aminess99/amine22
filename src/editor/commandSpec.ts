@@ -45,9 +45,25 @@ export interface TextStyleFields {
   y?: number;
   rotation?: number;
   duration?: number;
+  /** Plain texts only: when it appears (timeline seconds). */
+  start?: number;
   anim_in?: string;
   anim_out?: string;
   anim_loop?: string;
+  align?: 'left' | 'center' | 'right';
+  line_height?: number;
+  /** Captions only: colour of the word being spoken. */
+  highlight_color?: string;
+}
+
+/** One keyframe: `at` is the fraction (0..1) through the clip or text. */
+export interface KeyframeSpec {
+  at: number;
+  zoom?: number;
+  x?: number;
+  y?: number;
+  size?: number;
+  rotation?: number;
 }
 
 /** Clip numbers (1-based, as listed in the context) or every clip. */
@@ -79,7 +95,7 @@ export type EditAction =
   | { op: 'effect'; clips: ClipTarget; effect: string | null; intensity?: number }
   | { op: 'motion'; clips: ClipTarget; preset: string | null }
   | { op: 'speed_curve'; clips: ClipTarget; curve: string | null }
-  | { op: 'transform'; clips: ClipTarget; zoom?: number; rotation?: number; fit?: 'contain' | 'cover'; flip_h?: boolean; flip_v?: boolean }
+  | { op: 'transform'; clips: ClipTarget; zoom?: number; rotation?: number; fit?: 'contain' | 'cover'; flip_h?: boolean; flip_v?: boolean; x?: number; y?: number }
   | { op: 'aspect'; aspect: string }
   | { op: 'background'; color: string }
   | ({ op: 'add_text'; text: string; start: number; duration?: number; preset?: string } & TextStyleFields)
@@ -92,7 +108,7 @@ export type EditAction =
   | { op: 'caption_size'; percent: number }
   | { op: 'caption_emoji'; on: boolean }
   | { op: 'delete_captions' }
-  | { op: 'remove_silence'; clips: ClipTarget }
+  | { op: 'remove_silence'; clips?: ClipTarget; audios?: ClipTarget }
   | { op: 'mask'; clips: ClipTarget; shape: string | null; size?: number }
   | { op: 'chroma'; clips?: ClipTarget; pips?: ClipTarget; color?: string; similarity?: number; smoothness?: number; off?: boolean }
   | { op: 'freeze'; time: number; seconds?: number }
@@ -117,6 +133,8 @@ export type EditAction =
       flip_h?: boolean;
       volume?: number;
       muted?: boolean;
+      duration?: number;
+      trim_start?: number;
     }
   | { op: 'delete_pip'; pips: ClipTarget }
   | { op: 'tts'; text: string; voice?: string; style?: string; start?: number }
@@ -125,6 +143,9 @@ export type EditAction =
   | { op: 'clip_duration'; clips: ClipTarget; seconds: number }
   | { op: 'audio_edit'; audios: ClipTarget; start?: number; trim_start?: number; duration?: number }
   | { op: 'delete_audio'; audios: ClipTarget }
+  | { op: 'audio_split'; audios: ClipTarget; time: number }
+  | { op: 'audio_delete_range'; audios: ClipTarget; start: number; end: number }
+  | { op: 'duplicate'; texts?: ClipTarget; pips?: ClipTarget; audios?: ClipTarget }
   | { op: 'pip_layer'; pip: number; to: 'front' | 'back' | 'forward' | 'backward' }
   | { op: 'caption_line'; line: number; text?: string; delete?: boolean }
   | { op: 'project_template'; template: string }
@@ -134,6 +155,15 @@ export type EditAction =
   | { op: 'make_short'; start: number; end: number }
   | { op: 'clip_fx'; clips?: ClipTarget; pips?: ClipTarget; add?: { type: string; intensity?: number; speed?: number; color?: string }[]; remove?: string[]; clear?: boolean }
   | { op: 'fx_track'; type: string; start: number; duration?: number; intensity?: number; speed?: number; color?: string }
+  | { op: 'fx_track_edit'; items: ClipTarget; type?: string; start?: number; duration?: number; intensity?: number; speed?: number; color?: string; delete?: boolean }
+  | { op: 'split_item'; texts?: ClipTarget; pips?: ClipTarget; time: number }
+  | { op: 'keyframes'; clips?: ClipTarget; texts?: ClipTarget; keys?: KeyframeSpec[]; clear?: boolean }
+  | { op: 'duck'; audios: ClipTarget; level?: number; off?: boolean }
+  | { op: 'caption_regroup'; words_per_line: number }
+  | { op: 'caption_rewrite'; instruction: string }
+  | { op: 'analyze' }
+  | { op: 'undo'; steps?: number }
+  | { op: 'redo'; steps?: number }
   | { op: 'seek'; time: number }
   | { op: 'play' }
   | { op: 'export' };
@@ -151,8 +181,9 @@ export function commandSystemPrompt(): string {
   return `You control a mobile video editor (like CapCut). The user writes a command, usually in Arabic (any dialect).
 Turn it into editing actions. Reply with ONLY a JSON object: {"reply": "...", "actions": [...]}.
 "reply" is one short sentence in the user's language describing what will happen, or asking for what is missing / explaining what is not possible (then actions is []).
+When the user asks for writing rather than editing (a title, description, hashtags, a script, ideas for the video), write it in "reply" (it may then be several lines) with actions [] — or with add_text if they want it on the video.
 
-The project context is JSON: clips are on the main track, numbered from 1 in play order, with timeline start/end in seconds. "cut" N is the transition INTO clip N (between clip N-1 and N; cut 1 does nothing). Audio tracks, texts, "pips" (picture-in-picture videos/images floating above the main track) and the "media" library (files the user imported) are numbered from 1 too. "captions" are word-timed subtitle lines with their timeline times; use them to find the moment where something is said.
+The project context is JSON: clips are on the main track, numbered from 1 in play order, with timeline start/end in seconds. "cut" N is the transition INTO clip N (between clip N-1 and N; cut 1 does nothing). Audio tracks, texts, "pips" (picture-in-picture videos/images floating above the main track) and the "media" library (files the user imported) are numbered from 1 too, and so are "effects" (items on the effects track). "captions" are word-timed subtitle lines with their timeline times; use them to find the moment where something is said.
 Times are timeline seconds as they are NOW, before any action. Clip numbers also refer to the current list.
 Fields "clips", "cuts", "audios", "texts", "pips" take an array of numbers or the string "all". If the user selected something and says "this", use the selection.
 
@@ -172,11 +203,11 @@ Actions (use only these):
 - {"op":"effect","clips":…,"effect":id or null,"intensity":0-1}  effects: ${ids(EFFECTS)}
 - {"op":"motion","clips":…,"preset":id or null}  camera motion: ${ids(MOTION_PRESETS)}
 - {"op":"speed_curve","clips":…,"curve":id or null}  curves: ${ids(SPEED_CURVES)}
-- {"op":"transform","clips":…,"zoom":0.2-5,"rotation":degrees,"fit":"contain"|"cover","flip_h":bool,"flip_v":bool}
+- {"op":"transform","clips":…,"zoom":0.2-5,"rotation":degrees,"fit":"contain"|"cover","flip_h":bool,"flip_v":bool,"x":-1..1,"y":-1..1}  x/y move the picture inside the frame (fractions of the frame; y negative = up)
 - {"op":"aspect","aspect":one of ${Object.keys(ASPECT_SIZES).join(', ')}}  (9:16 TikTok/Reels/Shorts, 16:9 YouTube, 1:1 square, 4:5 Instagram post)
 - {"op":"background","color":"#rrggbb"}
 - {"op":"add_text","text":"...","start":s,"duration":s,"preset":id, plus any text style field below}  presets: ${ids(TEXT_PRESETS)}
-- {"op":"text_style","texts":… or "captions", any of: "text","font","size" (px, 20-300; titles ~120, body ~60),"bold","color","gradient" (second colour or null),"glow" (colour or null),"stroke_color","stroke_width" (0-16),"background" (colour or null),"bg_shape" (${TEXT_BG_SHAPES.map((b) => b.id).join(', ')}),"shadow","extrude" (3D depth 0-0.25),"extrude_color","opacity" 0-1,"x","y" (0-1),"rotation","duration","anim_in","anim_out","anim_loop"}
+- {"op":"text_style","texts":… or "captions", any of: "text","start" (plain texts: when it appears, timeline seconds),"font","size" (px, 20-300; titles ~120, body ~60),"bold","color","gradient" (second colour or null),"glow" (colour or null),"stroke_color","stroke_width" (0-16),"background" (colour or null),"bg_shape" (${TEXT_BG_SHAPES.map((b) => b.id).join(', ')}),"shadow","extrude" (3D depth 0-0.25),"extrude_color","opacity" 0-1,"x","y" (0-1),"rotation","duration","anim_in","anim_out","anim_loop","align" ("left"|"center"|"right"),"line_height" (0.8-2.5),"highlight_color" (captions only: colour of the word being spoken)}
   Fonts (family, style): ${FONT_LIST.map((f) => `${f.family} (${FONT_GROUPS.find((g) => g.id === f.group)!.label})`).join(', ')}
   anim_in: ${ids(TEXT_ANIMS_IN)}
   anim_out: ${ids(TEXT_ANIMS_OUT)}
@@ -189,7 +220,7 @@ Actions (use only these):
 - {"op":"caption_size","percent":50-200}
 - {"op":"caption_emoji","on":bool}
 - {"op":"delete_captions"}
-- {"op":"remove_silence","clips":…}  cut silent parts
+- {"op":"remove_silence","clips":… and/or "audios":…}  cut silent parts: of video clips ("clips"), or of music/voice tracks ("audios", the pieces close up so the track gets shorter)
 - {"op":"mask","clips":…,"shape":id or null,"size":0.1-1.5}  masks: ${ids(MASKS)}
 - {"op":"chroma","clips":… or "pips":…,"color":"#00ff00","similarity":0-1,"smoothness":0-1}  green screen: remove a colour. {"off":true} removes it. Usually on a pip placed over another video.
 - {"op":"freeze","time":s,"seconds":0.5-10}  insert a frozen frame at that moment
@@ -198,14 +229,18 @@ Actions (use only these):
 - {"op":"beat_sync","audio":n,"every":1-4}  cut the clips on the beats of that music track (every Nth beat). A track added by add_media in the same command gets the next number.
 - {"op":"add_media","media":n,"at":"end"|"start"|"playhead"|seconds}  put a library file on the main track (videos/images) or as a new audio track (audio, "at" = start time)
 - {"op":"add_pip","media":n,"start":s,"x":0-1,"y":0-1,"scale":0.1-1,"shape":"rect"|"rounded"|"circle","chroma":true or "#rrggbb"}  add a library file as picture-in-picture; "chroma" removes its green (or given) background right away
-- {"op":"pip","pips":…, any of "start","x","y" (centre, 0-1),"scale" (width fraction 0.1-1),"rotation","opacity" 0-1,"shape","blend" (${BLEND_MODES.map((b) => b.id).join(', ')}),"anim_in"/"anim_out" (${OVERLAY_ANIMS.map((b) => b.id).join(', ')}),"flip_h","volume" 0-1,"muted"}
+- {"op":"pip","pips":…, any of "start","x","y" (centre, 0-1),"scale" (width fraction 0.1-1),"rotation","opacity" 0-1,"shape","blend" (${BLEND_MODES.map((b) => b.id).join(', ')}),"anim_in"/"anim_out" (${OVERLAY_ANIMS.map((b) => b.id).join(', ')}),"flip_h","volume" 0-1,"muted","duration" (how long it stays, seconds),"trim_start" (skip the first seconds of its video)}
 - {"op":"delete_pip","pips":…}
+- {"op":"split_item","texts":… and/or "pips":…,"time":s}  cut texts or picture-in-picture in two at that timeline time (the main track uses "split")
 - {"op":"tts","text":"...","voice":id,"style":id,"start":s}  text to speech (voice-over) added as an audio track. Write the text in the language the user wants spoken. Voices: ${TTS_VOICES.map((v) => `${v.id} (${v.hint})`).join(', ')}. Styles: ${ids(TTS_STYLES)}
 - {"op":"extract_audio","clips":…}  detach/separate a video clip's sound onto its own audio track (the clip is muted)
 - {"op":"crop","clips":…,"x":0-1,"y":0-1,"w":0-1,"h":0-1}  keep that part of the frame (fractions of the source); {"reset":true} removes the crop
 - {"op":"clip_duration","clips":…,"seconds":s}  how long an image stays, or trim a video clip to that length
 - {"op":"audio_edit","audios":…,"start":s (move the track on the timeline),"trim_start":s (skip the first seconds of the file),"duration":s (cut the track to this length)}
 - {"op":"delete_audio","audios":…}
+- {"op":"audio_split","audios":…,"time":s}  cut a music/voice track in two at that timeline time
+- {"op":"audio_delete_range","audios":…,"start":s,"end":s}  remove that part (timeline times) of a music/voice track; the rest of the track moves back to close the gap
+- {"op":"duplicate","texts":… / "pips":… / "audios":…}  copy texts, picture-in-picture or audio tracks (the copy is placed right after the original)
 - {"op":"pip_layer","pip":n,"to":"front"|"back"|"forward"|"backward"}  stacking order of picture-in-picture layers
 - {"op":"caption_line","line":n,"text":"..."}  fix the words of one caption line (n from "captions"); {"delete":true} removes it
 - {"op":"project_template","template":id}  restyle the whole video in one go: ${PROJECT_TEMPLATES.map((t) => `${t.id} (${t.label}: ${t.description})`).join(', ')}
@@ -215,12 +250,20 @@ Actions (use only these):
 - {"op":"make_short","start":s,"end":s}  keep only that part of the video as a vertical short (9:16, reframed). Use a highlight from "vision" when the user asks for a short/best moment.
 - {"op":"clip_fx","clips":… or "pips":…,"add":[{"type":id,"intensity":0-1,"speed":0.25-3,"color":"#rrggbb"}],"remove":[ids],"clear":bool}  professional effects stacked on clips or picture-in-picture (CapCut-style). Body effects need a person in the shot; "bg-remove" on a pip cuts the person out over the video below.
 - {"op":"fx_track","type":id,"start":s,"duration":s,"intensity":0-1,"speed":0.25-3,"color":"#rrggbb"}  an effect on the effects track: applies to the whole picture (all clips and pips, not texts) for that time
+- {"op":"fx_track_edit","items":…,"type":id,"start":s,"duration":s,"intensity":0-1,"speed":0.25-3,"color":"#rrggbb","delete":bool}  change or delete items already on the effects track
   Pro effects: ${PRO_FX.map((f) => `${f.id} (${f.label})`).join(', ')}
+- {"op":"keyframes","clips":… or "texts":…,"keys":[{"at":0-1,…},…]}  animate over time between keyframes ("at" = fraction through the clip/text: 0 start, 0.5 middle, 1 end; give at least two). Clip keys: "zoom" (1 = normal),"x","y" (-1..1, move the picture; y negative = up),"rotation". Text keys: "x","y" (0-1 position on screen),"size" (px),"rotation". Missing fields keep the current value. {"clear":true} removes the animation. For a camera preset use "motion" instead.
+- {"op":"duck","audios":…,"level":0-1}  auto-ducking: that music gets quieter while someone speaks (level = volume during speech, default 0.25) and comes back between sentences. {"off":true} turns it off.
+- {"op":"caption_regroup","words_per_line":1-8}  re-split existing captions into lines of that many words (no new transcription)
+- {"op":"caption_rewrite","instruction":"…"}  rewrite every caption line with AI keeping the timing: translate ("Translate to English"), change dialect ("Rewrite in Modern Standard Arabic"), fix spelling, remove swear words… Write the instruction in English.
+- {"op":"analyze"}  watch the video with AI first. Return ONLY this action when the request depends on what is visible (shorts, best moment, bad scenes, "the part where…", reframe) and a main video clip has no "vision" data; the request is then sent again automatically with the vision data.
+- {"op":"undo","steps":1-20}   {"op":"redo","steps":1-20}  undo/redo the last edits (use alone)
 - {"op":"seek","time":s}   {"op":"play"}   {"op":"export"}
 
 Rules: use the fewest actions that do exactly what was asked. Never invent clip numbers that do not exist. Clamp values to the ranges above.
 "vision" (when present) is what an AI saw in each analysed clip: scenes, events and highlights with frame-accurate timeline times. Use it to find visual moments ("the part with the car", "when I smile", "the jump"): use those exact times for split/delete_range/freeze/sfx/add_text. Prefer scene boundaries and event times over guesses. Scenes with quality blurry/dark/shaky/boring are candidates when asked to remove bad parts.
-If the request depends on what is visible but there is no "vision" data for that clip, return no actions and reply that the user should first press "تحليل الفيديو" (Analyse video) in the commands panel.
-Map the user's words to the closest action: e.g. "افصل الصوت" / "استخرج الصوت" → extract_audio; "قص الصورة" (frame) → crop; "أطول/أقصر" for an image → clip_duration.
-If the request needs something the editor cannot do (e.g. remove a background, generate new footage, recognise objects in the picture), return no actions and say so briefly.`;
+If the request depends on what is visible but there is no "vision" data for that clip, return only {"op":"analyze"}.
+Map the user's words to the closest action: e.g. "افصل الصوت" / "استخرج الصوت" → extract_audio; "قص الصورة" (frame) → crop; "أطول/أقصر" for an image → clip_duration; "احذف الصمت من الصوت/الموسيقى/التعليق" → remove_silence with "audios"; "أزل الخلفية" → clip_fx with bg-remove (or bg-blur / bg-color); a sticker or emoji → add_text with the emoji (size ~180, anim_in "pop"); "قص الموسيقى عند…" → audio_split.
+Several steps in one command are fine (e.g. extract_audio then voice_effect, or add_media then beat_sync).
+Only these really cannot be done by a command; say so briefly and point to the manual way: recording your own voice (button "تسجيل" in the Audio panel), importing files from the phone (button "استيراد" in Media), generating new footage or images with AI, downloading videos from the internet, publishing to social media.`;
 }

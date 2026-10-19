@@ -9,7 +9,7 @@ import {
   serverTimestamp,
   getDoc
 } from 'firebase/firestore';
-import { db } from './firebase';
+import { db } from './firestore';
 import { CaptionSegment, EditorSettings } from '../types';
 
 export interface SavedProject {

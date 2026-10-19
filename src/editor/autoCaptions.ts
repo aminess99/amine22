@@ -120,3 +120,56 @@ export async function generateCaptions(
   }
   return captions;
 }
+
+/**
+ * Re-splits existing captions into lines of `wordsPerCaption` words, keeping each
+ * word's timing and its link to the source speech. No new transcription.
+ */
+export function regroupCaptions(captions: TextClip[], wordsPerCaption: number): TextClip[] {
+  const sorted = [...captions].sort((a, b) => a.start - b.start);
+  type Item = { word: { text: string; start: number; end: number }; src?: { text: string; start: number; end: number }; owner: TextClip };
+  // Runs of words that can share a line: same source file, each caption timed word by word.
+  const runs: Item[][] = [];
+  let run: Item[] = [];
+  let lastAsset: string | undefined;
+  for (const c of sorted) {
+    if (!c.words?.length) continue;
+    const linked = !!c.src && c.src.words.length === c.words.length;
+    const asset = linked ? c.src!.assetId : undefined;
+    if (run.length && asset !== lastAsset) {
+      runs.push(run);
+      run = [];
+    }
+    lastAsset = asset;
+    c.words.forEach((w, i) => run.push({ word: w, src: linked ? c.src!.words[i] : undefined, owner: c }));
+  }
+  if (run.length) runs.push(run);
+
+  const out: TextClip[] = [];
+  for (const items of runs) {
+    for (let j = 0; j < items.length; j += wordsPerCaption) {
+      const group = items.slice(j, j + wordsPerCaption);
+      const next = items[j + wordsPerCaption];
+      const first = group[0].owner;
+      const lastWord = group[group.length - 1].word;
+      // Hold until the next line when the pause is short, but never past the original caption's end.
+      const limit = group[group.length - 1].owner.start + group[group.length - 1].owner.duration;
+      const end = next && next.word.start - lastWord.end < 0.6 ? next.word.start : Math.min(limit, lastWord.end + 0.2);
+      const start = group[0].word.start;
+      const duration = Math.max(0.2, end - start);
+      const words = group.map((g) => g.word);
+      const linked = group.every((g) => g.src);
+      out.push({
+        ...first,
+        id: uid(),
+        text: words.map((w) => w.text).join(' '),
+        start,
+        duration,
+        words,
+        src: linked ? { assetId: first.src!.assetId, words: group.map((g) => g.src!), hold: Math.max(0, start + duration - lastWord.end) } : undefined,
+        emoji: group.some((g) => g.owner.emoji) ? emojiFor(words) : undefined,
+      });
+    }
+  }
+  return out;
+}

@@ -66,7 +66,7 @@ import {
 import { AspectRatio, AudioClip, EffectItem, MainClip, MediaAsset, OverlayClip, Project, Selection, TextClip, TransitionType } from '../../editor/types';
 import { emojiFor, generateCaptions } from '../../editor/autoCaptions';
 import { clearAll, loadSaved, saveAsset, saveProject } from '../../editor/persistence';
-import { clipsFromRanges, findSpeechRanges } from '../../editor/silence';
+import { audioFromRanges, clipsFromRanges, findSpeechRanges } from '../../editor/silence';
 import { applyTemplate } from '../../editor/templates';
 import { useHistory } from '../../editor/useHistory';
 import { commandContext, executeActions, requestCommand } from '../../editor/commands';
@@ -118,9 +118,11 @@ const replaceById = <T extends { id: string }>(list: T[], id: string, fn: (item:
 
 interface VideoEditorProps {
   onBack?: () => void;
+  /** Files picked on the home page, added to the timeline once the saved project loads. */
+  initialFiles?: File[];
 }
 
-export function VideoEditor({ onBack }: VideoEditorProps) {
+export function VideoEditor({ onBack, initialFiles }: VideoEditorProps) {
   const { state: project, update: rawUpdate, undo, redo, reset, canUndo, canRedo } = useHistory<Project>(INITIAL_PROJECT);
   // Every edit goes through here: when clips change, auto captions follow their speech.
   const assetsForCaptions = useRef<Map<string, MediaAsset>>(new Map());
@@ -142,7 +144,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
   const [silence, setSilence] = useState<{ busy: boolean; message: string | null }>({ busy: false, message: null });
   const [captionState, setCaptionState] = useState<{ busy: boolean; status: string | null; progress: number | null }>({ busy: false, status: null, progress: null });
 
-  const assets = useMemo(() => new Map(assetList.map((a) => [a.id, a])), [assetList]);
+  const assets = useMemo(() => new Map<string, MediaAsset>(assetList.map((a) => [a.id, a])), [assetList]);
   assetsForCaptions.current = assets;
   const layout = useMemo(() => layoutMainTrack(project.clips, assets), [project.clips, assets]);
   const duration = useMemo(() => projectDuration(project, layout), [project, layout]);
@@ -500,6 +502,28 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     [project.audios, assets]
   );
 
+  /** Cuts the quiet parts out of a music/voice track; the pieces close up. */
+  const removeAudioSilence = useCallback(
+    async (audioId: string) => {
+      const a = project.audios.find((x) => x.id === audioId);
+      const asset = a && assets.get(a.assetId);
+      if (!a || !asset) return;
+      setAudioTool({ busy: 'silence', message: null });
+      try {
+        const ranges = await findSpeechRanges(asset, a.inPoint, a.outPoint);
+        const removed = a.outPoint - a.inPoint - ranges.reduce((sum, [s, e]) => sum + (e - s), 0);
+        if (!ranges.length) return setAudioTool({ busy: null, message: 'لم أجد صوتاً مسموعاً في هذا المسار.' });
+        if (removed < 0.3) return setAudioTool({ busy: null, message: 'لا توجد لحظات صمت طويلة لحذفها.' });
+        const parts = audioFromRanges(a, ranges);
+        update((p) => ({ ...p, audios: p.audios.flatMap((x) => (x.id === audioId ? parts : [x])) }));
+        setAudioTool({ busy: null, message: `تم حذف ${removed.toFixed(1)} ثانية من الصمت.` });
+      } catch {
+        setAudioTool({ busy: null, message: 'تعذر قراءة هذا الصوت.' });
+      }
+    },
+    [project.audios, assets, update]
+  );
+
   /** Re-times the main track so cuts land on every Nth beat of the selected music. */
   const syncToBeats = useCallback(
     (audioId: string, every: number) => {
@@ -666,6 +690,15 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     },
     [update, project.clips.length]
   );
+
+  const initialAdded = useRef(false);
+  useEffect(() => {
+    if (!restored || initialAdded.current || !initialFiles?.length) return;
+    initialAdded.current = true;
+    if (project.clips.length) setNotice('أُضيفت ملفاتك إلى نهاية مشروعك الحالي. لبدء مشروع جديد استخدم "مشروع جديد".');
+    addFiles(initialFiles, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restored, initialFiles]);
 
   const addText = useCallback(
     (presetId: string) => {
@@ -1095,10 +1128,24 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
   // ---------- editing commands ----------
   const [command, setCommand] = useState<CommandState>({ busy: null, status: null, progress: null, error: null, plan: null, done: null });
   const askCommand = async (text: string) => {
-    setCommand((c) => ({ ...c, busy: 'thinking', error: null, plan: null, done: null }));
+    setCommand((c) => ({ ...c, busy: 'thinking', status: null, progress: null, error: null, plan: null, done: null }));
     try {
-      const res = await requestCommand(text, commandContext(project, assets, assetList, engine.getTime(), selection));
-      setCommand((c) => ({ ...c, busy: null, plan: { command: text, ...res } }));
+      let res = await requestCommand(text, commandContext(project, assets, assetList, engine.getTime(), selection));
+      // The request needs to see the video: watch it now, then ask again with what was seen.
+      if (res.actions.some((a) => a.op === 'analyze')) {
+        const updated = mainVideos.some((a) => !a.analysis)
+          ? await analyzeMissing((status, progress) => setCommand((c) => ({ ...c, status, progress })))
+          : new Map<string, MediaAsset>();
+        if (updated.size) {
+          setCommand((c) => ({ ...c, status: null, progress: null }));
+          const nextAssets = new Map<string, MediaAsset>(assets);
+          updated.forEach((a, id) => nextAssets.set(id, a));
+          const library = assetList.map((a) => updated.get(a.id) ?? a);
+          res = await requestCommand(text, commandContext(project, nextAssets, library, engine.getTime(), selection));
+        }
+        res = { ...res, actions: res.actions.filter((a) => a.op !== 'analyze') };
+      }
+      setCommand((c) => ({ ...c, busy: null, status: null, progress: null, plan: { command: text, ...res } }));
     } catch (err) {
       setCommand((c) => ({ ...c, busy: null, error: err instanceof Error ? err.message : 'تعذر تنفيذ الأمر.' }));
     }
@@ -1131,27 +1178,44 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
   };
   const applyCommand = async () => {
     const plan = command.plan;
-    if (plan) await runActions(plan.actions, plan.command);
+    if (!plan) return;
+    const history = plan.actions.filter((a): a is Extract<EditAction, { op: 'undo' | 'redo' }> => a.op === 'undo' || a.op === 'redo');
+    if (history.length && history.length === plan.actions.length) {
+      for (const a of history) {
+        const steps = Math.min(20, Math.max(1, Math.round(Number(a.steps) || 1)));
+        for (let i = 0; i < steps; i++) (a.op === 'undo' ? undo : redo)();
+      }
+      setCommand((c) => ({ ...c, plan: null, done: null }));
+      return;
+    }
+    await runActions(plan.actions.filter((a) => a.op !== 'undo' && a.op !== 'redo'), plan.command);
   };
 
   // ---------- AI video understanding ----------
   const [analysis, setAnalysis] = useState<{ busy: boolean; status: string | null; progress: number | null; error: string | null }>({ busy: false, status: null, progress: null, error: null });
   const mainVideos = useMemo(() => [...new Map(layout.filter((l) => l.asset.kind === 'video').map((l) => [l.asset.id, l.asset])).values()], [layout]);
-  const analyzeVideos = async () => {
+  /** Analyses the main-track videos that haven't been yet; returns them updated, by id. */
+  const analyzeMissing = async (onProgress: (status: string, progress: number | null) => void) => {
     const targets = mainVideos.filter((a) => !a.analysis);
+    const done = new Map<string, MediaAsset>();
+    for (let i = 0; i < targets.length; i++) {
+      const asset = targets[i];
+      const part = targets.length > 1 ? ` (${i + 1} من ${targets.length})` : '';
+      const result = await analyzeVideo(asset, (p) => {
+        const { text, bar } = progressText(p);
+        onProgress(text + part, bar === null ? null : (i + bar) / targets.length);
+      });
+      const updated = { ...asset, analysis: result, fps: await videoFps(asset) };
+      setAssetList((list) => list.map((x) => (x.id === asset.id ? updated : x)));
+      saveAsset(updated).catch(() => {});
+      done.set(asset.id, updated);
+    }
+    return done;
+  };
+  const analyzeVideos = async () => {
     setAnalysis({ busy: true, status: null, progress: 0, error: null });
     try {
-      for (let i = 0; i < targets.length; i++) {
-        const asset = targets[i];
-        const part = targets.length > 1 ? ` (${i + 1} من ${targets.length})` : '';
-        const result = await analyzeVideo(asset, (p) => {
-          const { text, bar } = progressText(p);
-          setAnalysis((a) => ({ ...a, status: text + part, progress: bar === null ? null : (i + bar) / targets.length }));
-        });
-        const updated = { ...asset, analysis: result, fps: await videoFps(asset) };
-        setAssetList((list) => list.map((x) => (x.id === asset.id ? updated : x)));
-        saveAsset(updated).catch(() => {});
-      }
+      await analyzeMissing((status, progress) => setAnalysis((a) => ({ ...a, status, progress })));
       setAnalysis({ busy: false, status: null, progress: null, error: null });
     } catch (err) {
       setAnalysis({ busy: false, status: null, progress: null, error: err instanceof Error ? err.message : 'تعذر تحليل الفيديو.' });
@@ -1281,6 +1345,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
         onEffect: (e) => applyAudioEffect(selectedAudio.id, e),
         onDetectBeats: () => findBeats(selectedAudio.id),
         onBeatSync: (n) => syncToBeats(selectedAudio.id, n),
+        onRemoveSilence: () => removeAudioSilence(selectedAudio.id),
       }}
     />
   ) : selectedCut ? (

@@ -1,6 +1,6 @@
 import { VOICE_EFFECTS, VoiceEffect, applyVoiceEffect, detectBeats, encodeWav } from './audioTools';
-import { CaptionProgress, emojiFor, generateCaptions } from './autoCaptions';
-import { ClipTarget, CommandResponse, EditAction, TextStyleFields } from './commandSpec';
+import { CaptionProgress, emojiFor, generateCaptions, regroupCaptions } from './autoCaptions';
+import { ClipTarget, CommandResponse, EditAction, KeyframeSpec, TextStyleFields } from './commandSpec';
 import {
   ASPECT_SIZES,
   BLEND_MODES,
@@ -32,7 +32,7 @@ import { PROJECT_TEMPLATES, applyTemplate } from './templates';
 import { MAX_TTS_CHARS, TTS_STYLES, TTS_VOICES, synthesizeSpeech } from './tts';
 import { FONT_LIST } from './fonts';
 import { TEXT_TEMPLATES, templateTexts } from './textTemplates';
-import { clipsFromRanges, findSpeechRanges } from './silence';
+import { audioFromRanges, clipsFromRanges, findSpeechRanges } from './silence';
 import {
   audioClipEnd,
   beatCuts,
@@ -47,10 +47,14 @@ import {
   overlayEnd,
   retimeToCuts,
   retimeWords,
+  splitAudioClip,
   splitMainClip,
+  splitOverlayClip,
+  splitTextClip,
+  overlayMaxOut,
   uid,
 } from './timeline';
-import { AspectRatio, AudioClip, BlendMode, EffectItem, FxLayer, ChromaKey, LaidOutClip, MainClip, MaskShape, MediaAsset, OverlayAnim, OverlayClip, Project, Selection, TextAnimIn, TextAnimLoop, TextAnimOut, TextBgShape, TextClip, TransitionType } from './types';
+import { AspectRatio, AudioClip, BlendMode, EffectItem, FxLayer, ChromaKey, LaidOutClip, MainClip, MaskShape, MediaAsset, OverlayAnim, OverlayClip, Project, Selection, TextAnimIn, TextAnimLoop, TextAnimOut, TextBgShape, TextClip, TextKeyframe, TransitionType } from './types';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const isCaption = (t: TextClip) => !!t.words?.length;
@@ -69,6 +73,7 @@ export function commandContext(project: Project, assets: Map<string, MediaAsset>
       const t = project.texts.find((x) => x.id === selection.id);
       return t && isCaption(t) ? { caption: t.text } : { text: texts.findIndex((x) => x.id === selection.id) + 1 };
     }
+    if (selection.kind === 'effect') return { effect: (project.effects ?? []).findIndex((x) => x.id === selection.id) + 1 };
     return { pip: project.overlays.findIndex((o) => o.id === selection.id) + 1 };
   };
   return {
@@ -89,6 +94,7 @@ export function commandContext(project: Project, assets: Map<string, MediaAsset>
       transition_in: lc.index > 0 ? lc.clip.transition.type : undefined,
       effect: lc.clip.effect?.type,
       motion: lc.clip.motion?.preset,
+      analysed: lc.asset.kind === 'video' ? !!lc.asset.analysis : undefined,
     })),
     audios: project.audios.map((a, i) => ({
       n: i + 1,
@@ -96,6 +102,7 @@ export function commandContext(project: Project, assets: Map<string, MediaAsset>
       start: r2(a.start),
       end: r2(audioClipEnd(a)),
       volume: r2(a.volume),
+      ducking: a.duck ? r2(a.duck.level) : undefined,
     })),
     texts: texts.map((t, i) => ({ n: i + 1, text: t.text.slice(0, 60), start: r2(t.start), end: r2(t.start + t.duration), font: t.font, y: r2(t.y) })),
     captions: captions.slice(0, 400).map((t, i) => ({ n: i + 1, start: r2(t.start), end: r2(t.start + t.duration), text: t.text })),
@@ -111,6 +118,9 @@ export function commandContext(project: Project, assets: Map<string, MediaAsset>
       scale: r2(o.scale),
       chroma: !!o.chroma,
     })),
+    effects: project.effects?.length
+      ? project.effects.map((x, i) => ({ n: i + 1, type: x.type, start: r2(x.start), end: r2(x.start + x.duration), intensity: r2(x.intensity) }))
+      : undefined,
     media: library.map((a, i) => ({ n: i + 1, type: a.kind, name: a.name.slice(0, 40), duration: r2(a.duration) })),
   };
 }
@@ -155,7 +165,9 @@ export async function requestCommand(command: string, context: unknown): Promise
   if (res.status === 429) throw new Error('أرسلت أوامر كثيرة. انتظر دقيقة ثم حاول.');
   if (!res.ok) throw new Error('لم أفهم الأمر أو تعذر الرد. حاول بصيغة أخرى.');
   const data = await res.json();
-  return { reply: String(data.reply ?? ''), actions: Array.isArray(data.actions) ? data.actions : [] };
+  // Drop anything that isn't an action object, so a malformed reply can't break the editor.
+  const actions = Array.isArray(data.actions) ? data.actions.filter((a: unknown) => !!a && typeof a === 'object' && typeof (a as { op?: unknown }).op === 'string') : [];
+  return { reply: String(data.reply ?? ''), actions };
 }
 
 // ---------------------------------------------------------------- reading model output safely
@@ -211,7 +223,7 @@ export function describeAction(a: EditAction): string | null {
     case 'speed_curve':
       return a.curve === null ? `إزالة منحنى السرعة من ${clips}` : known(SPEED_CURVES, a.curve) ? `منحنى سرعة "${label(SPEED_CURVES, a.curve)}" على ${clips}` : null;
     case 'transform':
-      return `تعديل الحجم/الاتجاه في ${clips}`;
+      return `${a.x !== undefined || a.y !== undefined ? 'تعديل الموضع/الحجم' : 'تعديل الحجم/الاتجاه'} في ${clips}`;
     case 'aspect':
       return a.aspect in ASPECT_SIZES ? `مقاس الفيديو ${a.aspect}` : null;
     case 'background':
@@ -238,8 +250,10 @@ export function describeAction(a: EditAction): string | null {
       return a.on ? 'إضافة إيموجي للكابشن' : 'إزالة إيموجي الكابشن';
     case 'delete_captions':
       return 'حذف كل الكابشن';
-    case 'remove_silence':
-      return `حذف الصمت من ${clips}`;
+    case 'remove_silence': {
+      const targets = [a.clips ? clips : '', a.audios ? targetText(a.audios, 'المسارات الصوتية') : ''].filter(Boolean);
+      return targets.length ? `حذف الصمت من ${targets.join(' و')}` : null;
+    }
     case 'mask':
       return a.shape === null ? `إزالة القناع من ${clips}` : known(MASKS, a.shape) ? `قناع "${label(MASKS, a.shape)}" على ${clips}` : null;
     case 'chroma': {
@@ -284,6 +298,14 @@ export function describeAction(a: EditAction): string | null {
     }
     case 'delete_audio':
       return `حذف ${targetText(a.audios, 'المسارات الصوتية')}`;
+    case 'audio_split':
+      return `قص ${targetText(a.audios, 'المسارات الصوتية')} عند ${formatTime(num(a.time, 0, 1e5, 0), true)}`;
+    case 'audio_delete_range':
+      return `حذف الجزء من ${formatTime(num(a.start, 0, 1e5, 0), true)} إلى ${formatTime(num(a.end, 0, 1e5, 0), true)} من ${targetText(a.audios, 'المسارات الصوتية')}`;
+    case 'duplicate': {
+      const targets = [a.texts ? targetText(a.texts, 'النصوص') : '', a.pips ? targetText(a.pips, 'الفيديو فوق الفيديو') : '', a.audios ? targetText(a.audios, 'المسارات الصوتية') : ''].filter(Boolean);
+      return targets.length ? `تكرار ${targets.join(' و')}` : null;
+    }
     case 'pip_layer':
       return `ترتيب الفيديو فوق الفيديو ${a.pip}: ${{ front: 'إلى الأمام', back: 'إلى الخلف', forward: 'طبقة للأمام', backward: 'طبقة للخلف' }[a.to] ?? ''}`;
     case 'caption_line':
@@ -315,6 +337,35 @@ export function describeAction(a: EditAction): string | null {
       const def = fxDef(a.type);
       return def ? `تأثير "${def.label}" على كل الصورة من ${formatTime(num(a.start, 0, 1e5, 0), true)} لمدة ${num(a.duration, 0.3, 600, 3)} ث` : null;
     }
+    case 'fx_track_edit': {
+      const target = targetText(a.items, 'تأثيرات مسار التأثيرات');
+      if (a.delete) return `حذف ${target}`;
+      if (a.type !== undefined && !isProFx(a.type)) return null;
+      return `تعديل ${target}${a.type ? ` إلى "${fxDef(a.type)?.label}"` : ''}`;
+    }
+    case 'split_item': {
+      const targets = [a.texts ? targetText(a.texts, 'النصوص') : '', a.pips ? targetText(a.pips, 'الفيديو فوق الفيديو') : ''].filter(Boolean);
+      return targets.length ? `قص ${targets.join(' و')} عند ${formatTime(num(a.time, 0, 1e5, 0), true)}` : null;
+    }
+    case 'keyframes': {
+      const target = a.texts ? targetText(a.texts, 'النصوص') : clips;
+      if (a.clear) return `إزالة الحركة بالإطارات المفتاحية من ${target}`;
+      return Array.isArray(a.keys) && a.keys.length ? `حركة بـ ${Math.max(2, a.keys.length)} إطارات مفتاحية على ${target}` : null;
+    }
+    case 'duck':
+      return a.off
+        ? `إيقاف الخفض التلقائي في ${targetText(a.audios, 'المسارات الصوتية')}`
+        : `خفض ${targetText(a.audios, 'المسارات الصوتية')} تلقائياً أثناء الكلام إلى ${Math.round(num(a.level, 0, 0.9, 0.25) * 100)}%`;
+    case 'caption_regroup':
+      return `إعادة تقسيم الكابشن: ${Math.round(num(a.words_per_line, 1, 8, 3))} كلمات في السطر`;
+    case 'caption_rewrite':
+      return typeof a.instruction === 'string' && a.instruction.trim() ? `إعادة كتابة الكابشن بالذكاء الاصطناعي (${a.instruction.slice(0, 50)})` : null;
+    case 'analyze':
+      return 'تحليل الفيديو بالذكاء الاصطناعي';
+    case 'undo':
+      return `التراجع عن ${num(a.steps, 1, 20, 1) > 1 ? `آخر ${num(a.steps, 1, 20, 1)} تعديلات` : 'آخر تعديل'}`;
+    case 'redo':
+      return `إعادة ${num(a.steps, 1, 20, 1) > 1 ? `${num(a.steps, 1, 20, 1)} تعديلات` : 'آخر تعديل تم التراجع عنه'}`;
     case 'seek':
       return `الانتقال إلى ${formatTime(num(a.time, 0, 1e5, 0))}`;
     case 'play':
@@ -372,13 +423,96 @@ function styleText(t: TextClip, a: TextStyleFields): TextClip {
   if (a.y !== undefined) n.y = num(a.y, 0, 1, t.y);
   if (a.rotation !== undefined) n.rotation = num(a.rotation, -180, 180, t.rotation);
   if (a.duration !== undefined) n.duration = num(a.duration, 0.3, 600, t.duration);
+  if (a.start !== undefined && !n.words) n.start = num(a.start, 0, 1e5, t.start);
   if (known(TEXT_ANIMS_IN, a.anim_in)) n.animIn = a.anim_in as TextAnimIn;
   if (known(TEXT_ANIMS_OUT, a.anim_out)) n.animOut = a.anim_out as TextAnimOut;
   if (known(TEXT_ANIMS_LOOP, a.anim_loop)) n.animLoop = a.anim_loop as TextAnimLoop;
+  if (a.align === 'left' || a.align === 'center' || a.align === 'right') n.align = a.align;
+  if (a.line_height !== undefined) n.lineHeight = num(a.line_height, 0.8, 2.5, t.lineHeight ?? 1.3);
+  if (n.words && typeof a.highlight_color === 'string' && COLOR.test(a.highlight_color))
+    n.highlight = { style: !t.highlight || t.highlight.style === 'none' ? 'color' : t.highlight.style, color: a.highlight_color };
   return n;
 }
 
 // ---------------------------------------------------------------- applying
+
+/** New duration / source start for a picture-in-picture, when the command gives them. */
+function pipRange(o: OverlayClip, a: { duration?: number; trim_start?: number }, asset: MediaAsset | undefined): Partial<OverlayClip> {
+  if (a.duration === undefined && a.trim_start === undefined) return {};
+  const max = asset ? overlayMaxOut(asset) : o.outPoint;
+  const len = o.outPoint - o.inPoint;
+  // Images have no source position: only their length changes.
+  if (asset?.kind === 'image') return { outPoint: o.inPoint + num(a.duration, 0.2, max - o.inPoint, len) };
+  const inPoint = a.trim_start === undefined ? o.inPoint : num(a.trim_start, 0, Math.max(0, max - 0.2), o.inPoint);
+  const length = a.duration === undefined ? len : num(a.duration, 0.2, 3600, len);
+  return { inPoint, outPoint: Math.min(max, inPoint + length) };
+}
+
+const sortKeys = <T extends { at: number }>(keys: T[]) => {
+  const out = [...keys].sort((x, y) => x.at - y.at);
+  return out.filter((k, i) => i === 0 || k.at - out[i - 1].at > 0.01);
+};
+
+/** Clip keyframes from the model; missing fields keep the clip's current framing. */
+function clipKeys(c: MainClip, keys: KeyframeSpec[]): MainClip['motion'] {
+  const list = sortKeys(
+    keys.map((k) => ({
+      at: num(k.at, 0, 1, 0),
+      tf: {
+        zoom: optNum(k.zoom, 0.2, 5) ?? c.zoom,
+        offsetX: optNum(k.x, -1, 1) ?? c.offsetX,
+        offsetY: optNum(k.y, -1, 1) ?? c.offsetY,
+        rotation: optNum(k.rotation, -360, 360) ?? c.rotation,
+      },
+    }))
+  );
+  if (!list.length) return c.motion;
+  if (list.length === 1) list.unshift({ at: 0, tf: { zoom: c.zoom, offsetX: c.offsetX, offsetY: c.offsetY, rotation: c.rotation } });
+  return { preset: 'custom', keys: list };
+}
+
+function textKeys(t: TextClip, keys: KeyframeSpec[]): TextKeyframe[] | undefined {
+  const list = sortKeys(
+    keys.map((k) => ({
+      at: num(k.at, 0, 1, 0),
+      x: optNum(k.x, 0, 1) ?? t.x,
+      y: optNum(k.y, 0, 1) ?? t.y,
+      fontSize: optNum(k.size, 10, 400) ?? t.fontSize,
+      rotation: optNum(k.rotation, -360, 360) ?? t.rotation,
+    }))
+  );
+  if (!list.length) return t.keys;
+  if (list.length === 1) list.unshift({ at: 0, x: t.x, y: t.y, fontSize: t.fontSize, rotation: t.rotation });
+  return list;
+}
+
+/** Rewrites caption lines with AI (translate, change dialect…); same number of lines back. */
+export async function rewriteLines(lines: string[], instruction: string): Promise<string[]> {
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i += 80) {
+    const batch = lines.slice(i, i + 80);
+    const res = await fetch('/api/caption-rewrite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lines: batch, instruction }),
+    }).catch(() => null);
+    if (!res?.ok) throw new Error(res?.status === 503 ? 'إعادة الكتابة تحتاج مفتاح OpenRouter في إعدادات الخادم.' : 'تعذرت إعادة كتابة الكابشن. حاول مرة أخرى.');
+    const data = await res.json();
+    const got: unknown[] = Array.isArray(data.lines) ? data.lines : [];
+    batch.forEach((line, j) => out.push(typeof got[j] === 'string' && (got[j] as string).trim() ? (got[j] as string).trim().slice(0, 300) : line));
+  }
+  return out;
+}
+
+/** Removes timeline span [a, b) from one audio track; the part after it moves back to close the gap. */
+export function cutAudioRange(x: AudioClip, a: number, b: number): AudioClip[] {
+  const end = audioClipEnd(x);
+  if (b <= x.start || a >= end) return [x];
+  const out: AudioClip[] = [];
+  if (a > x.start + 0.05) out.push({ ...x, outPoint: x.inPoint + (a - x.start), fadeOut: 0 });
+  if (b < end - 0.05) out.push({ ...x, id: out.length ? uid() : x.id, start: Math.max(x.start, a), inPoint: x.inPoint + (b - x.start), fadeIn: 0 });
+  return out;
+}
 
 /** Removes [a, b) from the timeline and closes the gap; texts and overlays after it move back. */
 export function rippleDelete(p: Project, assets: Map<string, MediaAsset>, a: number, b: number): Project {
@@ -540,6 +674,59 @@ export async function executeActions(
         p = { ...p, audios: p.audios.filter((x) => !ids.has(x.id)) };
         break;
       }
+      case 'audio_split': {
+        const ids = audioIds(a.audios);
+        const t = num(a.time, 0, 1e5, 0);
+        p = { ...p, audios: p.audios.flatMap((x) => (ids.has(x.id) ? splitAudioClip(x, t) ?? [x] : [x])) };
+        break;
+      }
+      case 'audio_delete_range': {
+        const ids = audioIds(a.audios);
+        const from = num(a.start, 0, 1e5, 0);
+        const to = num(a.end, from, 1e5, from);
+        if (to - from < 0.05) break;
+        p = { ...p, audios: p.audios.flatMap((x) => (ids.has(x.id) ? cutAudioRange(x, from, to) : [x])) };
+        break;
+      }
+      case 'duplicate': {
+        // The copy goes right after the original on the timeline.
+        const tIds = new Set(a.texts === 'all' ? plainTexts0.map((t) => t.id) : (Array.isArray(a.texts) ? a.texts : []).map((n) => plainTexts0[Number(n) - 1]?.id));
+        const oIds = pipIds(a.pips);
+        const aIds = audioIds(a.audios);
+        p = {
+          ...p,
+          texts: p.texts.flatMap((t) => (tIds.has(t.id) ? [t, { ...t, id: uid(), start: t.start + t.duration }] : [t])),
+          overlays: p.overlays.flatMap((o) => (oIds.has(o.id) ? [o, { ...o, id: uid(), start: overlayEnd(o) }] : [o])),
+          audios: p.audios.flatMap((x) => (aIds.has(x.id) ? [x, { ...x, id: uid(), start: audioClipEnd(x) }] : [x])),
+        };
+        break;
+      }
+      case 'fx_track_edit': {
+        const list = start.effects ?? [];
+        const ids = new Set(a.items === 'all' ? list.map((x) => x.id) : (Array.isArray(a.items) ? a.items : []).map((n) => list[Number(n) - 1]?.id));
+        if (a.delete) {
+          p = { ...p, effects: (p.effects ?? []).filter((x) => !ids.has(x.id)) };
+          break;
+        }
+        p = {
+          ...p,
+          effects: (p.effects ?? []).map((x) => {
+            if (!ids.has(x.id)) return x;
+            const type = isProFx(a.type) ? a.type : x.type;
+            return {
+              ...x,
+              ...(type !== x.type ? newFxLayer(type, x.intensity) : {}),
+              id: x.id,
+              start: optNum(a.start, 0, 1e5) ?? x.start,
+              duration: optNum(a.duration, 0.3, 600) ?? x.duration,
+              intensity: optNum(a.intensity, 0.05, 1) ?? x.intensity,
+              speed: optNum(a.speed, 0.25, 3) ?? x.speed,
+              ...(typeof a.color === 'string' && COLOR.test(a.color) ? { color: a.color } : {}),
+            };
+          }),
+        };
+        break;
+      }
       case 'pip_layer': {
         const id = start.overlays[Number(a.pip) - 1]?.id;
         const from = p.overlays.findIndex((o) => o.id === id);
@@ -640,6 +827,8 @@ export async function executeActions(
           fit: a.fit === 'cover' || a.fit === 'contain' ? a.fit : c.fit,
           flipH: typeof a.flip_h === 'boolean' ? a.flip_h : c.flipH,
           flipV: typeof a.flip_v === 'boolean' ? a.flip_v : c.flipV,
+          offsetX: optNum(a.x, -1, 1) ?? c.offsetX,
+          offsetY: optNum(a.y, -1, 1) ?? c.offsetY,
           motion: null,
         }));
         break;
@@ -752,8 +941,33 @@ export async function executeActions(
           flipH: typeof a.flip_h === 'boolean' ? a.flip_h : o.flipH,
           volume: optNum(a.volume, 0, 1) ?? o.volume,
           muted: typeof a.muted === 'boolean' ? a.muted : o.muted,
+          ...pipRange(o, a, assets.get(o.assetId)),
         }));
         break;
+      case 'split_item': {
+        const t = num(a.time, 0, 1e5, 0);
+        const tIds = new Set(a.texts === 'all' ? plainTexts0.map((x) => x.id) : (Array.isArray(a.texts) ? a.texts : []).map((n) => plainTexts0[Number(n) - 1]?.id));
+        const oIds = pipIds(a.pips);
+        p = {
+          ...p,
+          texts: p.texts.flatMap((x) => (tIds.has(x.id) ? splitTextClip(x, t) ?? [x] : [x])),
+          overlays: p.overlays.flatMap((o) => (oIds.has(o.id) ? splitOverlayClip(o, t) ?? [o] : [o])),
+        };
+        break;
+      }
+      case 'keyframes': {
+        const keys = (Array.isArray(a.keys) ? a.keys : []).filter((k) => k && typeof k === 'object').slice(0, 12);
+        if (a.texts) {
+          const ids = new Set(a.texts === 'all' ? plainTexts0.map((x) => x.id) : (Array.isArray(a.texts) ? a.texts : []).map((n) => plainTexts0[Number(n) - 1]?.id));
+          p = { ...p, texts: p.texts.map((t) => (ids.has(t.id) ? { ...t, keys: a.clear ? undefined : textKeys(t, keys) } : t)) };
+        } else editClips(a.clips, (c) => ({ ...c, motion: a.clear ? null : clipKeys(c, keys) }));
+        break;
+      }
+      case 'duck': {
+        const ids = audioIds(a.audios);
+        p = { ...p, audios: p.audios.map((x) => (ids.has(x.id) ? { ...x, duck: a.off ? undefined : { level: num(a.level, 0, 0.9, 0.25) } } : x)) };
+        break;
+      }
       case 'delete_pip': {
         const ids = pipIds(a.pips);
         p = { ...p, overlays: p.overlays.filter((o) => !ids.has(o.id)) };
@@ -882,7 +1096,22 @@ export async function executeActions(
   }
 
   // 5. Silence removal (decodes audio, so it is slow).
-  const silenceIds = new Set(actions.flatMap((a) => (a.op === 'remove_silence' ? [...clipIds(a.clips)] : [])));
+  const silenceIds = new Set(actions.flatMap((a) => (a.op === 'remove_silence' && a.clips ? [...clipIds(a.clips)] : [])));
+  const silenceAudios = new Set(actions.flatMap((a) => (a.op === 'remove_silence' && a.audios ? [...audioIds(a.audios)] : [])));
+  if (silenceAudios.size) {
+    onStatus('جاري البحث عن الصمت في الصوت...', null);
+    const audios: AudioClip[] = [];
+    for (const x of p.audios) {
+      const asset = assets.get(x.assetId);
+      if (!silenceAudios.has(x.id) || !asset) {
+        audios.push(x);
+        continue;
+      }
+      const ranges = await findSpeechRanges(asset, x.inPoint, x.outPoint);
+      audios.push(...(ranges.length ? audioFromRanges(x, ranges) : [x]));
+    }
+    p = { ...p, audios };
+  }
   if (silenceIds.size) {
     onStatus('جاري البحث عن الصمت...', null);
     const clips: MainClip[] = [];
@@ -1056,13 +1285,36 @@ export async function executeActions(
     // Regenerating replaces old captions instead of stacking a second set.
     p = { ...p, texts: [...p.texts.filter((t) => !isCaption(t)), ...captions] };
   }
+  const regroup = actions.find((a): a is Extract<EditAction, { op: 'caption_regroup' }> => a.op === 'caption_regroup');
+  if (regroup) {
+    const regrouped = regroupCaptions(p.texts.filter(isCaption), Math.round(num(regroup.words_per_line, 1, 8, 3)));
+    if (regrouped.length) p = { ...p, texts: [...p.texts.filter((t) => !isCaption(t)), ...regrouped] };
+  }
+  const rewrite = actions.find((a): a is Extract<EditAction, { op: 'caption_rewrite' }> => a.op === 'caption_rewrite');
+  if (rewrite && typeof rewrite.instruction === 'string' && rewrite.instruction.trim()) {
+    const caps = p.texts.filter(isCaption).sort((x, y) => x.start - y.start);
+    if (!caps.length) note('لا يوجد كابشن لإعادة كتابته. أنشئ الكابشن أولاً.');
+    else {
+      onStatus('جاري إعادة كتابة الكابشن...', null);
+      const lines = await rewriteLines(caps.map((t) => t.text), rewrite.instruction.trim().slice(0, 200));
+      const byId = new Map(caps.map((t, i) => [t.id, lines[i]]));
+      p = {
+        ...p,
+        texts: p.texts.map((t) => {
+          const text = byId.get(t.id);
+          if (!text || text === t.text) return t;
+          return { ...t, text, words: t.words ? retimeWords(t.words, text) : undefined, emoji: t.emoji ? emojiFor(text.split(/\s+/).map((w) => ({ text: w }))) ?? t.emoji : undefined };
+        }),
+      };
+    }
+  }
   for (const a of actions) {
     if (a.op === 'caption_style' && known(CAPTION_STYLES, a.style)) editCaptions((t) => ({ ...t, ...captionStyleFields(a.style) }));
     else if (a.op === 'caption_position') editCaptions((t) => ({ ...t, y: num(a.y, 0.05, 0.95, t.y) }));
     else if (a.op === 'caption_size')
       editCaptions((t) => ({ ...t, fontSize: Math.round(((CAPTION_STYLES.find((c) => c.id === t.captionStyle)?.fontSize ?? 80) * num(a.percent, 50, 200, 100)) / 100) }));
     else if (a.op === 'caption_emoji') editCaptions((t) => ({ ...t, emoji: a.on ? emojiFor(t.words ?? []) : undefined }));
-    else if (a.op === 'text_style' && a.texts === 'captions') editCaptions((t) => styleText(t, { ...a, text: undefined }));
+    else if (a.op === 'text_style' && a.texts === 'captions') editCaptions((t) => styleText(t, { ...a, text: undefined, start: undefined }));
   }
 
   result.project = p;

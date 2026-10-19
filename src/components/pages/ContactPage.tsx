@@ -177,7 +177,7 @@ export function ContactPage({ onGoToHelp }: ContactPageProps) {
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
                   <h2 className="text-lg font-bold text-white mb-1">أرسل استفسارك أو اقتراحك</h2>
-                  <p className="text-xs text-slate-400">يسعدنا تلقي ملاحظاتك لتحسين أداة الكابشن باستمرار.</p>
+                  <p className="text-xs text-slate-400">يسعدنا تلقي ملاحظاتك لتحسين المحرر باستمرار.</p>
                 </div>
 
                 {errorMessage && (

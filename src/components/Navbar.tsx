@@ -12,13 +12,15 @@ import {
   User as UserIcon,
   LogOut,
   FolderOpen,
-  CreditCard,
-  Scissors
+  Scissors,
+  Download
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../context/AuthContext';
+import { BRAND } from '../brand';
+import { useInstall } from '../pwa';
 
-export type PageTab = 'studio' | 'editor' | 'templates' | 'features' | 'pricing' | 'help' | 'privacy' | 'terms' | 'contact';
+export type PageTab = 'home' | 'editor' | 'templates' | 'features' | 'pricing' | 'help' | 'privacy' | 'terms' | 'contact';
 
 interface NavbarProps {
   currentPage: PageTab;
@@ -31,14 +33,14 @@ export function Navbar({ currentPage, onNavigate, onStartVideo, onOpenSavedProje
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const { user, openAuthModal, logout } = useAuth();
+  const { mode: installMode, install } = useInstall();
 
   const navItems: { id: PageTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-    { id: 'studio', label: 'الرئيسية (الاستوديو)', icon: Video },
-    { id: 'editor', label: 'محرر الفيديو', icon: Scissors },
-    { id: 'templates', label: 'معرض القوالب', icon: Layers },
-    { id: 'features', label: 'المميزات وكيف تعمل', icon: Zap },
-    { id: 'pricing', label: 'خطط الأسعار', icon: CreditCard },
-    { id: 'help', label: 'الأسئلة الشائعة والدعم', icon: HelpCircle },
+    { id: 'home', label: 'الرئيسية', icon: Video },
+    { id: 'editor', label: 'المحرر', icon: Scissors },
+    { id: 'features', label: 'المميزات', icon: Zap },
+    { id: 'templates', label: 'القوالب', icon: Layers },
+    { id: 'help', label: 'المساعدة', icon: HelpCircle },
     { id: 'contact', label: 'تواصل معنا', icon: Mail },
   ];
 
@@ -54,23 +56,23 @@ export function Navbar({ currentPage, onNavigate, onStartVideo, onOpenSavedProje
         
         {/* Brand Logo */}
         <button 
-          onClick={() => handleNavClick('studio')}
+          onClick={() => handleNavClick('home')}
           className="flex items-center gap-3 group text-right cursor-pointer"
         >
           <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-violet-500 flex items-center justify-center text-white font-black text-lg shadow-lg shadow-indigo-600/30 group-hover:scale-105 transition-transform">
-            C
+            M
           </div>
           <div>
             <div className="flex items-center gap-1.5">
               <span className="font-extrabold tracking-tight text-base sm:text-lg text-white group-hover:text-indigo-300 transition-colors">
-                AI Video Captioner
+                {BRAND.name}
               </span>
               <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 hidden sm:inline-block">
                 عربي
               </span>
             </div>
             <p className="text-[10px] text-slate-400 hidden sm:block">
-              توليد وتصميم الكابشن الاحترافي بالذكاء الاصطناعي
+              {BRAND.tagline}
             </p>
           </div>
         </button>
@@ -100,13 +102,13 @@ export function Navbar({ currentPage, onNavigate, onStartVideo, onOpenSavedProje
 
         {/* Actions & User Auth */}
         <div className="flex items-center gap-2 sm:gap-3">
-          {currentPage !== 'studio' && (
+          {currentPage !== 'home' && (
             <button
-              onClick={() => handleNavClick('studio')}
+              onClick={() => handleNavClick('editor')}
               className="hidden lg:flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-xs font-bold shadow-md shadow-indigo-600/30 transition-all active:scale-95 cursor-pointer"
             >
               <Sparkles className="w-3.5 h-3.5" />
-              <span>جرب أداة الكابشن الآن</span>
+              <span>ابدأ التحرير</span>
             </button>
           )}
 
@@ -224,6 +226,19 @@ export function Navbar({ currentPage, onNavigate, onStartVideo, onOpenSavedProje
               </button>
             );
           })}
+
+          {installMode === 'prompt' && (
+            <button
+              onClick={() => {
+                setMobileMenuOpen(false);
+                install();
+              }}
+              className="w-full px-4 py-3 rounded-xl text-xs font-bold flex items-center gap-2.5 bg-fuchsia-500/10 border border-fuchsia-500/30 text-fuchsia-200"
+            >
+              <Download className="w-4 h-4" />
+              <span>ثبّت التطبيق على هاتفك</span>
+            </button>
+          )}
 
           <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400 px-2">
             <button 

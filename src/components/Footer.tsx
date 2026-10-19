@@ -12,6 +12,7 @@ import {
   Heart
 } from 'lucide-react';
 import { PageTab } from './Navbar';
+import { BRAND } from '../brand';
 
 interface FooterProps {
   onNavigate: (page: PageTab) => void;
@@ -32,14 +33,14 @@ export function Footer({ onNavigate }: FooterProps) {
           <div className="space-y-3 md:col-span-1">
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white font-black text-base shadow-md shadow-indigo-600/30">
-                C
+                M
               </div>
               <span className="font-extrabold text-base text-white">
-                AI Video Captioner
+                {BRAND.name}
               </span>
             </div>
             <p className="text-xs text-slate-400 leading-relaxed">
-              منصة سحابية متقدمة لتفريغ وتصميم نصوص الكابشن المتحركة للفيديوهات القصيرة والبودكاست بدقة ميلي ثانية، مع دعم كامل للغة العربية وقوالب مشاهير صناع المحتوى.
+              {BRAND.description}
             </p>
             <div className="flex items-center gap-2 text-emerald-400 text-[11px] font-semibold">
               <CheckCircle2 className="w-3.5 h-3.5" />
@@ -62,15 +63,6 @@ export function Footer({ onNavigate }: FooterProps) {
               </li>
               <li>
                 <button 
-                  onClick={() => handleNav('studio')}
-                  className="hover:text-indigo-300 transition-colors flex items-center gap-1.5"
-                >
-                  <Film className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>استوديو الكابشن (رفع الفيديو)</span>
-                </button>
-              </li>
-              <li>
-                <button 
                   onClick={() => handleNav('templates')}
                   className="hover:text-indigo-300 transition-colors flex items-center gap-1.5"
                 >
@@ -84,16 +76,7 @@ export function Footer({ onNavigate }: FooterProps) {
                   className="hover:text-indigo-300 transition-colors flex items-center gap-1.5"
                 >
                   <Zap className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>المميزات ومحرك المعالجة</span>
-                </button>
-              </li>
-              <li>
-                <button 
-                  onClick={() => handleNav('pricing')}
-                  className="hover:text-indigo-300 transition-colors flex items-center gap-1.5 text-amber-300 hover:text-amber-200 font-semibold"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                  <span>باقات الأسعار والاشتراكات</span>
+                  <span>المميزات</span>
                 </button>
               </li>
               <li>
@@ -168,11 +151,10 @@ export function Footer({ onNavigate }: FooterProps) {
 
         {/* Bottom Bar */}
         <div className="pt-8 border-t border-slate-900 flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-slate-400">
-          <p>© {new Date().getFullYear()} AI Video Captioner. جميع الحقوق محفوظة.</p>
+          <p>© {new Date().getFullYear()} {BRAND.latin}. جميع الحقوق محفوظة.</p>
           <div className="flex items-center gap-2">
             <span>مصمم خصيصاً لصناع المحتوى والمسوقين في العالم العربي</span>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="text-emerald-400 font-semibold">الخوادم تعمل بكفاءة 100%</span>
+
           </div>
         </div>
 

@@ -1,3 +1,4 @@
+import { prepareDucking, scheduleDuck, speechTimeline } from './ducking';
 import {
   ALL_FORMATS,
   AudioBufferSource,
@@ -61,6 +62,8 @@ async function renderAudioMix(
   if (length <= 0) return null;
   const ctx = new OfflineAudioContext(2, length, SAMPLE_RATE);
   const decoded = new Map<string, AudioBuffer | null>();
+  await prepareDucking(project, assets);
+  const spans = speechTimeline(project, assets) ?? [];
 
   const decode = async (asset: MediaAsset) => {
     if (!decoded.has(asset.id)) {
@@ -83,7 +86,8 @@ async function renderAudioMix(
     volume: number,
     fadeIn: number,
     fadeOut: number,
-    timelineDuration?: number
+    timelineDuration?: number,
+    duck?: { level: number }
   ): AudioBufferSourceNode | null => {
     if (sourceDuration <= 0 || offset >= buffer.duration) return null;
     const node = ctx.createBufferSource();
@@ -99,7 +103,11 @@ async function renderAudioMix(
     gain.gain.linearRampToValueAtTime(volume, at + Math.min(fi, timelineDur / 2));
     gain.gain.setValueAtTime(volume, Math.max(at + Math.min(fi, timelineDur / 2), end - Math.min(fo, timelineDur / 2)));
     gain.gain.linearRampToValueAtTime(0, end);
-    node.connect(gain).connect(ctx.destination);
+    if (duck && spans.length) {
+      const ducker = ctx.createGain();
+      scheduleDuck(ducker, duck.level, spans, at, end);
+      node.connect(gain).connect(ducker).connect(ctx.destination);
+    } else node.connect(gain).connect(ctx.destination);
     node.start(at, offset, sourceDuration);
     scheduled++;
     return node;
@@ -148,7 +156,7 @@ async function renderAudioMix(
     const buffer = await decode(asset);
     if (!buffer) continue;
     const srcDur = Math.min(a.outPoint - a.inPoint, duration - a.start);
-    schedule(buffer, a.start, a.inPoint, srcDur, 1, a.volume, a.fadeIn, a.fadeOut);
+    schedule(buffer, a.start, a.inPoint, srcDur, 1, a.volume, a.fadeIn, a.fadeOut, undefined, a.duck);
   }
 
   if (!scheduled) return null;

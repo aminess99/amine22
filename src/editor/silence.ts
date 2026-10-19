@@ -1,5 +1,5 @@
 import { uid } from './timeline';
-import { MainClip, MediaAsset } from './types';
+import { AudioClip, MainClip, MediaAsset } from './types';
 
 const WINDOW = 0.02; // seconds per loudness sample
 const MIN_SILENCE = 0.45; // shorter pauses are kept
@@ -77,4 +77,22 @@ export function clipsFromRanges(clip: MainClip, ranges: [number, number][]): Mai
     outPoint: e,
     transition: i === 0 ? clip.transition : { ...clip.transition, type: 'none' },
   }));
+}
+
+/** Keeps only the given source ranges of an audio track, placed back to back from where it starts. */
+export function audioFromRanges(x: AudioClip, ranges: [number, number][]): AudioClip[] {
+  let at = x.start;
+  return ranges.map(([s, e], i) => {
+    const piece: AudioClip = {
+      ...x,
+      id: i === 0 ? x.id : uid(),
+      start: at,
+      inPoint: s,
+      outPoint: e,
+      fadeIn: i === 0 ? x.fadeIn : 0,
+      fadeOut: i === ranges.length - 1 ? x.fadeOut : 0,
+    };
+    at += e - s;
+    return piece;
+  });
 }

@@ -476,6 +476,52 @@ async function startServer() {
     }
   });
 
+  // Caption rewriting (translate, change dialect, fix spelling): lines in, the same number of lines out.
+  const rewriteHits = new Map<string, number[]>();
+  app.post("/api/caption-rewrite", async (req, res) => {
+    const client = getOpenRouterClient();
+    if (!client) {
+      return res.status(503).json({ error: "OPENROUTER_API_KEY is not set" });
+    }
+    const lines: unknown = req.body?.lines;
+    const instruction = typeof req.body?.instruction === "string" ? req.body.instruction.trim().slice(0, 200) : "";
+    if (!instruction || !Array.isArray(lines) || !lines.length || lines.length > 80 || !lines.every((l) => typeof l === "string" && l.length <= 300)) {
+      return res.status(400).json({ error: "Invalid request" });
+    }
+    const ip = req.ip || "unknown";
+    const now = Date.now();
+    const hits = (rewriteHits.get(ip) ?? []).filter((t) => now - t < 60_000);
+    if (hits.length >= 30) return res.status(429).json({ error: "Too many requests" });
+    hits.push(now);
+    rewriteHits.set(ip, hits);
+
+    try {
+      const response = await client.chat.completions.create({
+        model: process.env.COMMAND_MODEL || "google/gemini-2.5-flash",
+        temperature: 0.2,
+        max_tokens: 6000,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content:
+              'You rewrite the subtitle lines of a short video. Apply the instruction to every line and keep the meaning. ' +
+              'Lines are consecutive parts of one speech, so keep each line\'s content in that line (do not move words between lines) and keep lines about as short. ' +
+              'Reply with ONLY {"lines": [...]} containing exactly as many strings as were given, in the same order. Never add anything else.',
+          },
+          { role: "user", content: `Instruction: ${instruction}\n\nLines (${lines.length}):\n${JSON.stringify(lines)}` },
+        ],
+      });
+      const raw = response.choices[0]?.message?.content ?? "";
+      const parsed = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
+      const out = Array.isArray(parsed.lines) ? parsed.lines.map((l: unknown) => (typeof l === "string" ? l.slice(0, 300) : "")) : [];
+      res.json({ lines: out });
+    } catch (error) {
+      console.error("Caption rewrite failed:", error);
+      res.status(502).json({ error: "Rewrite failed" });
+    }
+  });
+
   // Text to speech through OpenRouter's speech endpoint. Gemini TTS returns raw
   // 24 kHz 16-bit mono PCM, which is wrapped in a WAV header for the browser.
   const ttsHits = new Map<string, number[]>();
@@ -1581,7 +1627,15 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    app.use(
+      express.static(distPath, {
+        setHeaders: (res, filePath) => {
+          // Build files carry a content hash, so they never change; the service worker must always be fresh.
+          if (filePath.includes(`${path.sep}assets${path.sep}`)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          else if (filePath.endsWith('sw.js')) res.setHeader('Cache-Control', 'no-cache');
+        },
+      })
+    );
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
