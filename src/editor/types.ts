@@ -250,6 +250,23 @@ export interface MainClip {
   freeze: number | null;
   /** Speed curve preset id; redistributes speed across the clip without changing its length. */
   speedCurve: string | null;
+  /** Stacked pro effects (shaders, particles, body), applied in order. */
+  fx?: FxLayer[];
+}
+
+/** One pro effect in a stack: a PRO_FX id with its settings. */
+export interface FxLayer {
+  type: string;
+  intensity: number; // 0..1
+  speed?: number; // 1 = normal
+  color?: string;
+}
+
+/** An effect on the effects track: applies to everything under it (not texts) for a time. */
+export interface EffectItem extends FxLayer {
+  id: string;
+  start: number;
+  duration: number;
 }
 
 export type OverlayShape = 'rect' | 'rounded' | 'circle';
@@ -275,6 +292,8 @@ export interface OverlayClip {
   blend: BlendMode;
   flipH: boolean;
   chroma: ChromaKey | null;
+  /** Stacked pro effects (e.g. remove background to cut the person out). */
+  fx?: FxLayer[];
 }
 
 export type TextAnimIn =
@@ -427,6 +446,8 @@ export interface Project {
   texts: TextClip[];
   audios: AudioClip[];
   overlays: OverlayClip[];
+  /** The effects track. */
+  effects?: EffectItem[];
 }
 
 export type Selection =
@@ -434,6 +455,7 @@ export type Selection =
   | { kind: 'text'; id: string }
   | { kind: 'audio'; id: string }
   | { kind: 'overlay'; id: string }
+  | { kind: 'effect'; id: string }
   | { kind: 'transition'; id: string } // id of the clip the transition leads into
   | null;
 

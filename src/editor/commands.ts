@@ -25,6 +25,7 @@ import {
 import { MAX_REVERSE_SECONDS, reverseVideo } from './reverse';
 import { computePeaks } from './media';
 import { reframeClip } from './reframe';
+import { fxDef, isProFx, newFxLayer } from './proFxCatalog';
 import { snapToFrame, videoFps } from './refine';
 import { SFX_LIST, autoSfxTimes, freesoundFile, searchFreesound, sfxFile } from './sfx';
 import { PROJECT_TEMPLATES, applyTemplate } from './templates';
@@ -49,7 +50,7 @@ import {
   splitMainClip,
   uid,
 } from './timeline';
-import { AspectRatio, AudioClip, BlendMode, ChromaKey, LaidOutClip, MainClip, MaskShape, MediaAsset, OverlayAnim, OverlayClip, Project, Selection, TextAnimIn, TextAnimLoop, TextAnimOut, TextBgShape, TextClip, TransitionType } from './types';
+import { AspectRatio, AudioClip, BlendMode, EffectItem, FxLayer, ChromaKey, LaidOutClip, MainClip, MaskShape, MediaAsset, OverlayAnim, OverlayClip, Project, Selection, TextAnimIn, TextAnimLoop, TextAnimOut, TextBgShape, TextClip, TransitionType } from './types';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const isCaption = (t: TextClip) => !!t.words?.length;
@@ -303,6 +304,17 @@ export function describeAction(a: EditAction): string | null {
       return `تأطير ذكي يتبع الشخص في ${clips}`;
     case 'make_short':
       return `مقطع قصير عمودي من ${formatTime(num(a.start, 0, 1e5, 0), true)} إلى ${formatTime(num(a.end, 0, 1e5, 0), true)}`;
+    case 'clip_fx': {
+      const target = a.pips ? targetText(a.pips, 'الفيديو فوق الفيديو') : clips;
+      const names = (a.add ?? []).map((x) => fxDef(x.type)?.label).filter(Boolean);
+      if (a.clear) return `إزالة التأثيرات الاحترافية من ${target}`;
+      if (names.length) return `تأثير ${names.map((n) => `"${n}"`).join(' و')} على ${target}`;
+      return (a.remove ?? []).length ? `إزالة تأثيرات من ${target}` : null;
+    }
+    case 'fx_track': {
+      const def = fxDef(a.type);
+      return def ? `تأثير "${def.label}" على كل الصورة من ${formatTime(num(a.start, 0, 1e5, 0), true)} لمدة ${num(a.duration, 0.3, 600, 3)} ث` : null;
+    }
     case 'seek':
       return `الانتقال إلى ${formatTime(num(a.time, 0, 1e5, 0))}`;
     case 'play':
@@ -406,6 +418,7 @@ export function rippleDelete(p: Project, assets: Map<string, MediaAsset>, a: num
     texts,
     overlays: p.overlays.map(moveStart),
     audios: p.audios.map(moveStart),
+    ...(p.effects ? { effects: p.effects.map(moveStart) } : {}),
   };
 }
 
@@ -667,6 +680,39 @@ export async function executeActions(
         p = { ...p, texts: p.texts.filter((t) => !ids.has(t.id)) };
         break;
       }
+      case 'clip_fx': {
+        const edit = (layers: FxLayer[] | undefined): FxLayer[] => {
+          let out = a.clear ? [] : [...(layers ?? [])];
+          const remove = new Set(Array.isArray(a.remove) ? a.remove : []);
+          out = out.filter((l) => !remove.has(l.type));
+          for (const x of Array.isArray(a.add) ? a.add : []) {
+            if (!isProFx(x?.type)) continue;
+            const layer: FxLayer = {
+              ...newFxLayer(x.type, num(x.intensity, 0.05, 1, 0.7)),
+              speed: num(x.speed, 0.25, 3, 1),
+              ...(typeof x.color === 'string' && COLOR.test(x.color) ? { color: x.color } : {}),
+            };
+            out = [...out.filter((l) => l.type !== x.type), layer];
+          }
+          return out;
+        };
+        if (a.pips) editPips(a.pips, (o) => ({ ...o, fx: edit(o.fx) }));
+        if (a.clips || !a.pips) editClips(a.clips ?? 'all', (c) => ({ ...c, fx: edit(c.fx) }));
+        break;
+      }
+      case 'fx_track': {
+        if (!isProFx(a.type)) break;
+        const item: EffectItem = {
+          ...newFxLayer(a.type, num(a.intensity, 0.05, 1, 0.7)),
+          speed: num(a.speed, 0.25, 3, 1),
+          ...(typeof a.color === 'string' && COLOR.test(a.color) ? { color: a.color } : {}),
+          id: uid(),
+          start: num(a.start, 0, 1e5, 0),
+          duration: num(a.duration, 0.3, 600, 3),
+        };
+        p = { ...p, effects: [...(p.effects ?? []), item] };
+        break;
+      }
       case 'mask':
         if (a.shape === null) editClips(a.clips, (c) => ({ ...c, mask: null }));
         else if (known(MASKS, a.shape)) editClips(a.clips, (c) => ({ ...c, mask: { shape: a.shape as MaskShape, size: num(a.size, 0.1, 1.5, c.mask?.size ?? 0.8) } }));
@@ -760,7 +806,7 @@ export async function executeActions(
     p = { ...p, clips: insertFreeze(p.clips, lc, clamp(x.at, lc.start, lc.end), x.freeze).clips };
     // Everything after the frozen moment moves later.
     const push = <T extends { start: number }>(o: T): T => (o.start >= x.at ? { ...o, start: o.start + x.freeze } : o);
-    p = { ...p, texts: p.texts.map((t) => (t.start >= x.at && t.words ? { ...push(t), words: t.words.map((w) => ({ ...w, start: w.start + x.freeze, end: w.end + x.freeze })) } : push(t))), overlays: p.overlays.map(push) };
+    p = { ...p, texts: p.texts.map((t) => (t.start >= x.at && t.words ? { ...push(t), words: t.words.map((w) => ({ ...w, start: w.start + x.freeze, end: w.end + x.freeze })) } : push(t))), overlays: p.overlays.map(push), ...(p.effects ? { effects: p.effects.map(push) } : {}) };
   }
 
   // 4. Clip lengths and list changes, by id so earlier steps don't shift them.
