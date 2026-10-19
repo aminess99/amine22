@@ -74,7 +74,27 @@ export type TransitionType =
   | 'slide-up'
   | 'zoom-in'
   | 'wipe'
-  | 'blur';
+  | 'blur'
+  | 'slide-down'
+  | 'cover-left'
+  | 'cover-right'
+  | 'zoom-out'
+  | 'cross-zoom'
+  | 'spin'
+  | 'circle'
+  | 'diamond'
+  | 'heart'
+  | 'wipe-right'
+  | 'wipe-up'
+  | 'wipe-down'
+  | 'clock'
+  | 'blinds'
+  | 'doors'
+  | 'whip'
+  | 'glitch'
+  | 'flash'
+  | 'shake'
+  | 'squeeze';
 
 export interface Transition {
   type: TransitionType;
@@ -131,21 +151,49 @@ export type ClipAnimType =
   | 'slide-up'
   | 'slide-down'
   | 'spin'
-  | 'shake';
+  | 'shake'
+  | 'pop'
+  | 'bounce'
+  | 'drop'
+  | 'rise'
+  | 'swing'
+  | 'roll'
+  | 'elastic'
+  | 'whip-left'
+  | 'whip-right';
 
 export interface ClipAnim {
   type: ClipAnimType;
   duration: number;
 }
 
-export type EffectType = 'shake' | 'zoom-pulse' | 'flash' | 'glitch' | 'rgb-split' | 'vhs' | 'strobe';
+export type EffectType =
+  | 'shake'
+  | 'zoom-pulse'
+  | 'flash'
+  | 'glitch'
+  | 'rgb-split'
+  | 'vhs'
+  | 'strobe'
+  | 'earthquake'
+  | 'heartbeat'
+  | 'bounce'
+  | 'sway'
+  | 'flicker'
+  | 'blur-pulse'
+  | 'bw-pulse'
+  | 'rainbow'
+  | 'invert'
+  | 'old-film'
+  | 'dreamy'
+  | 'zoom-shake';
 
 export interface ClipEffect {
   type: EffectType;
   intensity: number; // 0..1
 }
 
-export type MaskShape = 'circle' | 'rounded' | 'heart' | 'star' | 'band';
+export type MaskShape = 'circle' | 'rounded' | 'heart' | 'star' | 'band' | 'triangle' | 'hexagon' | 'diamond' | 'oval' | 'arch';
 
 export interface ClipMask {
   shape: MaskShape;
@@ -344,7 +392,17 @@ export type CaptionHighlightStyle =
   | 'underline'
   | 'bubble'
   | 'gradient'
-  | 'comic';
+  | 'comic'
+  | 'reveal'
+  | 'bounce'
+  | 'outline'
+  | 'marker'
+  | 'fire'
+  | 'shadow'
+  | 'spotlight'
+  | 'wave'
+  | 'slide'
+  | 'glitch';
 
 export interface CaptionHighlight {
   style: CaptionHighlightStyle;

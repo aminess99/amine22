@@ -261,13 +261,14 @@ export function ClipInspector({
       <ClipAnimSection
         animIn={clip.animIn}
         animOut={clip.animOut}
+        frame={frame}
         onChange={(which, a) => patch((c) => ({ ...c, [which]: a }))}
         onPreview={preview}
       />
 
-      <EffectSection effect={clip.effect} coalesce={k} onChange={(effect, key) => { patch((c) => ({ ...c, effect }), key); if (effect && !key) preview('whole'); }} />
+      <EffectSection effect={clip.effect} frame={frame} coalesce={k} onChange={(effect, key) => { patch((c) => ({ ...c, effect }), key); if (effect && !key) preview('whole'); }} />
 
-      <MaskSection mask={clip.mask} coalesce={k} onChange={(mask, key) => patch((c) => ({ ...c, mask }), key)} />
+      <MaskSection mask={clip.mask} frame={frame} coalesce={k} onChange={(mask, key) => patch((c) => ({ ...c, mask }), key)} />
 
       <ChromaSection chroma={clip.chroma} coalesce={k} onChange={(chroma, key) => patch((c) => ({ ...c, chroma }), key)} />
 

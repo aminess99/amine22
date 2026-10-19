@@ -58,7 +58,57 @@ function applyAnim(m: MotionOffset, anim: ClipAnim, p: number, entering: boolean
       m.dx += Math.sin(local * 70) * 0.04 * away;
       m.rotation += Math.sin(local * 55) * 4 * away;
       break;
+    case 'pop': {
+      // Overshoots then settles.
+      const c = 1.70158;
+      const back = 1 + (c + 1) * Math.pow(p - 1, 3) + c * Math.pow(p - 1, 2);
+      m.scale *= Math.max(0.01, back);
+      m.alpha *= Math.min(1, p * 3);
+      break;
+    }
+    case 'bounce':
+      m.scale *= Math.max(0.01, bounceOut(p));
+      break;
+    case 'drop':
+      m.dy -= (1 - bounceOut(p)) * dir;
+      break;
+    case 'rise': {
+      const c = 1.70158;
+      const back = 1 + (c + 1) * Math.pow(p - 1, 3) + c * Math.pow(p - 1, 2);
+      m.dy += (1 - back) * 0.6 * dir;
+      m.alpha *= Math.min(1, p * 2);
+      break;
+    }
+    case 'swing':
+      m.rotation += Math.sin(p * Math.PI * 3) * 12 * away * dir;
+      m.alpha *= Math.min(1, p * 2.5);
+      break;
+    case 'roll':
+      m.dx -= away * dir;
+      m.rotation -= away * 360 * dir;
+      break;
+    case 'elastic': {
+      const el = p >= 1 ? 1 : Math.pow(2, -10 * p) * Math.sin((p * 10 - 0.75) * ((2 * Math.PI) / 3)) + 1;
+      m.scale *= Math.max(0.01, el);
+      break;
+    }
+    case 'whip-left':
+    case 'whip-right': {
+      // A fast slide that eases hard at the end.
+      const fast = 1 - Math.pow(1 - p, 5);
+      m.dx += (anim.type === 'whip-left' ? 1 : -1) * (1 - fast) * 1.2 * dir;
+      break;
+    }
   }
+}
+
+function bounceOut(p: number) {
+  const n1 = 7.5625;
+  const d1 = 2.75;
+  if (p < 1 / d1) return n1 * p * p;
+  if (p < 2 / d1) return n1 * (p -= 1.5 / d1) * p + 0.75;
+  if (p < 2.5 / d1) return n1 * (p -= 2.25 / d1) * p + 0.9375;
+  return n1 * (p -= 2.625 / d1) * p + 0.984375;
 }
 
 /** Entrance/exit animation offsets at `local` seconds into a clip lasting `duration`. */
@@ -79,11 +129,13 @@ export interface EffectState extends MotionOffset {
   /** Glitch slices: [y fraction, height fraction, x shift fraction]. */
   slices: [number, number, number][];
   scanlines: boolean;
+  /** Extra CSS filter for the frame (e.g. 'blur(4px)'); '' for none. Blur is in base pixels. */
+  filter: string;
 }
 
 /** Per-frame parameters of a clip's video effect at absolute timeline time t. */
 export function effectState(effect: ClipEffect | null, t: number): EffectState {
-  const s: EffectState = { ...IDENTITY, flash: 0, split: 0, slices: [], scanlines: false };
+  const s: EffectState = { ...IDENTITY, flash: 0, split: 0, slices: [], scanlines: false, filter: '' };
   if (!effect) return s;
   const k = clamp(effect.intensity, 0, 1);
   const frame = Math.floor(t * 30);
@@ -127,6 +179,61 @@ export function effectState(effect: ClipEffect | null, t: number): EffectState {
       s.scanlines = true;
       s.dx = noise(frame) * 0.002 * k;
       break;
+    case 'earthquake':
+      s.dx = noise(frame) * 0.06 * k;
+      s.dy = noise(frame + 9999) * 0.06 * k;
+      s.rotation = noise(frame + 4242) * 4 * k;
+      s.scale = 1 + 0.14 * k;
+      break;
+    case 'zoom-shake': {
+      // A punch-in on each beat with a shake that dies away.
+      const phase = (t * 1.5) % 1;
+      const hit = Math.pow(1 - phase, 4);
+      s.scale = 1 + (0.06 + 0.12 * hit) * k;
+      s.dx = noise(frame) * 0.03 * hit * k;
+      s.dy = noise(frame + 77) * 0.03 * hit * k;
+      break;
+    }
+    case 'heartbeat': {
+      const b = t % 1;
+      const bump = b < 0.12 ? Math.sin((b / 0.12) * Math.PI) : b > 0.22 && b < 0.34 ? Math.sin(((b - 0.22) / 0.12) * Math.PI) * 0.7 : 0;
+      s.scale = 1 + 0.1 * k * bump;
+      break;
+    }
+    case 'bounce':
+      s.dy = -Math.abs(Math.sin(t * Math.PI * 2)) * 0.04 * k;
+      s.scale = 1 + 0.06 * k;
+      break;
+    case 'sway':
+      s.rotation = Math.sin(t * 2.2) * 3 * k;
+      s.dx = Math.sin(t * 1.1) * 0.015 * k;
+      s.scale = 1 + 0.08 * k;
+      break;
+    case 'flicker':
+      s.filter = `brightness(${(1 + noise(frame) * 0.35 * k).toFixed(2)})`;
+      break;
+    case 'blur-pulse':
+      s.filter = `blur(${(Math.pow(Math.abs(Math.sin(t * Math.PI)), 3) * 10 * k).toFixed(1)}px)`;
+      break;
+    case 'bw-pulse':
+      s.filter = `grayscale(${Math.round((0.5 + 0.5 * Math.sin(t * Math.PI * 2)) * 100 * k)}%)`;
+      break;
+    case 'rainbow':
+      s.filter = `hue-rotate(${Math.round((t * 180 * k) % 360)}deg) saturate(${(1 + 0.4 * k).toFixed(2)})`;
+      break;
+    case 'invert':
+      s.filter = (t * 2) % 1 < 0.12 * (0.5 + k) ? 'invert(1)' : '';
+      break;
+    case 'old-film':
+      s.scanlines = true;
+      s.dy = noise(frame) * 0.004 * k;
+      s.filter = `sepia(${Math.round(70 * k)}%) brightness(${(1 + noise(frame + 3) * 0.12 * k).toFixed(2)}) contrast(1.1)`;
+      if (noise(Math.floor(t * 3)) > 0.85) s.flash = 0.15 * k;
+      break;
+    case 'dreamy':
+      s.filter = `blur(${(1.5 * k).toFixed(1)}px) brightness(${(1.08 + 0.06 * Math.sin(t * 2)).toFixed(2)}) saturate(1.15)`;
+      s.scale = 1 + 0.03 * k * Math.sin(t);
+      break;
   }
   return s;
 }
@@ -159,6 +266,41 @@ export function maskPath(ctx: Ctx, mask: ClipMask, w: number, h: number) {
       ctx.bezierCurveTo(-s * 1.35, s * 0.35, -s * 0.6, s * 0.95, 0, s * 1.15);
       ctx.bezierCurveTo(s * 0.6, s * 0.95, s * 1.35, s * 0.35, s * 0.95, -s * 0.1);
       ctx.bezierCurveTo(s * 0.5, -s * 0.45, 0, s * 0.1, 0, s * 0.35);
+      break;
+    }
+    case 'triangle':
+      ctx.moveTo(0, -r);
+      ctx.lineTo(r * 0.95, r * 0.7);
+      ctx.lineTo(-r * 0.95, r * 0.7);
+      ctx.closePath();
+      break;
+    case 'hexagon':
+      for (let i = 0; i < 6; i++) {
+        const a = (i * Math.PI) / 3;
+        if (i === 0) ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+        else ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+      }
+      ctx.closePath();
+      break;
+    case 'diamond':
+      ctx.moveTo(0, -r);
+      ctx.lineTo(r * 0.75, 0);
+      ctx.lineTo(0, r);
+      ctx.lineTo(-r * 0.75, 0);
+      ctx.closePath();
+      break;
+    case 'oval':
+      ctx.ellipse(0, 0, (w / 2) * size * 0.9, (h / 2) * size * 0.9, 0, 0, Math.PI * 2);
+      break;
+    case 'arch': {
+      // A window: rounded top, square bottom.
+      const aw = w * size * 0.7;
+      const ah = h * size * 0.85;
+      ctx.moveTo(-aw / 2, ah / 2);
+      ctx.lineTo(-aw / 2, -ah / 2 + aw / 2);
+      ctx.arc(0, -ah / 2 + aw / 2, aw / 2, Math.PI, 0);
+      ctx.lineTo(aw / 2, ah / 2);
+      ctx.closePath();
       break;
     }
     case 'star': {

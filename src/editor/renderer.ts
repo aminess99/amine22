@@ -116,7 +116,9 @@ function drawClipFrame(
   // ctx.filter blur is applied in device pixels, so compensate for the context scale.
   const deviceScale = Math.abs(ctx.getTransform().a) || 1;
   const filter = cssFilter(clip.adjust, deviceScale);
-  const fullFilter = extraFilter ? (filter === 'none' ? extraFilter : `${filter} ${extraFilter}`) : filter;
+  // Effect filters give blur in base pixels; scale it like the adjustments.
+  const fxFilter = fx.filter.replace(/blur\(([\d.]+)px\)/, (_, n) => `blur(${(Number(n) * deviceScale).toFixed(1)}px)`);
+  const fullFilter = [filter === 'none' ? '' : filter, extraFilter, fxFilter].filter(Boolean).join(' ') || 'none';
   if (fx.split > 0) {
     drawChannelSplit(
       ctx,
@@ -180,9 +182,9 @@ function drawClipFrame(
   }
 }
 
-type LayerDraw = (extraFilter?: string) => void;
+export type LayerDraw = (extraFilter?: string) => void;
 
-function drawTransition(
+export function drawTransition(
   ctx: Ctx,
   type: TransitionType,
   rawProgress: number,
@@ -258,6 +260,179 @@ function drawTransition(
       const scale = ctx.getTransform().a || 1;
       if (p < 0.5) layer(drawA, 1, 0, 0, 1 + p * 0.1, `blur(${p * 2 * 24 * scale}px)`);
       else layer(drawB, 1, 0, 0, 1 + (1 - p) * 0.1, `blur(${(1 - p) * 2 * 24 * scale}px)`);
+      return;
+    }
+    case 'slide-down':
+      layer(drawA, 1, 0, p * H);
+      layer(drawB, 1, 0, -(1 - p) * H);
+      return;
+    case 'cover-left':
+    case 'cover-right': {
+      const dir = type === 'cover-left' ? 1 : -1;
+      layer(drawA, 1, -dir * p * W * 0.3);
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.5)';
+      ctx.shadowBlur = W * 0.04;
+      layer(drawB, 1, dir * (1 - p) * W);
+      ctx.restore();
+      return;
+    }
+    case 'zoom-out':
+      layer(drawA, 1, 0, 0, 1 - p * 0.3);
+      layer(drawB, p, 0, 0, 1.6 - p * 0.6);
+      return;
+    case 'cross-zoom': {
+      const scale = ctx.getTransform().a || 1;
+      if (p < 0.5) layer(drawA, 1, 0, 0, 1 + p * 1.2, `blur(${p * 30 * scale}px)`);
+      else layer(drawB, 1, 0, 0, 1 + (1 - p) * 1.2, `blur(${(1 - p) * 30 * scale}px)`);
+      return;
+    }
+    case 'spin': {
+      const half = p < 0.5;
+      const k = half ? p * 2 : (1 - p) * 2;
+      ctx.save();
+      ctx.translate(W / 2, H / 2);
+      ctx.rotate((half ? 1 : -1) * k * Math.PI);
+      ctx.scale(1 - k * 0.7, 1 - k * 0.7);
+      ctx.translate(-W / 2, -H / 2);
+      (half ? drawA : drawB)();
+      ctx.restore();
+      return;
+    }
+    case 'circle':
+    case 'diamond':
+    case 'heart': {
+      layer(drawA);
+      const r = Math.hypot(W, H) * 0.55 * p * (type === 'heart' ? 1.5 : type === 'diamond' ? 1.42 : 1);
+      ctx.save();
+      ctx.beginPath();
+      if (type === 'circle') ctx.arc(W / 2, H / 2, r, 0, Math.PI * 2);
+      else if (type === 'diamond') {
+        ctx.moveTo(W / 2, H / 2 - r);
+        ctx.lineTo(W / 2 + r, H / 2);
+        ctx.lineTo(W / 2, H / 2 + r);
+        ctx.lineTo(W / 2 - r, H / 2);
+      } else {
+        // Heart: two lobes and a point, scaled around the centre.
+        const cx = W / 2;
+        const cy = H / 2 - r * 0.2;
+        ctx.moveTo(cx, cy + r * 0.9);
+        ctx.bezierCurveTo(cx - r * 1.3, cy + r * 0.1, cx - r * 0.7, cy - r * 0.9, cx, cy - r * 0.35);
+        ctx.bezierCurveTo(cx + r * 0.7, cy - r * 0.9, cx + r * 1.3, cy + r * 0.1, cx, cy + r * 0.9);
+      }
+      ctx.closePath();
+      ctx.clip();
+      drawB();
+      ctx.restore();
+      return;
+    }
+    case 'wipe-right':
+    case 'wipe-up':
+    case 'wipe-down': {
+      layer(drawA);
+      ctx.save();
+      ctx.beginPath();
+      if (type === 'wipe-right') ctx.rect(W * (1 - p), 0, W * p, H);
+      else if (type === 'wipe-up') ctx.rect(0, H * (1 - p), W, H * p);
+      else ctx.rect(0, 0, W, H * p);
+      ctx.clip();
+      drawB();
+      ctx.restore();
+      return;
+    }
+    case 'clock': {
+      layer(drawA);
+      const r = Math.hypot(W, H);
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(W / 2, H / 2);
+      ctx.arc(W / 2, H / 2, r, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      drawB();
+      ctx.restore();
+      return;
+    }
+    case 'blinds': {
+      layer(drawA);
+      const n = 8;
+      const band = H / n;
+      ctx.save();
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) ctx.rect(0, i * band, W, band * p);
+      ctx.clip();
+      drawB();
+      ctx.restore();
+      return;
+    }
+    case 'doors': {
+      // A splits down the middle and swings open onto B.
+      layer(drawB);
+      for (const side of [-1, 1]) {
+        ctx.save();
+        ctx.beginPath();
+        if (side < 0) ctx.rect(0, 0, W / 2, H);
+        else ctx.rect(W / 2, 0, W / 2, H);
+        ctx.clip();
+        ctx.translate(side * p * W * 0.5, 0);
+        drawA();
+        ctx.restore();
+      }
+      return;
+    }
+    case 'whip': {
+      // A fast pan with motion blur, switching mid-way.
+      const scale = ctx.getTransform().a || 1;
+      const blur = Math.sin(p * Math.PI) * 18 * scale;
+      if (p < 0.5) layer(drawA, 1, -p * 2 * W * 0.6, 0, 1, `blur(${blur}px)`);
+      else layer(drawB, 1, (1 - p) * 2 * W * 0.6, 0, 1, `blur(${blur}px)`);
+      return;
+    }
+    case 'glitch': {
+      const cur = p < 0.5 ? drawA : drawB;
+      const k = Math.sin(p * Math.PI);
+      layer(cur);
+      // Shifted colour copies and torn bands at the peak.
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      layer(cur, 0.35 * k, -W * 0.03 * k, 0, 1, 'hue-rotate(90deg)');
+      layer(cur, 0.35 * k, W * 0.03 * k, 0, 1, 'hue-rotate(-90deg)');
+      ctx.restore();
+      for (let i = 0; i < 5; i++) {
+        const y = ((Math.sin((i + 1) * 12.9898 + Math.floor(p * 20)) * 43758.5453) % 1 + 1) % 1;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, y * H, W, H * 0.05);
+        ctx.clip();
+        ctx.translate((i % 2 ? 1 : -1) * W * 0.08 * k, 0);
+        (i % 2 ? drawB : drawA)();
+        ctx.restore();
+      }
+      return;
+    }
+    case 'flash': {
+      // A quick white flash right on the cut.
+      layer(p < 0.5 ? drawA : drawB);
+      fill('#fff', Math.max(0, 1 - Math.abs(p - 0.5) * 5));
+      return;
+    }
+    case 'shake': {
+      const k = Math.sin(p * Math.PI);
+      const dx = Math.sin(p * 90) * W * 0.04 * k;
+      const dy = Math.cos(p * 70) * H * 0.03 * k;
+      layer(p < 0.5 ? drawA : drawB, 1, dx, dy, 1 + k * 0.08);
+      return;
+    }
+    case 'squeeze': {
+      // A squashes to a line, then B springs out of it.
+      const half = p < 0.5;
+      const k = half ? 1 - p * 2 : (p - 0.5) * 2;
+      ctx.save();
+      ctx.translate(W / 2, 0);
+      ctx.scale(Math.max(0.001, k), 1);
+      ctx.translate(-W / 2, 0);
+      (half ? drawA : drawB)();
+      ctx.restore();
       return;
     }
     default:
@@ -619,6 +794,8 @@ function drawWordCaption(ctx: Ctx, t: TextClip, time: number, W: number) {
       const word = words[i];
       const active = i === current && time < word.end;
       const spoken = time >= word.start;
+      // Reveal: only the words said so far are on screen.
+      if (hl.style === 'reveal' && !spoken) continue;
       const popIn = active ? 1 + 0.18 * Math.max(0, 1 - sinceStart / 0.18) : 1;
       let fill: string | CanvasGradient = t.color;
       let glow: string | undefined;
@@ -691,6 +868,102 @@ function drawWordCaption(ctx: Ctx, t: TextClip, time: number, W: number) {
             roundRectPath(ctx, cx - (w / 2) * grow, y + fs * 0.5, w * grow, fs * 0.13, fs * 0.06);
             ctx.fill();
           }
+          break;
+        case 'reveal':
+          if (active) {
+            fill = hl.color;
+            const k = Math.min(1, sinceStart / 0.12);
+            ctx.globalAlpha *= k;
+            ctx.translate(cx, y);
+            ctx.scale(0.85 + 0.15 * k, 0.85 + 0.15 * k);
+            ctx.translate(-cx, -y);
+          }
+          break;
+        case 'bounce':
+          if (active) {
+            fill = hl.color;
+            ctx.translate(0, -Math.sin(Math.min(1, sinceStart / 0.3) * Math.PI) * fs * 0.28);
+          }
+          break;
+        case 'outline':
+          if (!active) {
+            // Hollow letters; the spoken word fills in.
+            ctx.lineJoin = 'round';
+            ctx.lineWidth = Math.max(2, fs * 0.05);
+            ctx.strokeStyle = t.color;
+            ctx.strokeText(word.text, cx, y);
+            ctx.restore();
+            continue;
+          }
+          fill = hl.color;
+          break;
+        case 'marker':
+          if (active || spoken) {
+            // A highlighter stroke that sweeps across the word as it is said.
+            const grow = active ? Math.min(1, sinceStart / 0.2) : 1;
+            ctx.save();
+            ctx.globalAlpha *= active ? 0.85 : 0.35;
+            ctx.fillStyle = hl.color;
+            ctx.beginPath();
+            const x0 = rtl ? cx + w / 2 + fs * 0.12 - (w + fs * 0.24) * grow : cx - w / 2 - fs * 0.12;
+            ctx.moveTo(x0, y - fs * 0.32);
+            ctx.lineTo(x0 + (w + fs * 0.24) * grow, y - fs * 0.4);
+            ctx.lineTo(x0 + (w + fs * 0.24) * grow, y + fs * 0.4);
+            ctx.lineTo(x0, y + fs * 0.46);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+          }
+          break;
+        case 'fire':
+          if (active) {
+            const g = ctx.createLinearGradient(0, y - fs * 0.5, 0, y + fs * 0.5);
+            g.addColorStop(0, '#fde047');
+            g.addColorStop(0.5, hl.color);
+            g.addColorStop(1, '#dc2626');
+            fill = g;
+            glow = '#f97316';
+          }
+          break;
+        case 'shadow':
+          if (active) {
+            // A hard, coloured 3D shadow behind the spoken word.
+            ctx.save();
+            ctx.fillStyle = hl.color;
+            for (let d = 1; d <= 6; d++) ctx.fillText(word.text, cx + d * fs * 0.012, y + d * fs * 0.015);
+            ctx.restore();
+            ctx.translate(-fs * 0.02, -fs * 0.02);
+          }
+          break;
+        case 'spotlight':
+          if (!active) ctx.globalAlpha *= 0.35;
+          break;
+        case 'wave':
+          ctx.translate(0, Math.sin(time * 6 - i * 0.9) * fs * 0.08);
+          if (active) fill = hl.color;
+          break;
+        case 'slide':
+          if (active) {
+            fill = hl.color;
+            const k = Math.min(1, sinceStart / 0.16);
+            ctx.globalAlpha *= 0.3 + 0.7 * k;
+            ctx.translate(0, (1 - k) * fs * 0.45);
+          }
+          break;
+        case 'glitch':
+          if (active && sinceStart < 0.35) {
+            // Split colour copies that settle into the word.
+            const k = 1 - sinceStart / 0.35;
+            const j = Math.sin(time * 90) * fs * 0.06 * k;
+            ctx.save();
+            ctx.globalAlpha *= 0.8;
+            ctx.fillStyle = '#22d3ee';
+            ctx.fillText(word.text, cx - j - fs * 0.04 * k, y);
+            ctx.fillStyle = '#f0abfc';
+            ctx.fillText(word.text, cx + j + fs * 0.04 * k, y);
+            ctx.restore();
+          }
+          if (active) fill = hl.color;
           break;
       }
       drawWord(word.text, cx, y, fill, glow);
