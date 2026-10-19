@@ -433,12 +433,13 @@ export function followCaptions(prev: Project, next: Project, assets: Map<string,
   const texts: TextClip[] = [];
   for (const t of next.texts) {
     const src = t.src;
-    // Without matching word lists (the line was rewritten by hand) the caption stays put.
-    if (!src || !t.words || t.words.length !== src.words.length) {
+    if (!src || !t.words?.length) {
       texts.push(t);
       continue;
     }
-    const words: NonNullable<TextClip['words']> = [];
+    // A rewritten or translated line has other words than were spoken: it follows the span of its speech.
+    const sameWords = t.words.length === src.words.length;
+    let words: NonNullable<TextClip['words']> = [];
     const kept: number[] = [];
     let lastClip: LaidOutClip | null = null;
     src.words.forEach((w, i) => {
@@ -447,7 +448,7 @@ export function followCaptions(prev: Project, next: Project, assets: Map<string,
         const start = timelineTimeOf(lc, w.start);
         if (start === null) continue;
         const end = timelineTimeOf(lc, Math.min(w.end, lc.clip.outPoint)) ?? start;
-        words.push({ text: t.words![i].text, start, end: Math.max(start, end) });
+        words.push({ text: sameWords ? t.words![i].text : w.text, start, end: Math.max(start, end) });
         kept.push(i);
         lastClip = lc;
         return;
@@ -456,6 +457,13 @@ export function followCaptions(prev: Project, next: Project, assets: Map<string,
     if (!words.length || !lastClip) {
       changed = true;
       continue;
+    }
+    if (!sameWords) {
+      const from = t.words[0].start;
+      const span = Math.max(1e-3, t.words[t.words.length - 1].end - from);
+      const a = words[0].start;
+      const k = (words[words.length - 1].end - a) / span;
+      words = t.words.map((w) => ({ text: w.text, start: a + (w.start - from) * k, end: a + (w.end - from) * k }));
     }
     const start = words[0].start;
     const end = Math.min(words[words.length - 1].end + src.hold, (lastClip as LaidOutClip).end);
@@ -466,13 +474,13 @@ export function followCaptions(prev: Project, next: Project, assets: Map<string,
       continue;
     }
     changed = true;
-    const keep = words.length === src.words.length;
+    const keep = kept.length === src.words.length;
     texts.push({
       ...t,
       start,
       duration,
       words,
-      text: keep ? t.text : words.map((w) => w.text).join(' '),
+      text: keep || !sameWords ? t.text : words.map((w) => w.text).join(' '),
       // Words that were cut out are gone for good from this caption.
       src: keep ? src : { ...src, words: kept.map((i) => src.words[i]) },
     });

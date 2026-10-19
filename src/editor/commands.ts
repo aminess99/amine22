@@ -1,6 +1,6 @@
 import { VOICE_EFFECTS, VoiceEffect, applyVoiceEffect, detectBeats, encodeWav } from './audioTools';
-import { CaptionProgress, emojiFor, generateCaptions } from './autoCaptions';
-import { ClipTarget, CommandResponse, EditAction, TextStyleFields } from './commandSpec';
+import { CaptionProgress, emojiFor, generateCaptions, regroupCaptions } from './autoCaptions';
+import { ClipTarget, CommandResponse, EditAction, KeyframeSpec, TextStyleFields } from './commandSpec';
 import {
   ASPECT_SIZES,
   BLEND_MODES,
@@ -49,9 +49,12 @@ import {
   retimeWords,
   splitAudioClip,
   splitMainClip,
+  splitOverlayClip,
+  splitTextClip,
+  overlayMaxOut,
   uid,
 } from './timeline';
-import { AspectRatio, AudioClip, BlendMode, EffectItem, FxLayer, ChromaKey, LaidOutClip, MainClip, MaskShape, MediaAsset, OverlayAnim, OverlayClip, Project, Selection, TextAnimIn, TextAnimLoop, TextAnimOut, TextBgShape, TextClip, TransitionType } from './types';
+import { AspectRatio, AudioClip, BlendMode, EffectItem, FxLayer, ChromaKey, LaidOutClip, MainClip, MaskShape, MediaAsset, OverlayAnim, OverlayClip, Project, Selection, TextAnimIn, TextAnimLoop, TextAnimOut, TextBgShape, TextClip, TextKeyframe, TransitionType } from './types';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const isCaption = (t: TextClip) => !!t.words?.length;
@@ -91,6 +94,7 @@ export function commandContext(project: Project, assets: Map<string, MediaAsset>
       transition_in: lc.index > 0 ? lc.clip.transition.type : undefined,
       effect: lc.clip.effect?.type,
       motion: lc.clip.motion?.preset,
+      analysed: lc.asset.kind === 'video' ? !!lc.asset.analysis : undefined,
     })),
     audios: project.audios.map((a, i) => ({
       n: i + 1,
@@ -98,6 +102,7 @@ export function commandContext(project: Project, assets: Map<string, MediaAsset>
       start: r2(a.start),
       end: r2(audioClipEnd(a)),
       volume: r2(a.volume),
+      ducking: a.duck ? r2(a.duck.level) : undefined,
     })),
     texts: texts.map((t, i) => ({ n: i + 1, text: t.text.slice(0, 60), start: r2(t.start), end: r2(t.start + t.duration), font: t.font, y: r2(t.y) })),
     captions: captions.slice(0, 400).map((t, i) => ({ n: i + 1, start: r2(t.start), end: r2(t.start + t.duration), text: t.text })),
@@ -160,7 +165,9 @@ export async function requestCommand(command: string, context: unknown): Promise
   if (res.status === 429) throw new Error('أرسلت أوامر كثيرة. انتظر دقيقة ثم حاول.');
   if (!res.ok) throw new Error('لم أفهم الأمر أو تعذر الرد. حاول بصيغة أخرى.');
   const data = await res.json();
-  return { reply: String(data.reply ?? ''), actions: Array.isArray(data.actions) ? data.actions : [] };
+  // Drop anything that isn't an action object, so a malformed reply can't break the editor.
+  const actions = Array.isArray(data.actions) ? data.actions.filter((a: unknown) => !!a && typeof a === 'object' && typeof (a as { op?: unknown }).op === 'string') : [];
+  return { reply: String(data.reply ?? ''), actions };
 }
 
 // ---------------------------------------------------------------- reading model output safely
@@ -336,6 +343,29 @@ export function describeAction(a: EditAction): string | null {
       if (a.type !== undefined && !isProFx(a.type)) return null;
       return `تعديل ${target}${a.type ? ` إلى "${fxDef(a.type)?.label}"` : ''}`;
     }
+    case 'split_item': {
+      const targets = [a.texts ? targetText(a.texts, 'النصوص') : '', a.pips ? targetText(a.pips, 'الفيديو فوق الفيديو') : ''].filter(Boolean);
+      return targets.length ? `قص ${targets.join(' و')} عند ${formatTime(num(a.time, 0, 1e5, 0), true)}` : null;
+    }
+    case 'keyframes': {
+      const target = a.texts ? targetText(a.texts, 'النصوص') : clips;
+      if (a.clear) return `إزالة الحركة بالإطارات المفتاحية من ${target}`;
+      return Array.isArray(a.keys) && a.keys.length ? `حركة بـ ${Math.max(2, a.keys.length)} إطارات مفتاحية على ${target}` : null;
+    }
+    case 'duck':
+      return a.off
+        ? `إيقاف الخفض التلقائي في ${targetText(a.audios, 'المسارات الصوتية')}`
+        : `خفض ${targetText(a.audios, 'المسارات الصوتية')} تلقائياً أثناء الكلام إلى ${Math.round(num(a.level, 0, 0.9, 0.25) * 100)}%`;
+    case 'caption_regroup':
+      return `إعادة تقسيم الكابشن: ${Math.round(num(a.words_per_line, 1, 8, 3))} كلمات في السطر`;
+    case 'caption_rewrite':
+      return typeof a.instruction === 'string' && a.instruction.trim() ? `إعادة كتابة الكابشن بالذكاء الاصطناعي (${a.instruction.slice(0, 50)})` : null;
+    case 'analyze':
+      return 'تحليل الفيديو بالذكاء الاصطناعي';
+    case 'undo':
+      return `التراجع عن ${num(a.steps, 1, 20, 1) > 1 ? `آخر ${num(a.steps, 1, 20, 1)} تعديلات` : 'آخر تعديل'}`;
+    case 'redo':
+      return `إعادة ${num(a.steps, 1, 20, 1) > 1 ? `${num(a.steps, 1, 20, 1)} تعديلات` : 'آخر تعديل تم التراجع عنه'}`;
     case 'seek':
       return `الانتقال إلى ${formatTime(num(a.time, 0, 1e5, 0))}`;
     case 'play':
@@ -393,6 +423,7 @@ function styleText(t: TextClip, a: TextStyleFields): TextClip {
   if (a.y !== undefined) n.y = num(a.y, 0, 1, t.y);
   if (a.rotation !== undefined) n.rotation = num(a.rotation, -180, 180, t.rotation);
   if (a.duration !== undefined) n.duration = num(a.duration, 0.3, 600, t.duration);
+  if (a.start !== undefined && !n.words) n.start = num(a.start, 0, 1e5, t.start);
   if (known(TEXT_ANIMS_IN, a.anim_in)) n.animIn = a.anim_in as TextAnimIn;
   if (known(TEXT_ANIMS_OUT, a.anim_out)) n.animOut = a.anim_out as TextAnimOut;
   if (known(TEXT_ANIMS_LOOP, a.anim_loop)) n.animLoop = a.anim_loop as TextAnimLoop;
@@ -404,6 +435,74 @@ function styleText(t: TextClip, a: TextStyleFields): TextClip {
 }
 
 // ---------------------------------------------------------------- applying
+
+/** New duration / source start for a picture-in-picture, when the command gives them. */
+function pipRange(o: OverlayClip, a: { duration?: number; trim_start?: number }, asset: MediaAsset | undefined): Partial<OverlayClip> {
+  if (a.duration === undefined && a.trim_start === undefined) return {};
+  const max = asset ? overlayMaxOut(asset) : o.outPoint;
+  const len = o.outPoint - o.inPoint;
+  // Images have no source position: only their length changes.
+  if (asset?.kind === 'image') return { outPoint: o.inPoint + num(a.duration, 0.2, max - o.inPoint, len) };
+  const inPoint = a.trim_start === undefined ? o.inPoint : num(a.trim_start, 0, Math.max(0, max - 0.2), o.inPoint);
+  const length = a.duration === undefined ? len : num(a.duration, 0.2, 3600, len);
+  return { inPoint, outPoint: Math.min(max, inPoint + length) };
+}
+
+const sortKeys = <T extends { at: number }>(keys: T[]) => {
+  const out = [...keys].sort((x, y) => x.at - y.at);
+  return out.filter((k, i) => i === 0 || k.at - out[i - 1].at > 0.01);
+};
+
+/** Clip keyframes from the model; missing fields keep the clip's current framing. */
+function clipKeys(c: MainClip, keys: KeyframeSpec[]): MainClip['motion'] {
+  const list = sortKeys(
+    keys.map((k) => ({
+      at: num(k.at, 0, 1, 0),
+      tf: {
+        zoom: optNum(k.zoom, 0.2, 5) ?? c.zoom,
+        offsetX: optNum(k.x, -1, 1) ?? c.offsetX,
+        offsetY: optNum(k.y, -1, 1) ?? c.offsetY,
+        rotation: optNum(k.rotation, -360, 360) ?? c.rotation,
+      },
+    }))
+  );
+  if (!list.length) return c.motion;
+  if (list.length === 1) list.unshift({ at: 0, tf: { zoom: c.zoom, offsetX: c.offsetX, offsetY: c.offsetY, rotation: c.rotation } });
+  return { preset: 'custom', keys: list };
+}
+
+function textKeys(t: TextClip, keys: KeyframeSpec[]): TextKeyframe[] | undefined {
+  const list = sortKeys(
+    keys.map((k) => ({
+      at: num(k.at, 0, 1, 0),
+      x: optNum(k.x, 0, 1) ?? t.x,
+      y: optNum(k.y, 0, 1) ?? t.y,
+      fontSize: optNum(k.size, 10, 400) ?? t.fontSize,
+      rotation: optNum(k.rotation, -360, 360) ?? t.rotation,
+    }))
+  );
+  if (!list.length) return t.keys;
+  if (list.length === 1) list.unshift({ at: 0, x: t.x, y: t.y, fontSize: t.fontSize, rotation: t.rotation });
+  return list;
+}
+
+/** Rewrites caption lines with AI (translate, change dialect…); same number of lines back. */
+export async function rewriteLines(lines: string[], instruction: string): Promise<string[]> {
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i += 80) {
+    const batch = lines.slice(i, i + 80);
+    const res = await fetch('/api/caption-rewrite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lines: batch, instruction }),
+    }).catch(() => null);
+    if (!res?.ok) throw new Error(res?.status === 503 ? 'إعادة الكتابة تحتاج مفتاح OpenRouter في إعدادات الخادم.' : 'تعذرت إعادة كتابة الكابشن. حاول مرة أخرى.');
+    const data = await res.json();
+    const got: unknown[] = Array.isArray(data.lines) ? data.lines : [];
+    batch.forEach((line, j) => out.push(typeof got[j] === 'string' && (got[j] as string).trim() ? (got[j] as string).trim().slice(0, 300) : line));
+  }
+  return out;
+}
 
 /** Removes timeline span [a, b) from one audio track; the part after it moves back to close the gap. */
 export function cutAudioRange(x: AudioClip, a: number, b: number): AudioClip[] {
@@ -842,8 +941,33 @@ export async function executeActions(
           flipH: typeof a.flip_h === 'boolean' ? a.flip_h : o.flipH,
           volume: optNum(a.volume, 0, 1) ?? o.volume,
           muted: typeof a.muted === 'boolean' ? a.muted : o.muted,
+          ...pipRange(o, a, assets.get(o.assetId)),
         }));
         break;
+      case 'split_item': {
+        const t = num(a.time, 0, 1e5, 0);
+        const tIds = new Set(a.texts === 'all' ? plainTexts0.map((x) => x.id) : (Array.isArray(a.texts) ? a.texts : []).map((n) => plainTexts0[Number(n) - 1]?.id));
+        const oIds = pipIds(a.pips);
+        p = {
+          ...p,
+          texts: p.texts.flatMap((x) => (tIds.has(x.id) ? splitTextClip(x, t) ?? [x] : [x])),
+          overlays: p.overlays.flatMap((o) => (oIds.has(o.id) ? splitOverlayClip(o, t) ?? [o] : [o])),
+        };
+        break;
+      }
+      case 'keyframes': {
+        const keys = (Array.isArray(a.keys) ? a.keys : []).filter((k) => k && typeof k === 'object').slice(0, 12);
+        if (a.texts) {
+          const ids = new Set(a.texts === 'all' ? plainTexts0.map((x) => x.id) : (Array.isArray(a.texts) ? a.texts : []).map((n) => plainTexts0[Number(n) - 1]?.id));
+          p = { ...p, texts: p.texts.map((t) => (ids.has(t.id) ? { ...t, keys: a.clear ? undefined : textKeys(t, keys) } : t)) };
+        } else editClips(a.clips, (c) => ({ ...c, motion: a.clear ? null : clipKeys(c, keys) }));
+        break;
+      }
+      case 'duck': {
+        const ids = audioIds(a.audios);
+        p = { ...p, audios: p.audios.map((x) => (ids.has(x.id) ? { ...x, duck: a.off ? undefined : { level: num(a.level, 0, 0.9, 0.25) } } : x)) };
+        break;
+      }
       case 'delete_pip': {
         const ids = pipIds(a.pips);
         p = { ...p, overlays: p.overlays.filter((o) => !ids.has(o.id)) };
@@ -1161,13 +1285,36 @@ export async function executeActions(
     // Regenerating replaces old captions instead of stacking a second set.
     p = { ...p, texts: [...p.texts.filter((t) => !isCaption(t)), ...captions] };
   }
+  const regroup = actions.find((a): a is Extract<EditAction, { op: 'caption_regroup' }> => a.op === 'caption_regroup');
+  if (regroup) {
+    const regrouped = regroupCaptions(p.texts.filter(isCaption), Math.round(num(regroup.words_per_line, 1, 8, 3)));
+    if (regrouped.length) p = { ...p, texts: [...p.texts.filter((t) => !isCaption(t)), ...regrouped] };
+  }
+  const rewrite = actions.find((a): a is Extract<EditAction, { op: 'caption_rewrite' }> => a.op === 'caption_rewrite');
+  if (rewrite && typeof rewrite.instruction === 'string' && rewrite.instruction.trim()) {
+    const caps = p.texts.filter(isCaption).sort((x, y) => x.start - y.start);
+    if (!caps.length) note('لا يوجد كابشن لإعادة كتابته. أنشئ الكابشن أولاً.');
+    else {
+      onStatus('جاري إعادة كتابة الكابشن...', null);
+      const lines = await rewriteLines(caps.map((t) => t.text), rewrite.instruction.trim().slice(0, 200));
+      const byId = new Map(caps.map((t, i) => [t.id, lines[i]]));
+      p = {
+        ...p,
+        texts: p.texts.map((t) => {
+          const text = byId.get(t.id);
+          if (!text || text === t.text) return t;
+          return { ...t, text, words: t.words ? retimeWords(t.words, text) : undefined, emoji: t.emoji ? emojiFor(text.split(/\s+/).map((w) => ({ text: w }))) ?? t.emoji : undefined };
+        }),
+      };
+    }
+  }
   for (const a of actions) {
     if (a.op === 'caption_style' && known(CAPTION_STYLES, a.style)) editCaptions((t) => ({ ...t, ...captionStyleFields(a.style) }));
     else if (a.op === 'caption_position') editCaptions((t) => ({ ...t, y: num(a.y, 0.05, 0.95, t.y) }));
     else if (a.op === 'caption_size')
       editCaptions((t) => ({ ...t, fontSize: Math.round(((CAPTION_STYLES.find((c) => c.id === t.captionStyle)?.fontSize ?? 80) * num(a.percent, 50, 200, 100)) / 100) }));
     else if (a.op === 'caption_emoji') editCaptions((t) => ({ ...t, emoji: a.on ? emojiFor(t.words ?? []) : undefined }));
-    else if (a.op === 'text_style' && a.texts === 'captions') editCaptions((t) => styleText(t, { ...a, text: undefined }));
+    else if (a.op === 'text_style' && a.texts === 'captions') editCaptions((t) => styleText(t, { ...a, text: undefined, start: undefined }));
   }
 
   result.project = p;

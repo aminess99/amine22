@@ -534,6 +534,24 @@ export function AudioInspector({
           حذف لحظات الصمت تلقائياً
         </button>
       </Section>
+      <Section
+        title="خفض تلقائي أثناء الكلام"
+        action={
+          <button
+            type="button"
+            onClick={() => patch((a) => ({ ...a, duck: a.duck ? undefined : { level: 0.25 } }))}
+            className={cn('rounded-md px-2 py-1 text-[11px] font-semibold', audio.duck ? 'bg-emerald-500/20 text-emerald-300' : 'bg-white/5 text-slate-300')}
+          >
+            {audio.duck ? 'مفعّل' : 'تفعيل'}
+          </button>
+        }
+      >
+        <p className="text-[11px] text-slate-500">تنخفض الموسيقى وحدها عندما يتكلم أحد في الفيديو أو التعليق الصوتي، وترتفع بين الجمل.</p>
+        {audio.duck && (
+          <SliderRow label="مستوى الموسيقى أثناء الكلام" value={Math.round(audio.duck.level * 100)} min={0} max={80} format={pct}
+            onChange={(v) => patch((a) => ({ ...a, duck: { level: v / 100 } }), k('duck'))} />
+        )}
+      </Section>
       <Section title="مؤثرات صوتية">
         <div className="grid grid-cols-2 gap-1">
           {VOICE_EFFECTS.map((e) => (

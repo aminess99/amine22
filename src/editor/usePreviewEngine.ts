@@ -2,6 +2,7 @@ import { RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { ASPECT_SIZES } from './constants';
 import { filmstripFrame } from './media';
 import { renderFrame } from './renderer';
+import { duckFactor, speechTimeline } from './ducking';
 import { audioClipEnd, audioGainAt, clamp, getMainFrameState, overlayEnd, sourceInfo, sourceTimeFor } from './timeline';
 import { FrameRef, LaidOutClip, MediaAsset, Project, TextBounds } from './types';
 
@@ -51,6 +52,7 @@ export function usePreviewEngine(input: EngineInput) {
   const [playing, setPlaying] = useState(false);
 
   const latest = useRef(input);
+  const duckMemo = useRef<{ project: Project | null; spans: [number, number][] | null }>({ project: null, spans: [] });
   latest.current = input;
   const timeRef = useRef(0);
   const playingRef = useRef(false);
@@ -372,6 +374,10 @@ export function usePreviewEngine(input: EngineInput) {
       }
 
       // --- sync audio track elements
+      // Ducking spans depend only on the project, so they are worked out once per edit.
+      if (duckMemo.current.project !== project) duckMemo.current = { project, spans: speechTimeline(project, latest.current.assets) };
+      else if (duckMemo.current.spans === null) duckMemo.current.spans = speechTimeline(project, latest.current.assets);
+      const spans = duckMemo.current.spans;
       for (const a of project.audios) {
         const el = audios.current.get(a.id);
         if (!el) continue;
@@ -380,7 +386,7 @@ export function usePreviewEngine(input: EngineInput) {
           if (!el.paused) el.pause();
           continue;
         }
-        el.volume = clamp(audioGainAt(a, t), 0, 1);
+        el.volume = clamp(audioGainAt(a, t) * duckFactor(a, t, spans), 0, 1);
         el.muted = mutedRef.current;
         syncMedia(el, a.inPoint + (t - a.start), playNow, 1, false);
       }

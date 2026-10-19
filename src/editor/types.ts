@@ -437,6 +437,8 @@ export interface AudioClip {
   volume: number; // 0..1
   fadeIn: number;
   fadeOut: number;
+  /** Auto-ducking: quieter (to `level` of its volume) while someone speaks. */
+  duck?: { level: number };
 }
 
 export interface Project {

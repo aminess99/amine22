@@ -144,7 +144,7 @@ export function VideoEditor({ onBack, initialFiles }: VideoEditorProps) {
   const [silence, setSilence] = useState<{ busy: boolean; message: string | null }>({ busy: false, message: null });
   const [captionState, setCaptionState] = useState<{ busy: boolean; status: string | null; progress: number | null }>({ busy: false, status: null, progress: null });
 
-  const assets = useMemo(() => new Map(assetList.map((a) => [a.id, a])), [assetList]);
+  const assets = useMemo(() => new Map<string, MediaAsset>(assetList.map((a) => [a.id, a])), [assetList]);
   assetsForCaptions.current = assets;
   const layout = useMemo(() => layoutMainTrack(project.clips, assets), [project.clips, assets]);
   const duration = useMemo(() => projectDuration(project, layout), [project, layout]);
@@ -1128,10 +1128,24 @@ export function VideoEditor({ onBack, initialFiles }: VideoEditorProps) {
   // ---------- editing commands ----------
   const [command, setCommand] = useState<CommandState>({ busy: null, status: null, progress: null, error: null, plan: null, done: null });
   const askCommand = async (text: string) => {
-    setCommand((c) => ({ ...c, busy: 'thinking', error: null, plan: null, done: null }));
+    setCommand((c) => ({ ...c, busy: 'thinking', status: null, progress: null, error: null, plan: null, done: null }));
     try {
-      const res = await requestCommand(text, commandContext(project, assets, assetList, engine.getTime(), selection));
-      setCommand((c) => ({ ...c, busy: null, plan: { command: text, ...res } }));
+      let res = await requestCommand(text, commandContext(project, assets, assetList, engine.getTime(), selection));
+      // The request needs to see the video: watch it now, then ask again with what was seen.
+      if (res.actions.some((a) => a.op === 'analyze')) {
+        const updated = mainVideos.some((a) => !a.analysis)
+          ? await analyzeMissing((status, progress) => setCommand((c) => ({ ...c, status, progress })))
+          : new Map<string, MediaAsset>();
+        if (updated.size) {
+          setCommand((c) => ({ ...c, status: null, progress: null }));
+          const nextAssets = new Map<string, MediaAsset>(assets);
+          updated.forEach((a, id) => nextAssets.set(id, a));
+          const library = assetList.map((a) => updated.get(a.id) ?? a);
+          res = await requestCommand(text, commandContext(project, nextAssets, library, engine.getTime(), selection));
+        }
+        res = { ...res, actions: res.actions.filter((a) => a.op !== 'analyze') };
+      }
+      setCommand((c) => ({ ...c, busy: null, status: null, progress: null, plan: { command: text, ...res } }));
     } catch (err) {
       setCommand((c) => ({ ...c, busy: null, error: err instanceof Error ? err.message : 'تعذر تنفيذ الأمر.' }));
     }
@@ -1164,27 +1178,44 @@ export function VideoEditor({ onBack, initialFiles }: VideoEditorProps) {
   };
   const applyCommand = async () => {
     const plan = command.plan;
-    if (plan) await runActions(plan.actions, plan.command);
+    if (!plan) return;
+    const history = plan.actions.filter((a): a is Extract<EditAction, { op: 'undo' | 'redo' }> => a.op === 'undo' || a.op === 'redo');
+    if (history.length && history.length === plan.actions.length) {
+      for (const a of history) {
+        const steps = Math.min(20, Math.max(1, Math.round(Number(a.steps) || 1)));
+        for (let i = 0; i < steps; i++) (a.op === 'undo' ? undo : redo)();
+      }
+      setCommand((c) => ({ ...c, plan: null, done: null }));
+      return;
+    }
+    await runActions(plan.actions.filter((a) => a.op !== 'undo' && a.op !== 'redo'), plan.command);
   };
 
   // ---------- AI video understanding ----------
   const [analysis, setAnalysis] = useState<{ busy: boolean; status: string | null; progress: number | null; error: string | null }>({ busy: false, status: null, progress: null, error: null });
   const mainVideos = useMemo(() => [...new Map(layout.filter((l) => l.asset.kind === 'video').map((l) => [l.asset.id, l.asset])).values()], [layout]);
-  const analyzeVideos = async () => {
+  /** Analyses the main-track videos that haven't been yet; returns them updated, by id. */
+  const analyzeMissing = async (onProgress: (status: string, progress: number | null) => void) => {
     const targets = mainVideos.filter((a) => !a.analysis);
+    const done = new Map<string, MediaAsset>();
+    for (let i = 0; i < targets.length; i++) {
+      const asset = targets[i];
+      const part = targets.length > 1 ? ` (${i + 1} من ${targets.length})` : '';
+      const result = await analyzeVideo(asset, (p) => {
+        const { text, bar } = progressText(p);
+        onProgress(text + part, bar === null ? null : (i + bar) / targets.length);
+      });
+      const updated = { ...asset, analysis: result, fps: await videoFps(asset) };
+      setAssetList((list) => list.map((x) => (x.id === asset.id ? updated : x)));
+      saveAsset(updated).catch(() => {});
+      done.set(asset.id, updated);
+    }
+    return done;
+  };
+  const analyzeVideos = async () => {
     setAnalysis({ busy: true, status: null, progress: 0, error: null });
     try {
-      for (let i = 0; i < targets.length; i++) {
-        const asset = targets[i];
-        const part = targets.length > 1 ? ` (${i + 1} من ${targets.length})` : '';
-        const result = await analyzeVideo(asset, (p) => {
-          const { text, bar } = progressText(p);
-          setAnalysis((a) => ({ ...a, status: text + part, progress: bar === null ? null : (i + bar) / targets.length }));
-        });
-        const updated = { ...asset, analysis: result, fps: await videoFps(asset) };
-        setAssetList((list) => list.map((x) => (x.id === asset.id ? updated : x)));
-        saveAsset(updated).catch(() => {});
-      }
+      await analyzeMissing((status, progress) => setAnalysis((a) => ({ ...a, status, progress })));
       setAnalysis({ busy: false, status: null, progress: null, error: null });
     } catch (err) {
       setAnalysis({ busy: false, status: null, progress: null, error: err instanceof Error ? err.message : 'تعذر تحليل الفيديو.' });
