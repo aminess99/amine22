@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, Loader2, Send, Undo2, Wand2, X } from 'lucide-react';
+import { Check, Loader2, Send, Undo2, Wand2, X, Copy } from 'lucide-react';
 import { EditAction } from '../../editor/commandSpec';
 import { describeAction } from '../../editor/commands';
 import { cn } from '../../lib/utils';
@@ -108,7 +108,16 @@ export function CommandPanel({ state, onAsk, onApply, onCancel, onUndo }: Comman
       {state.plan && (
         <div className="space-y-2.5 rounded-xl border border-fuchsia-500/30 bg-fuchsia-500/5 p-3">
           <p className="text-xs text-slate-400">«{state.plan.command}»</p>
-          {state.plan.reply && <p className="text-sm text-slate-100">{state.plan.reply}</p>}
+          {state.plan.reply && <p className="select-text whitespace-pre-line text-sm leading-relaxed text-slate-100">{state.plan.reply}</p>}
+          {state.plan.reply && !steps.length && state.plan.reply.length > 80 && (
+            <button
+              type="button"
+              onClick={() => navigator.clipboard?.writeText(state.plan!.reply).catch(() => {})}
+              className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-slate-300 active:bg-white/10"
+            >
+              <Copy className="h-3.5 w-3.5" /> نسخ النص
+            </button>
+          )}
           {steps.length > 0 && (
             <ol className="space-y-1">
               {steps.map((s, i) => (

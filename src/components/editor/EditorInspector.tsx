@@ -494,6 +494,7 @@ export interface AudioTools {
   onEffect: (effect: VoiceEffect) => void;
   onDetectBeats: () => void;
   onBeatSync: (everyBeats: number) => void;
+  onRemoveSilence: () => void;
 }
 
 export function AudioInspector({
@@ -523,6 +524,15 @@ export function AudioInspector({
         <SliderRow label="اختفاء تدريجي" value={audio.fadeOut} min={0} max={Math.min(10, len / 2)} step={0.1} format={secs}
           onChange={(v) => patch((a) => ({ ...a, fadeOut: v }), k('fo'))} />
         <p className="text-[11px] text-slate-500">المدة: {secs(len)} · اسحب الأطراف في الخط الزمني للقص.</p>
+        <button
+          type="button"
+          disabled={!!tools.busy}
+          onClick={tools.onRemoveSilence}
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-violet-500/15 py-2 text-xs font-semibold text-violet-200 hover:bg-violet-500/25 disabled:opacity-50"
+        >
+          {tools.busy === 'silence' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+          حذف لحظات الصمت تلقائياً
+        </button>
       </Section>
       <Section title="مؤثرات صوتية">
         <div className="grid grid-cols-2 gap-1">

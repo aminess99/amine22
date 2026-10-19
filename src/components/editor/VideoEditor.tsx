@@ -66,7 +66,7 @@ import {
 import { AspectRatio, AudioClip, EffectItem, MainClip, MediaAsset, OverlayClip, Project, Selection, TextClip, TransitionType } from '../../editor/types';
 import { emojiFor, generateCaptions } from '../../editor/autoCaptions';
 import { clearAll, loadSaved, saveAsset, saveProject } from '../../editor/persistence';
-import { clipsFromRanges, findSpeechRanges } from '../../editor/silence';
+import { audioFromRanges, clipsFromRanges, findSpeechRanges } from '../../editor/silence';
 import { applyTemplate } from '../../editor/templates';
 import { useHistory } from '../../editor/useHistory';
 import { commandContext, executeActions, requestCommand } from '../../editor/commands';
@@ -500,6 +500,28 @@ export function VideoEditor({ onBack, initialFiles }: VideoEditorProps) {
       }
     },
     [project.audios, assets]
+  );
+
+  /** Cuts the quiet parts out of a music/voice track; the pieces close up. */
+  const removeAudioSilence = useCallback(
+    async (audioId: string) => {
+      const a = project.audios.find((x) => x.id === audioId);
+      const asset = a && assets.get(a.assetId);
+      if (!a || !asset) return;
+      setAudioTool({ busy: 'silence', message: null });
+      try {
+        const ranges = await findSpeechRanges(asset, a.inPoint, a.outPoint);
+        const removed = a.outPoint - a.inPoint - ranges.reduce((sum, [s, e]) => sum + (e - s), 0);
+        if (!ranges.length) return setAudioTool({ busy: null, message: 'لم أجد صوتاً مسموعاً في هذا المسار.' });
+        if (removed < 0.3) return setAudioTool({ busy: null, message: 'لا توجد لحظات صمت طويلة لحذفها.' });
+        const parts = audioFromRanges(a, ranges);
+        update((p) => ({ ...p, audios: p.audios.flatMap((x) => (x.id === audioId ? parts : [x])) }));
+        setAudioTool({ busy: null, message: `تم حذف ${removed.toFixed(1)} ثانية من الصمت.` });
+      } catch {
+        setAudioTool({ busy: null, message: 'تعذر قراءة هذا الصوت.' });
+      }
+    },
+    [project.audios, assets, update]
   );
 
   /** Re-times the main track so cuts land on every Nth beat of the selected music. */
@@ -1292,6 +1314,7 @@ export function VideoEditor({ onBack, initialFiles }: VideoEditorProps) {
         onEffect: (e) => applyAudioEffect(selectedAudio.id, e),
         onDetectBeats: () => findBeats(selectedAudio.id),
         onBeatSync: (n) => syncToBeats(selectedAudio.id, n),
+        onRemoveSilence: () => removeAudioSilence(selectedAudio.id),
       }}
     />
   ) : selectedCut ? (

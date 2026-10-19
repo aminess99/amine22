@@ -32,7 +32,7 @@ import { PROJECT_TEMPLATES, applyTemplate } from './templates';
 import { MAX_TTS_CHARS, TTS_STYLES, TTS_VOICES, synthesizeSpeech } from './tts';
 import { FONT_LIST } from './fonts';
 import { TEXT_TEMPLATES, templateTexts } from './textTemplates';
-import { clipsFromRanges, findSpeechRanges } from './silence';
+import { audioFromRanges, clipsFromRanges, findSpeechRanges } from './silence';
 import {
   audioClipEnd,
   beatCuts,
@@ -47,6 +47,7 @@ import {
   overlayEnd,
   retimeToCuts,
   retimeWords,
+  splitAudioClip,
   splitMainClip,
   uid,
 } from './timeline';
@@ -69,6 +70,7 @@ export function commandContext(project: Project, assets: Map<string, MediaAsset>
       const t = project.texts.find((x) => x.id === selection.id);
       return t && isCaption(t) ? { caption: t.text } : { text: texts.findIndex((x) => x.id === selection.id) + 1 };
     }
+    if (selection.kind === 'effect') return { effect: (project.effects ?? []).findIndex((x) => x.id === selection.id) + 1 };
     return { pip: project.overlays.findIndex((o) => o.id === selection.id) + 1 };
   };
   return {
@@ -111,6 +113,9 @@ export function commandContext(project: Project, assets: Map<string, MediaAsset>
       scale: r2(o.scale),
       chroma: !!o.chroma,
     })),
+    effects: project.effects?.length
+      ? project.effects.map((x, i) => ({ n: i + 1, type: x.type, start: r2(x.start), end: r2(x.start + x.duration), intensity: r2(x.intensity) }))
+      : undefined,
     media: library.map((a, i) => ({ n: i + 1, type: a.kind, name: a.name.slice(0, 40), duration: r2(a.duration) })),
   };
 }
@@ -211,7 +216,7 @@ export function describeAction(a: EditAction): string | null {
     case 'speed_curve':
       return a.curve === null ? `إزالة منحنى السرعة من ${clips}` : known(SPEED_CURVES, a.curve) ? `منحنى سرعة "${label(SPEED_CURVES, a.curve)}" على ${clips}` : null;
     case 'transform':
-      return `تعديل الحجم/الاتجاه في ${clips}`;
+      return `${a.x !== undefined || a.y !== undefined ? 'تعديل الموضع/الحجم' : 'تعديل الحجم/الاتجاه'} في ${clips}`;
     case 'aspect':
       return a.aspect in ASPECT_SIZES ? `مقاس الفيديو ${a.aspect}` : null;
     case 'background':
@@ -238,8 +243,10 @@ export function describeAction(a: EditAction): string | null {
       return a.on ? 'إضافة إيموجي للكابشن' : 'إزالة إيموجي الكابشن';
     case 'delete_captions':
       return 'حذف كل الكابشن';
-    case 'remove_silence':
-      return `حذف الصمت من ${clips}`;
+    case 'remove_silence': {
+      const targets = [a.clips ? clips : '', a.audios ? targetText(a.audios, 'المسارات الصوتية') : ''].filter(Boolean);
+      return targets.length ? `حذف الصمت من ${targets.join(' و')}` : null;
+    }
     case 'mask':
       return a.shape === null ? `إزالة القناع من ${clips}` : known(MASKS, a.shape) ? `قناع "${label(MASKS, a.shape)}" على ${clips}` : null;
     case 'chroma': {
@@ -284,6 +291,14 @@ export function describeAction(a: EditAction): string | null {
     }
     case 'delete_audio':
       return `حذف ${targetText(a.audios, 'المسارات الصوتية')}`;
+    case 'audio_split':
+      return `قص ${targetText(a.audios, 'المسارات الصوتية')} عند ${formatTime(num(a.time, 0, 1e5, 0), true)}`;
+    case 'audio_delete_range':
+      return `حذف الجزء من ${formatTime(num(a.start, 0, 1e5, 0), true)} إلى ${formatTime(num(a.end, 0, 1e5, 0), true)} من ${targetText(a.audios, 'المسارات الصوتية')}`;
+    case 'duplicate': {
+      const targets = [a.texts ? targetText(a.texts, 'النصوص') : '', a.pips ? targetText(a.pips, 'الفيديو فوق الفيديو') : '', a.audios ? targetText(a.audios, 'المسارات الصوتية') : ''].filter(Boolean);
+      return targets.length ? `تكرار ${targets.join(' و')}` : null;
+    }
     case 'pip_layer':
       return `ترتيب الفيديو فوق الفيديو ${a.pip}: ${{ front: 'إلى الأمام', back: 'إلى الخلف', forward: 'طبقة للأمام', backward: 'طبقة للخلف' }[a.to] ?? ''}`;
     case 'caption_line':
@@ -314,6 +329,12 @@ export function describeAction(a: EditAction): string | null {
     case 'fx_track': {
       const def = fxDef(a.type);
       return def ? `تأثير "${def.label}" على كل الصورة من ${formatTime(num(a.start, 0, 1e5, 0), true)} لمدة ${num(a.duration, 0.3, 600, 3)} ث` : null;
+    }
+    case 'fx_track_edit': {
+      const target = targetText(a.items, 'تأثيرات مسار التأثيرات');
+      if (a.delete) return `حذف ${target}`;
+      if (a.type !== undefined && !isProFx(a.type)) return null;
+      return `تعديل ${target}${a.type ? ` إلى "${fxDef(a.type)?.label}"` : ''}`;
     }
     case 'seek':
       return `الانتقال إلى ${formatTime(num(a.time, 0, 1e5, 0))}`;
@@ -375,10 +396,24 @@ function styleText(t: TextClip, a: TextStyleFields): TextClip {
   if (known(TEXT_ANIMS_IN, a.anim_in)) n.animIn = a.anim_in as TextAnimIn;
   if (known(TEXT_ANIMS_OUT, a.anim_out)) n.animOut = a.anim_out as TextAnimOut;
   if (known(TEXT_ANIMS_LOOP, a.anim_loop)) n.animLoop = a.anim_loop as TextAnimLoop;
+  if (a.align === 'left' || a.align === 'center' || a.align === 'right') n.align = a.align;
+  if (a.line_height !== undefined) n.lineHeight = num(a.line_height, 0.8, 2.5, t.lineHeight ?? 1.3);
+  if (n.words && typeof a.highlight_color === 'string' && COLOR.test(a.highlight_color))
+    n.highlight = { style: !t.highlight || t.highlight.style === 'none' ? 'color' : t.highlight.style, color: a.highlight_color };
   return n;
 }
 
 // ---------------------------------------------------------------- applying
+
+/** Removes timeline span [a, b) from one audio track; the part after it moves back to close the gap. */
+export function cutAudioRange(x: AudioClip, a: number, b: number): AudioClip[] {
+  const end = audioClipEnd(x);
+  if (b <= x.start || a >= end) return [x];
+  const out: AudioClip[] = [];
+  if (a > x.start + 0.05) out.push({ ...x, outPoint: x.inPoint + (a - x.start), fadeOut: 0 });
+  if (b < end - 0.05) out.push({ ...x, id: out.length ? uid() : x.id, start: Math.max(x.start, a), inPoint: x.inPoint + (b - x.start), fadeIn: 0 });
+  return out;
+}
 
 /** Removes [a, b) from the timeline and closes the gap; texts and overlays after it move back. */
 export function rippleDelete(p: Project, assets: Map<string, MediaAsset>, a: number, b: number): Project {
@@ -540,6 +575,59 @@ export async function executeActions(
         p = { ...p, audios: p.audios.filter((x) => !ids.has(x.id)) };
         break;
       }
+      case 'audio_split': {
+        const ids = audioIds(a.audios);
+        const t = num(a.time, 0, 1e5, 0);
+        p = { ...p, audios: p.audios.flatMap((x) => (ids.has(x.id) ? splitAudioClip(x, t) ?? [x] : [x])) };
+        break;
+      }
+      case 'audio_delete_range': {
+        const ids = audioIds(a.audios);
+        const from = num(a.start, 0, 1e5, 0);
+        const to = num(a.end, from, 1e5, from);
+        if (to - from < 0.05) break;
+        p = { ...p, audios: p.audios.flatMap((x) => (ids.has(x.id) ? cutAudioRange(x, from, to) : [x])) };
+        break;
+      }
+      case 'duplicate': {
+        // The copy goes right after the original on the timeline.
+        const tIds = new Set(a.texts === 'all' ? plainTexts0.map((t) => t.id) : (Array.isArray(a.texts) ? a.texts : []).map((n) => plainTexts0[Number(n) - 1]?.id));
+        const oIds = pipIds(a.pips);
+        const aIds = audioIds(a.audios);
+        p = {
+          ...p,
+          texts: p.texts.flatMap((t) => (tIds.has(t.id) ? [t, { ...t, id: uid(), start: t.start + t.duration }] : [t])),
+          overlays: p.overlays.flatMap((o) => (oIds.has(o.id) ? [o, { ...o, id: uid(), start: overlayEnd(o) }] : [o])),
+          audios: p.audios.flatMap((x) => (aIds.has(x.id) ? [x, { ...x, id: uid(), start: audioClipEnd(x) }] : [x])),
+        };
+        break;
+      }
+      case 'fx_track_edit': {
+        const list = start.effects ?? [];
+        const ids = new Set(a.items === 'all' ? list.map((x) => x.id) : (Array.isArray(a.items) ? a.items : []).map((n) => list[Number(n) - 1]?.id));
+        if (a.delete) {
+          p = { ...p, effects: (p.effects ?? []).filter((x) => !ids.has(x.id)) };
+          break;
+        }
+        p = {
+          ...p,
+          effects: (p.effects ?? []).map((x) => {
+            if (!ids.has(x.id)) return x;
+            const type = isProFx(a.type) ? a.type : x.type;
+            return {
+              ...x,
+              ...(type !== x.type ? newFxLayer(type, x.intensity) : {}),
+              id: x.id,
+              start: optNum(a.start, 0, 1e5) ?? x.start,
+              duration: optNum(a.duration, 0.3, 600) ?? x.duration,
+              intensity: optNum(a.intensity, 0.05, 1) ?? x.intensity,
+              speed: optNum(a.speed, 0.25, 3) ?? x.speed,
+              ...(typeof a.color === 'string' && COLOR.test(a.color) ? { color: a.color } : {}),
+            };
+          }),
+        };
+        break;
+      }
       case 'pip_layer': {
         const id = start.overlays[Number(a.pip) - 1]?.id;
         const from = p.overlays.findIndex((o) => o.id === id);
@@ -640,6 +728,8 @@ export async function executeActions(
           fit: a.fit === 'cover' || a.fit === 'contain' ? a.fit : c.fit,
           flipH: typeof a.flip_h === 'boolean' ? a.flip_h : c.flipH,
           flipV: typeof a.flip_v === 'boolean' ? a.flip_v : c.flipV,
+          offsetX: optNum(a.x, -1, 1) ?? c.offsetX,
+          offsetY: optNum(a.y, -1, 1) ?? c.offsetY,
           motion: null,
         }));
         break;
@@ -882,7 +972,22 @@ export async function executeActions(
   }
 
   // 5. Silence removal (decodes audio, so it is slow).
-  const silenceIds = new Set(actions.flatMap((a) => (a.op === 'remove_silence' ? [...clipIds(a.clips)] : [])));
+  const silenceIds = new Set(actions.flatMap((a) => (a.op === 'remove_silence' && a.clips ? [...clipIds(a.clips)] : [])));
+  const silenceAudios = new Set(actions.flatMap((a) => (a.op === 'remove_silence' && a.audios ? [...audioIds(a.audios)] : [])));
+  if (silenceAudios.size) {
+    onStatus('جاري البحث عن الصمت في الصوت...', null);
+    const audios: AudioClip[] = [];
+    for (const x of p.audios) {
+      const asset = assets.get(x.assetId);
+      if (!silenceAudios.has(x.id) || !asset) {
+        audios.push(x);
+        continue;
+      }
+      const ranges = await findSpeechRanges(asset, x.inPoint, x.outPoint);
+      audios.push(...(ranges.length ? audioFromRanges(x, ranges) : [x]));
+    }
+    p = { ...p, audios };
+  }
   if (silenceIds.size) {
     onStatus('جاري البحث عن الصمت...', null);
     const clips: MainClip[] = [];
