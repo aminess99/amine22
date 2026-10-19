@@ -22,6 +22,7 @@ import { FONT_GROUPS, FONT_LIST } from './fonts';
 import { TEXT_TEMPLATES } from './textTemplates';
 import { PROJECT_TEMPLATES } from './templates';
 import { SFX_LIST } from './sfx';
+import { PRO_FX } from './proFxCatalog';
 
 /** Look and motion fields shared by add_text and text_style. */
 export interface TextStyleFields {
@@ -131,6 +132,8 @@ export type EditAction =
   | { op: 'sfx_search'; query: string; at?: number[]; volume?: number }
   | { op: 'reframe'; clips: ClipTarget }
   | { op: 'make_short'; start: number; end: number }
+  | { op: 'clip_fx'; clips?: ClipTarget; pips?: ClipTarget; add?: { type: string; intensity?: number; speed?: number; color?: string }[]; remove?: string[]; clear?: boolean }
+  | { op: 'fx_track'; type: string; start: number; duration?: number; intensity?: number; speed?: number; color?: string }
   | { op: 'seek'; time: number }
   | { op: 'play' }
   | { op: 'export' };
@@ -210,6 +213,9 @@ Actions (use only these):
 - {"op":"sfx_search","query":"english keywords","at":[seconds…],"volume":0-1}  a real recorded sound from the Freesound library (applause, laughter, rain, door, crowd, car…) when no built-in sound fits
 - {"op":"reframe","clips":…}  smart reframe: fill the frame and follow the main subject (for horizontal video in a vertical frame). Needs vision data for the clip.
 - {"op":"make_short","start":s,"end":s}  keep only that part of the video as a vertical short (9:16, reframed). Use a highlight from "vision" when the user asks for a short/best moment.
+- {"op":"clip_fx","clips":… or "pips":…,"add":[{"type":id,"intensity":0-1,"speed":0.25-3,"color":"#rrggbb"}],"remove":[ids],"clear":bool}  professional effects stacked on clips or picture-in-picture (CapCut-style). Body effects need a person in the shot; "bg-remove" on a pip cuts the person out over the video below.
+- {"op":"fx_track","type":id,"start":s,"duration":s,"intensity":0-1,"speed":0.25-3,"color":"#rrggbb"}  an effect on the effects track: applies to the whole picture (all clips and pips, not texts) for that time
+  Pro effects: ${PRO_FX.map((f) => `${f.id} (${f.label})`).join(', ')}
 - {"op":"seek","time":s}   {"op":"play"}   {"op":"export"}
 
 Rules: use the fewest actions that do exactly what was asked. Never invent clip numbers that do not exist. Clamp values to the ranges above.

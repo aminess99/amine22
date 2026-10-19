@@ -19,6 +19,7 @@ import { clipDuration, motionFromPreset, retimeWords, setKeyframe } from '../../
 import { Adjustments, AspectRatio, AudioClip, MainClip, MediaAsset, OverlayClip, OverlayShape, Project, TextClip, TransitionType } from '../../editor/types';
 import { ColorInput, Section, Segmented, SliderRow } from './ui';
 import { AnimChip, CaptionStyleThumb, FilterThumb, MotionThumb, TransitionThumb } from './previews';
+import { ProFxSection } from './FxPanel';
 import { FontPicker, TextAnimSections, TextKeyframesSection, TextStyleSection } from './TextExtras';
 import { ChromaSection, ClipAnimSection, CropSection, EffectSection, FlipButtons, MaskSection, SpeedCurveSection } from './ClipExtras';
 import { VOICE_EFFECTS, VoiceEffect } from '../../editor/audioTools';
@@ -269,6 +270,8 @@ export function ClipInspector({
       <EffectSection effect={clip.effect} frame={frame} coalesce={k} onChange={(effect, key) => { patch((c) => ({ ...c, effect }), key); if (effect && !key) preview('whole'); }} />
 
       <MaskSection mask={clip.mask} frame={frame} coalesce={k} onChange={(mask, key) => patch((c) => ({ ...c, mask }), key)} />
+
+      <ProFxSection layers={clip.fx ?? []} frame={frame} onChange={(fx, key) => patch((c) => ({ ...c, fx }), key)} onPreview={() => preview('whole')} />
 
       <ChromaSection chroma={clip.chroma} coalesce={k} onChange={(chroma, key) => patch((c) => ({ ...c, chroma }), key)} />
 
@@ -654,6 +657,13 @@ export function OverlayInspector({
         </label>
         <FlipButtons flipH={overlay.flipH} onChange={(flipH) => patch((o) => ({ ...o, flipH }))} />
       </Section>
+      <ProFxSection
+        title="تأثيرات احترافية (مثلاً إزالة الخلفية)"
+        layers={overlay.fx ?? []}
+        frame={asset?.thumbnail}
+        onChange={(fx, key) => patch((o) => ({ ...o, fx }), key)}
+        onPreview={() => preview('whole')}
+      />
       <ChromaSection chroma={overlay.chroma} coalesce={k} onChange={(chroma, key) => patch((o) => ({ ...o, chroma }), key)} />
       <Section title="حركة الدخول">{chips('in')}</Section>
       <Section title="حركة الخروج">{chips('out')}</Section>

@@ -1,10 +1,11 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeftRight, Image as ImageIcon, Layers, Music, Type, VolumeX } from 'lucide-react';
+import { ArrowLeftRight, Image as ImageIcon, Layers, Music, Type, VolumeX, Zap } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { MAX_IMAGE_DURATION, MIN_CLIP_DURATION, PEAKS_PER_SECOND } from '../../editor/constants';
 import { assignLanes, audioClipEnd, clamp, formatTime, overlayEnd, overlayMaxOut, snap } from '../../editor/timeline';
 import {
   AudioClip,
+  EffectItem,
   LaidOutClip,
   MainClip,
   MediaAsset,
@@ -32,6 +33,9 @@ interface TimelineProps {
   onUpdateText: Updater<TextClip>;
   onUpdateAudio: Updater<AudioClip>;
   onUpdateOverlay: Updater<OverlayClip>;
+  onUpdateEffect: Updater<EffectItem>;
+  /** Display name of an effect id. */
+  effectLabel: (type: string) => string;
   onReorder: (from: number, to: number) => void;
   onDropAsset: (assetId: string, time: number) => void;
   onAddText: () => void;
@@ -142,7 +146,7 @@ function TrimHandle({ side, onPointerDown }: { side: 'start' | 'end'; onPointerD
 export function EditorTimeline(props: TimelineProps) {
   const {
     project, layout, assets, duration, time, playing, pxPerSec: pps, onZoom, selection, onSelect, onSeek,
-    onUpdateClip, onUpdateText, onUpdateAudio, onUpdateOverlay, onReorder, onDropAsset, onAddText, onAddAudio, subscribeFrame,
+    onUpdateClip, onUpdateText, onUpdateAudio, onUpdateOverlay, onUpdateEffect, effectLabel, onReorder, onDropAsset, onAddText, onAddAudio, subscribeFrame,
   } = props;
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -239,6 +243,8 @@ export function EditorTimeline(props: TimelineProps) {
   const textLanes = useMemo(() => assignLanes(project.texts, (t) => [t.start, t.start + t.duration]), [project.texts]);
   const overlayLanes = useMemo(() => assignLanes(project.overlays, (o) => [o.start, overlayEnd(o)]), [project.overlays]);
   const audioLanes = useMemo(() => assignLanes(project.audios, (a) => [a.start, audioClipEnd(a)]), [project.audios]);
+  const effects = project.effects ?? [];
+  const effectLanes = useMemo(() => assignLanes(effects, (x) => [x.start, x.start + x.duration]), [effects]);
 
   const contentWidth = PAD * 2 + Math.max((duration + 8) * pps, viewport);
   const timeAtClientX = (clientX: number) => {
@@ -262,9 +268,10 @@ export function EditorTimeline(props: TimelineProps) {
     for (const t of project.texts) pts.push(t.start, t.start + t.duration);
     for (const a of project.audios) pts.push(a.start, audioClipEnd(a));
     for (const o of project.overlays) pts.push(o.start, overlayEnd(o));
+    for (const x of project.effects ?? []) pts.push(x.start, x.start + x.duration);
     for (const b of beatTimes) pts.push(b);
     return pts;
-  }, [layout, project.texts, project.audios, project.overlays, time, beatTimes]);
+  }, [layout, project.texts, project.audios, project.overlays, project.effects, time, beatTimes]);
 
   const scrub = (e: React.PointerEvent) => {
     onSeek(timeAtClientX(e.clientX));
@@ -349,6 +356,26 @@ export function EditorTimeline(props: TimelineProps) {
     });
   };
 
+  const onEffectPointerDown = (e: React.PointerEvent, fx: EffectItem, mode: 'move' | 'start' | 'end') => {
+    onSelect({ kind: 'effect', id: fx.id });
+    const key = `effect-${fx.id}-${performance.now()}`;
+    const items = effects.map((x) => ({ id: x.id, s: x.start, e: x.start + x.duration }));
+    const th = SNAP_PX / pps;
+    startDrag(e, (dx) => {
+      const dt = dx / pps;
+      onUpdateEffect(fx.id, (x) => {
+        if (mode === 'move') return { ...x, start: snapMove(fx.start + dt, fx.duration, fx.id, items) };
+        if (mode === 'end') {
+          const end = snap(fx.start + fx.duration + dt, snapPoints, th);
+          return { ...x, duration: Math.max(MIN_CLIP_DURATION, end - fx.start) };
+        }
+        const end = fx.start + fx.duration;
+        const start = clamp(snap(fx.start + dt, snapPoints, th), 0, end - MIN_CLIP_DURATION);
+        return { ...x, start, duration: end - start };
+      }, key);
+    });
+  };
+
   /** Move/trim for free-placed items that play a source range (audio, overlays). */
   const dragRanged = <T extends { id: string; start: number; inPoint: number; outPoint: number }>(
     e: React.PointerEvent,
@@ -403,6 +430,7 @@ export function EditorTimeline(props: TimelineProps) {
   const textTrackH = textLanes.count * LANE_H + 8;
   const audioTrackH = audioLanes.count * LANE_H + 8;
   const overlayTrackH = project.overlays.length ? overlayLanes.count * LANE_H + 8 : 0;
+  const effectTrackH = effects.length ? effectLanes.count * LANE_H + 8 : 0;
 
   return (
     <div
@@ -447,6 +475,32 @@ export function EditorTimeline(props: TimelineProps) {
         </div>
 
         <div className="space-y-1.5 py-2" onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); scrub(e); } }}>
+          {/* Effects track: effects over everything below for a while */}
+          {effects.length > 0 && (
+            <div className="relative" style={{ height: effectTrackH }} onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); scrub(e); } }}>
+              {effects.map((fx) => {
+                const lane = effectLanes.lanes.get(fx.id) ?? 0;
+                const selected = selection?.kind === 'effect' && selection.id === fx.id;
+                return (
+                  <div
+                    key={fx.id}
+                    onPointerDown={(e) => onEffectPointerDown(e, fx, 'move')}
+                    className={cn(
+                      'absolute flex cursor-grab touch-none items-center overflow-hidden rounded-md bg-gradient-to-r from-amber-500/90 to-pink-500/90 text-[11px] font-semibold text-white active:cursor-grabbing',
+                      selected ? 'ring-2 ring-white' : 'hover:brightness-110'
+                    )}
+                    style={{ left: PAD + fx.start * pps, width: Math.max(6, fx.duration * pps), top: 4 + lane * LANE_H, height: LANE_H - 4 }}
+                  >
+                    {selected && <TrimHandle side="start" onPointerDown={(e) => onEffectPointerDown(e, fx, 'start')} />}
+                    <Zap className="mx-1.5 h-3 w-3 shrink-0 opacity-90" />
+                    <span className="truncate pr-3">{effectLabel(fx.type)}</span>
+                    {selected && <TrimHandle side="end" onPointerDown={(e) => onEffectPointerDown(e, fx, 'end')} />}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {/* Text track */}
           <div className="relative" style={{ height: textTrackH }} onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); scrub(e); } }}>
             {project.texts.length === 0 && (

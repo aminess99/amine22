@@ -20,6 +20,7 @@ import {
 import { ASPECT_SIZES } from './constants';
 import { timeStretch } from './timeStretch';
 import { ensureFonts } from './fonts';
+import { prepareFx } from './proFx';
 import { renderFrame } from './renderer';
 import { curveRate, overlayEnd, getMainFrameState, layoutMainTrack, projectDuration } from './timeline';
 import { LaidOutClip, MediaAsset, Project } from './types';
@@ -185,6 +186,8 @@ export async function exportProject(
 
   onProgress(0, 'تجهيز الخطوط والصوت...');
   await ensureFonts(project.texts.map((t) => t.font));
+  // Body effects need the person model before the first frame.
+  await prepareFx(project);
 
   let format: Mp4OutputFormat | WebMOutputFormat = new Mp4OutputFormat({ fastStart: 'in-memory' });
   let extension: ExportResult['extension'] = 'mp4';

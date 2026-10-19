@@ -1,8 +1,10 @@
 import { chromaKey, clipAnimState, drawChannelSplit, effectState, maskPath } from './clipFx';
+import { drawParticleLayers, processFrame } from './proFx';
 import { textAnimState } from './textFx';
 import { activeOverlays, activeTexts, clamp, getMainFrameState, textProgress, textTransformAt, transformAt } from './timeline';
 import {
   Adjustments,
+  EffectItem,
   FrameRef,
   LaidOutClip,
   MainClip,
@@ -86,8 +88,19 @@ function drawClipFrame(
   const fx = effectState(clip.effect, ref.lc.start + ref.localTime);
 
   // Green screen works on the whole frame, then the crop picks the region to show.
-  const src: CanvasImageSource = clip.chroma ? chromaKey(raw, rw, rh, clip.chroma) : raw;
-  const [sw, sh] = clip.chroma ? sourceSize(src) : [rw, rh];
+  let src: CanvasImageSource = clip.chroma ? chromaKey(raw, rw, rh, clip.chroma) : raw;
+  let [sw, sh] = clip.chroma ? sourceSize(src) : [rw, rh];
+  const now = ref.lc.start + ref.localTime;
+  if (clip.fx?.length) {
+    // Pro effects (person segmentation, shaders) work on the whole source frame too.
+    // A still picture's person mask never changes; a video's changes with every frame.
+    const key = ref.lc.asset.kind === 'image' ? ref.lc.asset.id : `${ref.lc.asset.id}@${ref.sourceTime.toFixed(3)}`;
+    const done = processFrame(src, sw, sh, clip.fx, now, key);
+    if (done) {
+      src = done.canvas;
+      [sw, sh] = [done.w, done.h];
+    }
+  }
   const crop = clip.crop;
   const sx = crop.x * sw;
   const sy = crop.y * sh;
@@ -178,6 +191,12 @@ function drawClipFrame(
     ctx.globalAlpha = Math.abs(fx.flash);
     ctx.fillStyle = fx.flash > 0 ? '#ffffff' : '#000000';
     ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+  if (clip.fx?.length) {
+    ctx.save();
+    ctx.globalAlpha *= anim.alpha;
+    drawParticleLayers(ctx, clip.fx, now, W, H);
     ctx.restore();
   }
 }
@@ -639,7 +658,11 @@ function drawOverlay(
   if (!raw) return null;
   const [rw, rh] = sourceSize(raw);
   if (!rw || !rh) return null;
-  const src: CanvasImageSource = o.chroma ? chromaKey(raw, rw, rh, o.chroma) : raw;
+  let src: CanvasImageSource = o.chroma ? chromaKey(raw, rw, rh, o.chroma) : raw;
+  if (o.fx?.length) {
+    const done = processFrame(src, rw, rh, o.fx, time, `${o.assetId}@${(o.inPoint + (time - o.start)).toFixed(3)}`);
+    if (done) src = done.canvas;
+  }
   const [sw, sh] = [rw, rh];
 
   const dur = o.outPoint - o.inPoint;
@@ -988,6 +1011,21 @@ function drawCaptionEmoji(ctx: Ctx, t: TextClip, time: number, y: number) {
 }
 
 /** Draws one composed frame. Shared by the live preview and the exporter. */
+/** Runs effects-track items over the whole canvas (pixels in, pixels out) and draws their particles. */
+function applyEffectTrack(ctx: Ctx, effects: EffectItem[], time: number, W: number, H: number) {
+  const canvas = ctx.canvas;
+  const done = processFrame(canvas, canvas.width, canvas.height, effects, time, '');
+  if (done) {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(done.canvas, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
+  }
+  drawParticleLayers(ctx, effects, time, W, H);
+}
+
 export function renderFrame(ctx: Ctx, opts: RenderOptions): TextBounds[] {
   const { width: W, height: H, project, layout, time, getFrame } = opts;
   ctx.fillStyle = project.background;
@@ -1015,6 +1053,10 @@ export function renderFrame(ctx: Ctx, opts: RenderOptions): TextBounds[] {
     const b = drawOverlay(ctx, o, time, W, H, opts.getOverlayFrame);
     if (b) bounds.push(b);
   }
+  // The effects track works on everything drawn so far; texts stay on top, untouched.
+  const effects = (project.effects ?? []).filter((e) => time >= e.start && time < e.start + e.duration);
+  if (effects.length) applyEffectTrack(ctx, effects, time, W, H);
+
   for (const t of activeTexts(project.texts, time)) {
     bounds.push(drawText(ctx, t, time, W, H));
   }

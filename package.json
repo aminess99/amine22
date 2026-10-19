@@ -17,6 +17,7 @@
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "@google/genai": "^1.52.0",
+    "@mediapipe/tasks-vision": "^1.1.1",
     "@remotion/bundler": "^4.0.526",
     "@remotion/player": "^4.0.526",
     "@remotion/renderer": "^4.0.526",

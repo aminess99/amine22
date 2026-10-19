@@ -27,6 +27,7 @@ import {
   Upload,
   Wand2,
   X,
+  Zap,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { ASPECT_SIZES, CAPTION_STYLES, captionStyleFields, DEFAULT_TRANSITION_DURATION, TEXT_PRESETS, presetAdjustments } from '../../editor/constants';
@@ -62,7 +63,7 @@ import {
   textProgress,
   textTransformAt,
 } from '../../editor/timeline';
-import { AspectRatio, AudioClip, MainClip, MediaAsset, OverlayClip, Project, Selection, TextClip, TransitionType } from '../../editor/types';
+import { AspectRatio, AudioClip, EffectItem, MainClip, MediaAsset, OverlayClip, Project, Selection, TextClip, TransitionType } from '../../editor/types';
 import { emojiFor, generateCaptions } from '../../editor/autoCaptions';
 import { clearAll, loadSaved, saveAsset, saveProject } from '../../editor/persistence';
 import { clipsFromRanges, findSpeechRanges } from '../../editor/silence';
@@ -71,6 +72,7 @@ import { useHistory } from '../../editor/useHistory';
 import { commandContext, executeActions, requestCommand } from '../../editor/commands';
 import { synthesizeSpeech } from '../../editor/tts';
 import { autoSfxTimes, sfxFile } from '../../editor/sfx';
+import { fxDef, newFxLayer } from '../../editor/proFx';
 import { analyzeVideo, progressText } from '../../editor/analysis';
 import { videoFps } from '../../editor/refine';
 import { EditAction } from '../../editor/commandSpec';
@@ -85,6 +87,7 @@ import {
 import { usePreviewEngine } from '../../editor/usePreviewEngine';
 import { CommandPanel, CommandState } from './CommandPanel';
 import { SfxPanel } from './SfxPanel';
+import { EffectInspector, EffectsPanel } from './FxPanel';
 import { AiPanel, AiPanelState, AiShort } from './AiPanel';
 import { EditorExportModal } from './EditorExportModal';
 import { AudioInspector, ClipInspector, OverlayInspector, ProjectInspector, TextInspector, TransitionInspector } from './EditorInspector';
@@ -93,7 +96,7 @@ import { EditorTimeline } from './EditorTimeline';
 import { ToolButton } from './ui';
 import { frameAt } from './previews';
 
-type PanelId = 'media' | 'ai' | 'audio' | 'text' | 'stickers' | 'filters' | 'transitions' | 'templates' | 'edit';
+type PanelId = 'media' | 'ai' | 'effects' | 'audio' | 'text' | 'stickers' | 'filters' | 'transitions' | 'templates' | 'edit';
 
 const PANELS: { id: PanelId; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'media', label: 'الوسائط', icon: Film },
@@ -103,6 +106,7 @@ const PANELS: { id: PanelId; label: string; icon: React.ComponentType<{ classNam
   { id: 'stickers', label: 'ملصقات', icon: Smile },
   { id: 'filters', label: 'فلاتر', icon: Sparkles },
   { id: 'transitions', label: 'انتقالات', icon: ArrowLeftRight },
+  { id: 'effects', label: 'تأثيرات', icon: Zap },
   { id: 'templates', label: 'قوالب', icon: LayoutTemplate },
   { id: 'edit', label: 'تعديل', icon: SlidersHorizontal },
 ];
@@ -305,6 +309,22 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     (id: string, fn: (a: AudioClip) => AudioClip, key?: string) => update((p) => ({ ...p, audios: replaceById(p.audios, id, fn) }), key),
     [update]
   );
+  const updateEffect = useCallback(
+    (id: string, fn: (e: EffectItem) => EffectItem, key?: string) => update((p) => ({ ...p, effects: replaceById(p.effects ?? [], id, fn) }), key),
+    [update]
+  );
+  const addEffect = useCallback(
+    (type: string) => {
+      const start = engine.getTime();
+      const item: EffectItem = { ...newFxLayer(type), id: uid(), start, duration: Math.max(1, Math.min(3, duration - start || 3)) };
+      update((p) => ({ ...p, effects: [...(p.effects ?? []), item] }));
+      setSelection({ kind: 'effect', id: item.id });
+      setPanel('edit');
+      previewRange(start, start + Math.min(3, item.duration));
+    },
+    [update, engine, duration, previewRange]
+  );
+
   const updateOverlay = useCallback(
     (id: string, fn: (o: OverlayClip) => OverlayClip, key?: string) =>
       update((p) => ({ ...p, overlays: replaceById(p.overlays, id, fn) }), key),
@@ -678,6 +698,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     if (selection.kind === 'text') update((p) => ({ ...p, texts: p.texts.filter((c) => c.id !== selection.id) }));
     if (selection.kind === 'audio') update((p) => ({ ...p, audios: p.audios.filter((c) => c.id !== selection.id) }));
     if (selection.kind === 'overlay') update((p) => ({ ...p, overlays: p.overlays.filter((c) => c.id !== selection.id) }));
+    if (selection.kind === 'effect') update((p) => ({ ...p, effects: (p.effects ?? []).filter((c) => c.id !== selection.id) }));
     if (selection.kind === 'transition') updateClip(selection.id, (c) => ({ ...c, transition: { ...c.transition, type: 'none' } }));
     setSelection(null);
   }, [selection, update, updateClip]);
@@ -1067,6 +1088,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
   const selectedAudio = selection?.kind === 'audio' ? project.audios.find((a) => a.id === selection.id) : undefined;
   const selectedCut = selection?.kind === 'transition' ? layout.find((l) => l.clip.id === selection.id) : undefined;
   const selectedOverlay = selection?.kind === 'overlay' ? project.overlays.find((o) => o.id === selection.id) : undefined;
+  const selectedEffect = selection?.kind === 'effect' ? (project.effects ?? []).find((x) => x.id === selection.id) : undefined;
 
   const actions = { onSplit: splitAtPlayhead, onDuplicate: duplicateSelection, onDelete: deleteSelection };
 
@@ -1214,6 +1236,8 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
         onExtractAudio: () => extractAudio(selectedClip.clip.id),
       }}
     />
+  ) : selectedEffect ? (
+    <EffectInspector item={selectedEffect} patch={(fn, key) => updateEffect(selectedEffect.id, fn, key)} onDelete={deleteSelection} />
   ) : selectedOverlay ? (
     <OverlayInspector
       overlay={selectedOverlay}
@@ -1377,6 +1401,16 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
             }}
           />
           </>
+        );
+      case 'effects':
+        return (
+          <EffectsPanel
+            frame={filterFrame}
+            onAdd={(type) => {
+              addEffect(type);
+              setSheetOpen(false);
+            }}
+          />
         );
       case 'stickers':
         return (
@@ -1671,6 +1705,8 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
               onUpdateText={updateText}
               onUpdateAudio={updateAudio}
               onUpdateOverlay={updateOverlay}
+              onUpdateEffect={updateEffect}
+              effectLabel={(type) => fxDef(type)?.label ?? type}
               onReorder={reorderClip}
               onDropAsset={onDropAsset}
               onAddText={() => addText('basic')}

@@ -472,10 +472,12 @@ export function ClipFxThumb({ src, patch, loop = 2 }: { key?: React.Key; src?: s
     const frame: CanvasImageSource = img ?? sampleFrame();
     const fw = img?.width ?? 320;
     const fh = img?.height ?? 320;
-    const asset = { id: 'thumb', kind: 'image', name: '', file: null as unknown as File, url: '', duration: 0, width: fw, height: fh, hasAudio: false } as MediaAsset;
+    // Each picture gets its own id, so cached person masks never mix between thumbnails.
+    const id = `thumb:${src ? `${src.length}:${src.slice(-48)}` : 'sample'}`;
+    const asset = { id, kind: 'image', name: '', file: null as unknown as File, url: '', duration: 0, width: fw, height: fh, hasAudio: false } as MediaAsset;
     const clip: MainClip = { ...createMainClip(asset), fit: 'cover', outPoint: loop, ...patch };
     const project: Project = { aspect: '1:1', background: '#0b0f17', clips: [clip], texts: [], audios: [], overlays: [] };
-    const layout = layoutMainTrack([clip], new Map([['thumb', asset]]));
+    const layout = layoutMainTrack([clip], new Map([[id, asset]]));
     const W = 320;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const draw = (time: number) => {
