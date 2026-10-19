@@ -188,8 +188,55 @@ export interface OverlayClip {
   chroma: ChromaKey | null;
 }
 
-export type TextAnimIn = 'none' | 'fade' | 'pop' | 'slide-up' | 'zoom' | 'typewriter';
-export type TextAnimOut = 'none' | 'fade' | 'pop' | 'slide-down';
+export type TextAnimIn =
+  | 'none'
+  | 'fade'
+  | 'pop'
+  | 'slide-up'
+  | 'slide-down'
+  | 'slide-left'
+  | 'slide-right'
+  | 'zoom'
+  | 'zoom-in'
+  | 'typewriter'
+  | 'words'
+  | 'wipe'
+  | 'bounce'
+  | 'elastic'
+  | 'blur'
+  | 'spin'
+  | 'flip'
+  | 'drop'
+  | 'stamp'
+  | 'glitch'
+  | 'neon';
+export type TextAnimOut =
+  | 'none'
+  | 'fade'
+  | 'pop'
+  | 'slide-down'
+  | 'slide-up'
+  | 'slide-left'
+  | 'slide-right'
+  | 'zoom'
+  | 'wipe'
+  | 'blur'
+  | 'spin'
+  | 'flip'
+  | 'fall'
+  | 'glitch';
+/** Motion that repeats for as long as the text is on screen. */
+export type TextAnimLoop = 'none' | 'pulse' | 'shake' | 'wave' | 'float' | 'glow' | 'swing' | 'heartbeat' | 'rainbow' | 'flicker' | 'bounce' | 'jelly';
+export type TextBgShape = 'box' | 'pill' | 'banner' | 'outline';
+
+/** Position/size/rotation of a text at a point through its duration (0..1). */
+export interface TextKeyframe {
+  at: number;
+  x: number;
+  y: number;
+  fontSize: number;
+  rotation: number;
+}
 
 export interface TextClip {
   id: string;
@@ -218,6 +265,24 @@ export interface TextClip {
   captionStyle?: string;
   /** Emoji shown above the caption. */
   emoji?: string;
+  // Fields added later; absent means the default noted.
+  animLoop?: TextAnimLoop; // 'none'
+  /** Second fill colour: the text fades from `color` (top) to this (bottom). */
+  gradient?: string | null;
+  /** Coloured glow around the letters. */
+  glow?: string | null;
+  shadowColor?: string; // 'rgba(0,0,0,0.6)'
+  /** Shadow distance and blur as fractions of the font size. */
+  shadowOffset?: number; // 0.05
+  shadowBlur?: number; // 0.15
+  /** 3D depth as a fraction of the font size (0 = flat). */
+  extrude?: number;
+  extrudeColor?: string;
+  bgShape?: TextBgShape; // 'box'
+  opacity?: number; // 1
+  lineHeight?: number; // 1.3
+  /** Hand-set keyframes; when present they drive x, y, fontSize and rotation. */
+  keys?: TextKeyframe[];
 }
 
 export type CaptionHighlightStyle =

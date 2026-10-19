@@ -4,7 +4,6 @@ import { cn } from '../../lib/utils';
 import {
   ASPECT_SIZES,
   FILTER_PRESETS,
-  FONTS,
   BLEND_MODES,
   CAPTION_STYLES,
   captionStyleFields,
@@ -13,8 +12,6 @@ import {
   NEUTRAL_ADJUSTMENTS,
   OVERLAY_ANIMS,
   SPEED_PRESETS,
-  TEXT_ANIMS_IN,
-  TEXT_ANIMS_OUT,
   TRANSITIONS,
   presetAdjustments,
 } from '../../editor/constants';
@@ -22,6 +19,7 @@ import { clipDuration, motionFromPreset, retimeWords, setKeyframe } from '../../
 import { Adjustments, AspectRatio, AudioClip, MainClip, MediaAsset, OverlayClip, OverlayShape, Project, TextClip, TransitionType } from '../../editor/types';
 import { ColorInput, Section, Segmented, SliderRow } from './ui';
 import { AnimChip, CaptionStyleThumb, FilterThumb, MotionThumb, TransitionThumb } from './previews';
+import { FontPicker, TextAnimSections, TextKeyframesSection, TextStyleSection } from './TextExtras';
 import { ChromaSection, ClipAnimSection, CropSection, EffectSection, FlipButtons, MaskSection, SpeedCurveSection } from './ClipExtras';
 import { VOICE_EFFECTS, VoiceEffect } from '../../editor/audioTools';
 
@@ -380,7 +378,7 @@ export function ClipInspector({
   );
 }
 
-export function TextInspector({ text, patch, actions, preview }: { text: TextClip; patch: Patch<TextClip>; actions: Actions; preview: Preview }) {
+export function TextInspector({ text, patch, actions, preview, progress }: { text: TextClip; patch: Patch<TextClip>; actions: Actions; preview: Preview; progress: number }) {
   const k = (name: string) => `${text.id}-${name}`;
   return (
     <div>
@@ -396,24 +394,7 @@ export function TextInspector({ text, patch, actions, preview }: { text: TextCli
           }}
           className="w-full resize-none rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-sm focus:border-cyan-400 focus:outline-none"
         />
-        <div className="grid grid-cols-2 gap-1.5">
-          {FONTS.map((f) => (
-            <button
-              key={f}
-              type="button"
-              onClick={() => patch((t) => ({ ...t, font: f }))}
-              className={cn(
-                'rounded-lg px-2 py-1.5 text-center transition',
-                text.font === f ? 'bg-cyan-400/15 text-white ring-1 ring-cyan-400' : 'bg-white/5 text-slate-200 hover:bg-white/10'
-              )}
-            >
-              <span className="block truncate text-base leading-tight" style={{ fontFamily: `"${f}", sans-serif`, fontWeight: text.bold ? 800 : 400 }}>
-                أبجد Aa
-              </span>
-              <span className="block text-[9px] text-slate-400" dir="ltr">{f}</span>
-            </button>
-          ))}
-        </div>
+        <FontPicker text={text} patch={patch} />
         <SliderRow label="الحجم" value={text.fontSize} min={20} max={260} onChange={(v) => patch((t) => ({ ...t, fontSize: v }), k('size'))} />
         <div className="flex gap-2">
           <Segmented
@@ -459,11 +440,8 @@ export function TextInspector({ text, patch, actions, preview }: { text: TextCli
             />
           </span>
         </label>
-        <label className="flex items-center justify-between text-[11px] text-slate-400">
-          <span>ظل</span>
-          <input type="checkbox" checked={text.shadow} onChange={(e) => patch((t) => ({ ...t, shadow: e.target.checked }))} className="h-4 w-4 accent-cyan-400" />
-        </label>
       </Section>
+      <TextStyleSection text={text} patch={patch} />
 
       {text.words?.length ? (
         <Section title="تمييز الكلمة المنطوقة">
@@ -491,22 +469,7 @@ export function TextInspector({ text, patch, actions, preview }: { text: TextCli
           </button>
         </Section>
       ) : null}
-      <Section title="حركة الدخول">
-        <div className="grid grid-cols-3 gap-1.5">
-          {TEXT_ANIMS_IN.map((a) => (
-            <AnimChip key={a.id} id={a.id} label={a.label} phase="in" active={text.animIn === a.id}
-              onClick={() => { patch((t) => ({ ...t, animIn: a.id })); preview('in'); }} />
-          ))}
-        </div>
-      </Section>
-      <Section title="حركة الخروج">
-        <div className="grid grid-cols-4 gap-1.5">
-          {TEXT_ANIMS_OUT.map((a) => (
-            <AnimChip key={a.id} id={a.id} label={a.label} phase="out" active={text.animOut === a.id}
-              onClick={() => { patch((t) => ({ ...t, animOut: a.id })); preview('out'); }} />
-          ))}
-        </div>
-      </Section>
+      <TextAnimSections text={text} patch={patch} preview={preview} />
 
       <Section title="الموضع والتوقيت">
         <SliderRow label="أفقي" value={Math.round(text.x * 100)} min={0} max={100} format={pct} onChange={(v) => patch((t) => ({ ...t, x: v / 100 }), k('x'))} />
@@ -516,6 +479,7 @@ export function TextInspector({ text, patch, actions, preview }: { text: TextCli
         <SliderRow label="المدة" value={text.duration} min={0.3} max={30} step={0.1} format={secs} onChange={(v) => patch((t) => ({ ...t, duration: v }), k('dur'))} />
         <p className="text-[11px] text-slate-500">على الهاتف: اسحب النص بإصبع لتحريكه، وبإصبعين لتكبيره وتدويره. ضغطتان سريعتان تعيدان الدوران.</p>
       </Section>
+      <TextKeyframesSection text={text} patch={patch} progress={progress} />
     </div>
   );
 }

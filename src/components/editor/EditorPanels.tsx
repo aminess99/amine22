@@ -1,9 +1,11 @@
 import React from 'react';
-import { Captions, Check, Film, Image as ImageIcon, Layers, Loader2, Mic, Music, Plus, Square, Upload } from 'lucide-react';
+import { AudioLines, Captions, Check, Film, Image as ImageIcon, Layers, Loader2, Mic, Music, Plus, Square, Upload } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { CAPTION_STYLES, FILTER_PRESETS, STICKERS, TEXT_PRESETS, TRANSITIONS, presetAdjustments } from '../../editor/constants';
 import { PROJECT_TEMPLATES, templatePreview } from '../../editor/templates';
-import { CaptionStyleThumb, FilterThumb, TemplateThumb, TransitionThumb } from './previews';
+import { MAX_TTS_CHARS, TTS_STYLES, TTS_VOICES } from '../../editor/tts';
+import { CaptionStyleThumb, FilterThumb, TemplateThumb, TextThumb, TransitionThumb } from './previews';
+import { TEMPLATE_GROUPS, TEXT_TEMPLATES, TemplateGroup, TextTemplate, templateLength, templateTexts } from '../../editor/textTemplates';
 import { cssFilter } from '../../editor/renderer';
 import { formatTime } from '../../editor/timeline';
 import { AssetKind, MediaAsset, TextClip, TransitionType } from '../../editor/types';
@@ -302,10 +304,62 @@ function CaptionsSection({ captions, manager }: { captions: CaptionTool; manager
   );
 }
 
-export function TextPanel({ onAdd, captions, manager }: { onAdd: (presetId: string) => void; captions: CaptionTool; manager: CaptionManager }) {
+function TemplatesSection({ onAdd }: { onAdd: (tpl: TextTemplate) => void }) {
+  const [group, setGroup] = React.useState<TemplateGroup>('titles');
+  const list = TEXT_TEMPLATES.filter((t) => t.group === group);
+  return (
+    <div className="space-y-2">
+      <h4 className="text-xs font-bold text-slate-300">قوالب نصوص متحركة</h4>
+      <div className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1">
+        {TEMPLATE_GROUPS.map((g) => (
+          <button
+            key={g.id}
+            type="button"
+            onClick={() => setGroup(g.id)}
+            className={cn('shrink-0 rounded-lg px-2.5 py-1.5 text-[11px]', group === g.id ? 'bg-cyan-400/15 text-cyan-100 ring-1 ring-cyan-400' : 'bg-white/5 text-slate-300')}
+          >
+            {g.label}
+          </button>
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {list.map((tpl) => (
+          <TemplateCard key={tpl.id} tpl={tpl} onAdd={onAdd} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TemplateCard({ tpl, onAdd }: { key?: React.Key; tpl: TextTemplate; onAdd: (tpl: TextTemplate) => void }) {
+  const texts = React.useMemo(() => templateTexts(tpl, 0.15), [tpl]);
+  const loop = templateLength(tpl) + 0.6;
+  return (
+    <button type="button" onClick={() => onAdd(tpl)} className="overflow-hidden rounded-xl bg-slate-800/80 text-center ring-1 ring-white/5 transition hover:ring-cyan-400/60">
+      <span className="block aspect-[4/5] w-full">
+        <TextThumb texts={texts} loop={loop} width={1080} height={1350} still={Math.min(loop - 0.7, 1.4)} />
+      </span>
+      <span className="block py-1 text-[11px] text-slate-300">{tpl.label}</span>
+    </button>
+  );
+}
+
+export function TextPanel({
+  onAdd,
+  onTemplate,
+  captions,
+  manager,
+}: {
+  onAdd: (presetId: string) => void;
+  onTemplate: (tpl: TextTemplate) => void;
+  captions: CaptionTool;
+  manager: CaptionManager;
+}) {
   return (
     <div className="space-y-4 p-4">
       <CaptionsSection captions={captions} manager={manager} />
+      <TemplatesSection onAdd={onTemplate} />
+      <h4 className="text-xs font-bold text-slate-300">نص بسيط</h4>
     <div className="grid grid-cols-2 gap-2">
       {TEXT_PRESETS.map((p) => (
         <button
@@ -568,6 +622,101 @@ export function VoiceRecorder({ onStart, onStop }: { onStart: () => void; onStop
         </button>
       )}
       {state === 'recording' && <p className="text-center text-[11px] text-slate-400">الفيديو يعمل بدون صوت لتتكلم فوقه.</p>}
+      {error && <p className="text-[11px] text-red-300">{error}</p>}
+    </div>
+  );
+}
+
+/** Text to speech: writes a line, picks a voice and style, and drops the speech at the playhead. */
+export function TextToSpeech({ onCreate }: { onCreate: (text: string, voice: string, style: string) => Promise<void> }) {
+  const [open, setOpen] = React.useState(false);
+  const [text, setText] = React.useState('');
+  const [voice, setVoice] = React.useState(TTS_VOICES[0].id);
+  const [style, setStyle] = React.useState(TTS_STYLES[0].id);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const create = async () => {
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onCreate(text.trim(), voice, style);
+      setText('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر توليد الصوت.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500/15 py-3 text-sm font-bold text-emerald-200 ring-1 ring-emerald-400/30 hover:bg-emerald-500/25"
+      >
+        <AudioLines className="h-4 w-4" />
+        تحويل نص إلى صوت
+      </button>
+    );
+  }
+
+  const chip = (active: boolean) =>
+    cn('rounded-lg px-2 py-1.5 text-[11px] ring-1 transition-colors', active ? 'bg-emerald-500/20 text-emerald-100 ring-emerald-400' : 'bg-white/5 text-slate-300 ring-white/10');
+
+  return (
+    <div className="space-y-2.5 rounded-xl bg-emerald-500/5 p-3 ring-1 ring-emerald-400/20">
+      <div className="flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-200">
+          <AudioLines className="h-4 w-4" />
+          تحويل نص إلى صوت
+        </span>
+        <button type="button" onClick={() => setOpen(false)} className="text-[11px] text-slate-400">
+          إخفاء
+        </button>
+      </div>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={3}
+        maxLength={MAX_TTS_CHARS}
+        dir="auto"
+        placeholder="اكتب النص الذي تريد أن يُقرأ بصوت..."
+        className="w-full resize-none rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-emerald-400 focus:outline-none"
+      />
+      <div className="text-[10px] text-slate-500">{text.length} / {MAX_TTS_CHARS}</div>
+      <div>
+        <div className="mb-1 text-[11px] text-slate-400">الصوت</div>
+        <div className="grid grid-cols-2 gap-1.5">
+          {TTS_VOICES.map((v) => (
+            <button key={v.id} type="button" onClick={() => setVoice(v.id)} className={cn(chip(voice === v.id), 'flex flex-col items-start')}>
+              <span className="font-bold">{v.label}</span>
+              <span className="text-[10px] opacity-70">{v.hint}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <div className="mb-1 text-[11px] text-slate-400">طريقة الإلقاء</div>
+        <div className="flex flex-wrap gap-1.5">
+          {TTS_STYLES.map((s) => (
+            <button key={s.id} type="button" onClick={() => setStyle(s.id)} className={chip(style === s.id)}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={create}
+        disabled={!text.trim() || busy}
+        className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 py-2.5 text-sm font-bold text-white disabled:opacity-40"
+      >
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+        {busy ? 'جاري توليد الصوت...' : 'توليد وإضافة عند المؤشر'}
+      </button>
       {error && <p className="text-[11px] text-red-300">{error}</p>}
     </div>
   );

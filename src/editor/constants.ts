@@ -1,4 +1,4 @@
-import { Adjustments, AspectRatio, BlendMode, CaptionHighlight, ClipAnimType, EffectType, FrameTransform, MaskShape, OverlayAnim, TextAnimIn, TextAnimOut, TextClip, TransitionType } from './types';
+import { Adjustments, AspectRatio, BlendMode, CaptionHighlight, ClipAnimType, EffectType, FrameTransform, MaskShape, OverlayAnim, TextAnimIn, TextAnimLoop, TextAnimOut, TextBgShape, TextClip, TransitionType } from './types';
 
 export const PEAKS_PER_SECOND = 20;
 export const DEFAULT_IMAGE_DURATION = 3;
@@ -69,33 +69,67 @@ export const TRANSITIONS: { id: TransitionType; label: string }[] = [
 
 export const DEFAULT_TRANSITION_DURATION = 0.6;
 
-export const FONTS = [
-  'Cairo',
-  'Tajawal',
-  'Almarai',
-  'Rubik',
-  'Anton',
-  'Montserrat',
-  'Playfair Display',
-  'Cinzel',
-  'Inter',
-  'Roboto',
-];
-
 export const TEXT_ANIMS_IN: { id: TextAnimIn; label: string }[] = [
   { id: 'none', label: 'بدون' },
-  { id: 'fade', label: 'ظهور تدريجي' },
+  { id: 'fade', label: 'ظهور' },
   { id: 'pop', label: 'قفزة' },
   { id: 'slide-up', label: 'صعود' },
+  { id: 'slide-down', label: 'نزول' },
+  { id: 'slide-left', label: 'من اليمين' },
+  { id: 'slide-right', label: 'من اليسار' },
   { id: 'zoom', label: 'تصغير' },
+  { id: 'zoom-in', label: 'تكبير' },
   { id: 'typewriter', label: 'آلة كاتبة' },
+  { id: 'words', label: 'كلمة بكلمة' },
+  { id: 'wipe', label: 'مسح' },
+  { id: 'bounce', label: 'ارتداد' },
+  { id: 'elastic', label: 'مطاطي' },
+  { id: 'blur', label: 'ضبابي' },
+  { id: 'spin', label: 'دوران' },
+  { id: 'flip', label: 'قلب' },
+  { id: 'drop', label: 'سقوط' },
+  { id: 'stamp', label: 'ختم' },
+  { id: 'glitch', label: 'تشويش' },
+  { id: 'neon', label: 'نيون' },
 ];
 
 export const TEXT_ANIMS_OUT: { id: TextAnimOut; label: string }[] = [
   { id: 'none', label: 'بدون' },
-  { id: 'fade', label: 'اختفاء تدريجي' },
+  { id: 'fade', label: 'اختفاء' },
   { id: 'pop', label: 'انكماش' },
   { id: 'slide-down', label: 'هبوط' },
+  { id: 'slide-up', label: 'صعود' },
+  { id: 'slide-left', label: 'لليسار' },
+  { id: 'slide-right', label: 'لليمين' },
+  { id: 'zoom', label: 'تكبير' },
+  { id: 'wipe', label: 'مسح' },
+  { id: 'blur', label: 'ضبابي' },
+  { id: 'spin', label: 'دوران' },
+  { id: 'flip', label: 'قلب' },
+  { id: 'fall', label: 'سقوط' },
+  { id: 'glitch', label: 'تشويش' },
+];
+
+export const TEXT_ANIMS_LOOP: { id: TextAnimLoop; label: string }[] = [
+  { id: 'none', label: 'بدون' },
+  { id: 'pulse', label: 'نبض' },
+  { id: 'heartbeat', label: 'نبض قلب' },
+  { id: 'shake', label: 'اهتزاز' },
+  { id: 'wave', label: 'موجة' },
+  { id: 'float', label: 'طفو' },
+  { id: 'bounce', label: 'قفز' },
+  { id: 'swing', label: 'تأرجح' },
+  { id: 'jelly', label: 'جيلي' },
+  { id: 'glow', label: 'توهج' },
+  { id: 'flicker', label: 'وميض' },
+  { id: 'rainbow', label: 'قوس قزح' },
+];
+
+export const TEXT_BG_SHAPES: { id: TextBgShape; label: string }[] = [
+  { id: 'box', label: 'مستطيل' },
+  { id: 'pill', label: 'كبسولة' },
+  { id: 'banner', label: 'شريط' },
+  { id: 'outline', label: 'إطار' },
 ];
 
 type TextStyle = Omit<TextClip, 'id' | 'start' | 'duration' | 'x' | 'y' | 'rotation'> & { y: number };

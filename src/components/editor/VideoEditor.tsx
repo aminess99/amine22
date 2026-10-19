@@ -23,18 +23,19 @@ import {
   Type,
   Undo2,
   Upload,
+  Wand2,
   X,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { ASPECT_SIZES, CAPTION_STYLES, captionStyleFields, DEFAULT_TRANSITION_DURATION, FONTS, TEXT_PRESETS, presetAdjustments } from '../../editor/constants';
+import { ASPECT_SIZES, CAPTION_STYLES, captionStyleFields, DEFAULT_TRANSITION_DURATION, TEXT_PRESETS, presetAdjustments } from '../../editor/constants';
 import { computePeaks, extractVideoFrames, loadAsset } from '../../editor/media';
 import { VOICE_EFFECTS, VoiceEffect, applyVoiceEffect, decodeFile, detectBeats, encodeWav } from '../../editor/audioTools';
 import { reverseVideo } from '../../editor/reverse';
-import { loadFonts } from '../../editor/renderer';
+import { ensureFonts } from '../../editor/fonts';
+import { templateTexts, TextTemplate } from '../../editor/textTemplates';
 import {
   audioClipEnd,
   clamp,
-  clipDuration,
   clipProgress,
   createAudioClip,
   createMainClip,
@@ -45,12 +46,17 @@ import {
   projectDuration,
   retimeWords,
   setKeyframe,
-  sourceTimeFor,
   splitAudioClip,
   splitMainClip,
   splitOverlayClip,
   splitTextClip,
   uid,
+  insertFreeze,
+  beatCuts,
+  retimeToCuts,
+  setTextKeyframe,
+  textProgress,
+  textTransformAt,
 } from '../../editor/timeline';
 import { AspectRatio, AudioClip, MainClip, MediaAsset, OverlayClip, Project, Selection, TextClip, TransitionType } from '../../editor/types';
 import { emojiFor, generateCaptions } from '../../editor/autoCaptions';
@@ -58,6 +64,8 @@ import { clearAll, loadSaved, saveAsset, saveProject } from '../../editor/persis
 import { clipsFromRanges, findSpeechRanges } from '../../editor/silence';
 import { applyTemplate } from '../../editor/templates';
 import { useHistory } from '../../editor/useHistory';
+import { commandContext, executeActions, requestCommand } from '../../editor/commands';
+import { synthesizeSpeech } from '../../editor/tts';
 import {
   GestureDelta,
   applyClipGesture,
@@ -67,17 +75,19 @@ import {
   resetClipTransform,
 } from '../../editor/gestures';
 import { usePreviewEngine } from '../../editor/usePreviewEngine';
+import { CommandPanel, CommandState } from './CommandPanel';
 import { EditorExportModal } from './EditorExportModal';
 import { AudioInspector, ClipInspector, OverlayInspector, ProjectInspector, TextInspector, TransitionInspector } from './EditorInspector';
-import { CaptionManager, FiltersPanel, MediaPanel, StickersPanel, TemplatesPanel, TextPanel, TransitionsPanel, VoiceRecorder } from './EditorPanels';
+import { CaptionManager, FiltersPanel, MediaPanel, StickersPanel, TemplatesPanel, TextPanel, TextToSpeech, TransitionsPanel, VoiceRecorder } from './EditorPanels';
 import { EditorTimeline } from './EditorTimeline';
 import { ToolButton } from './ui';
 import { frameAt } from './previews';
 
-type PanelId = 'media' | 'audio' | 'text' | 'stickers' | 'filters' | 'transitions' | 'templates' | 'edit';
+type PanelId = 'media' | 'ai' | 'audio' | 'text' | 'stickers' | 'filters' | 'transitions' | 'templates' | 'edit';
 
 const PANELS: { id: PanelId; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'media', label: 'الوسائط', icon: Film },
+  { id: 'ai', label: 'أوامر', icon: Wand2 },
   { id: 'audio', label: 'الصوت', icon: Music },
   { id: 'text', label: 'نصوص', icon: Type },
   { id: 'stickers', label: 'ملصقات', icon: Smile },
@@ -149,9 +159,11 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     });
   }, [playing, subscribeFrame]);
 
+  // Load the fonts the project's texts use (Google Fonts, on demand).
+  const fontKey = [...new Set(project.texts.map((t) => t.font))].sort().join('|');
   useEffect(() => {
-    loadFonts(FONTS);
-  }, []);
+    if (fontKey) ensureFonts(fontKey.split('|'));
+  }, [fontKey]);
 
   // Free object URLs when leaving the editor.
   const assetsRef = useRef(assetList);
@@ -325,29 +337,12 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       const lc = layout.find((l) => l.clip.id === clipId);
       if (!lc) return;
       const t = clamp(engine.getTime(), lc.start, lc.end);
-      const still: MainClip = {
-        ...lc.clip,
-        id: uid(),
-        inPoint: sourceTimeFor(lc, Math.min(t, lc.end - 1e-3)),
-        freeze: 2,
-        speedCurve: null,
-        transition: { ...lc.clip.transition, type: 'none' },
-        animIn: { ...lc.clip.animIn, type: 'none' },
-        animOut: { ...lc.clip.animOut, type: 'none' },
-      };
-      const parts = splitMainClip(lc, t);
-      update((p) => ({
-        ...p,
-        clips: p.clips.flatMap((c) => {
-          if (c.id !== clipId) return [c];
-          if (parts) return [parts[0], still, parts[1]];
-          return t - lc.start < lc.duration / 2 ? [still, c] : [c, still];
-        }),
-      }));
+      const { clips, still } = insertFreeze(project.clips, lc, t);
+      update((p) => ({ ...p, clips }));
       setSelection({ kind: 'clip', id: still.id });
       setClipTool({ busy: null, message: 'تمت إضافة إطار مجمّد لمدة ثانيتين، ويمكنك تغيير مدته من الأسفل.' });
     },
-    [layout, engine, update]
+    [layout, engine, update, project.clips]
   );
 
   const reverseClip = useCallback(
@@ -440,29 +435,8 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       const a = project.audios.find((x) => x.id === audioId);
       const asset = a && assets.get(a.assetId);
       if (!a || !asset?.beats?.length) return;
-      const cuts = asset.beats
-        .filter((b) => b >= a.inPoint && b < a.outPoint)
-        .map((b) => a.start + (b - a.inPoint))
-        .filter((_, i) => i % every === every - 1);
-      update((p) => {
-        let cursor = 0;
-        const clips = p.clips.map((c) => {
-          const end = cuts.find((x) => x > cursor + 0.3);
-          if (end === undefined) {
-            cursor += clipDuration(c);
-            return c;
-          }
-          const want = end - cursor;
-          const src = assets.get(c.assetId);
-          let next: MainClip = c;
-          if (c.freeze) next = { ...c, freeze: want };
-          else if (src?.kind === 'image') next = { ...c, outPoint: c.inPoint + want };
-          else if (src) next = { ...c, outPoint: Math.min(src.duration, c.inPoint + want * c.speed) };
-          cursor += clipDuration(next);
-          return next;
-        });
-        return { ...p, clips };
-      });
+      const cuts = beatCuts(a, asset.beats, every);
+      update((p) => ({ ...p, clips: retimeToCuts(p.clips, assets, cuts) }));
       setAudioTool({ busy: null, message: 'تم قص المقاطع لتتبدل مع الإيقاع.' });
       pause();
       seek(0);
@@ -630,8 +604,19 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       update((p) => ({ ...p, texts: [...p.texts, text] }));
       setSelection({ kind: 'text', id: text.id });
       setPanel('edit');
-      loadFonts([text.font]);
       previewRange(start, start + 1.3);
+    },
+    [update, engine, previewRange]
+  );
+
+  const addTemplate = useCallback(
+    (tpl: TextTemplate) => {
+      const start = engine.getTime();
+      const texts = templateTexts(tpl, start);
+      update((p) => ({ ...p, texts: [...p.texts, ...texts] }));
+      setSelection({ kind: 'text', id: texts[0].id });
+      setPanel('edit');
+      previewRange(start, start + Math.min(3, Math.max(...texts.map((t) => t.start + t.duration)) - start));
     },
     [update, engine, previewRange]
   );
@@ -873,7 +858,13 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       next = applyClipGesture(item0 as MainClip, d, lc ? clipProgress(lc, engine.getTime()) : undefined);
       updateClip(id, () => next as MainClip, key);
     } else if (kind === 'text') {
-      next = applyTextGesture(item0 as TextClip, d);
+      const t0 = item0 as TextClip;
+      if (t0.keys?.length) {
+        // Start from where the text is on screen now, and save the result as a keyframe there.
+        const at = textProgress(t0, engine.getTime());
+        const moved = applyTextGesture({ ...t0, ...textTransformAt(t0, at) }, d);
+        next = { ...moved, keys: setTextKeyframe(moved, at) };
+      } else next = applyTextGesture(t0, d);
       updateText(id, () => next as TextClip, key);
     } else {
       next = applyOverlayGesture(item0 as OverlayClip, d);
@@ -1027,6 +1018,43 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
 
   const actions = { onSplit: splitAtPlayhead, onDuplicate: duplicateSelection, onDelete: deleteSelection };
 
+  // ---------- editing commands ----------
+  const [command, setCommand] = useState<CommandState>({ busy: null, status: null, progress: null, error: null, plan: null, done: null });
+  const askCommand = async (text: string) => {
+    setCommand((c) => ({ ...c, busy: 'thinking', error: null, plan: null, done: null }));
+    try {
+      const res = await requestCommand(text, commandContext(project, assets, assetList, engine.getTime(), selection));
+      setCommand((c) => ({ ...c, busy: null, plan: { command: text, ...res } }));
+    } catch (err) {
+      setCommand((c) => ({ ...c, busy: null, error: err instanceof Error ? err.message : 'تعذر تنفيذ الأمر.' }));
+    }
+  };
+  const applyCommand = async () => {
+    const plan = command.plan;
+    if (!plan) return;
+    setCommand((c) => ({ ...c, busy: 'applying', status: null, progress: null, error: null }));
+    try {
+      const res = await executeActions(project, assets, assetList, plan.actions, {
+        onStatus: (status, progress) => setCommand((c) => ({ ...c, status, progress })),
+        registerAsset,
+        saveAsset: (asset) => {
+          setAssetList((list) => list.map((x) => (x.id === asset.id ? asset : x)));
+          saveAsset(asset).catch(() => {});
+        },
+      });
+      update(() => res.project);
+      setCommand((c) => ({ ...c, busy: null, plan: null, done: plan.command, error: res.notes.length ? [...new Set(res.notes)].join(' ') : null }));
+      if (res.seek !== undefined) {
+        pause();
+        seek(res.seek);
+      }
+      if (res.play) play();
+      if (res.export) setExporting(true);
+    } catch (err) {
+      setCommand((c) => ({ ...c, busy: null, error: err instanceof Error ? err.message : 'فشل تنفيذ الأمر.' }));
+    }
+  };
+
   const inspector = selectedClip ? (
     <ClipInspector
       clip={selectedClip.clip}
@@ -1065,7 +1093,28 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       onLayer={(dir) => moveOverlay(selectedOverlay.id, dir)}
     />
   ) : selectedText ? (
-    <TextInspector text={selectedText} patch={(fn, key) => updateText(selectedText.id, fn, key)} actions={actions} preview={previewSelection} />
+    <TextInspector
+      // With keyframes, the sliders show (and edit) where the text is at the playhead.
+      text={selectedText.keys?.length ? { ...selectedText, ...textTransformAt(selectedText, textProgress(selectedText, time)) } : selectedText}
+      progress={textProgress(selectedText, time)}
+      patch={(fn, key) =>
+        updateText(
+          selectedText.id,
+          (t) => {
+            const at = textProgress(t, engine.getTime());
+            const cur = t.keys?.length ? { ...t, ...textTransformAt(t, at) } : t;
+            const n = fn(cur);
+            // Auto-key: position/size/rotation edits land on a keyframe at the playhead.
+            const moved = n.x !== cur.x || n.y !== cur.y || n.fontSize !== cur.fontSize || n.rotation !== cur.rotation;
+            if (!t.keys?.length || n.keys !== t.keys) return n;
+            return moved ? { ...n, keys: setTextKeyframe(n, at) } : { ...n, x: t.x, y: t.y, fontSize: t.fontSize, rotation: t.rotation };
+          },
+          key
+        )
+      }
+      actions={actions}
+      preview={previewSelection}
+    />
   ) : selectedAudio ? (
     <AudioInspector
       audio={selectedAudio}
@@ -1116,13 +1165,22 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
             kinds={['audio']}
             loading={loading}
             extra={
-              <VoiceRecorder
-                onStart={() => {
-                  setSheetOpen(false);
-                  onRecordStart();
-                }}
-                onStop={onRecordStop}
-              />
+              <div className="space-y-2">
+                <VoiceRecorder
+                  onStart={() => {
+                    setSheetOpen(false);
+                    onRecordStart();
+                  }}
+                  onStop={onRecordStop}
+                />
+                <TextToSpeech
+                  onCreate={async (text, voice, style) => {
+                    const asset = await registerAsset(await synthesizeSpeech(text, voice, style));
+                    addAudio(asset);
+                    setSheetOpen(false);
+                  }}
+                />
+              </div>
             }
             onFiles={(f) => addFiles(f, false)}
             onAdd={(a) => {
@@ -1138,8 +1196,25 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
               addText(id);
               setSheetOpen(false);
             }}
+            onTemplate={(tpl) => {
+              addTemplate(tpl);
+              setSheetOpen(false);
+            }}
             captions={{ ...captionState, run: runCaptions }}
             manager={captionManager}
+          />
+        );
+      case 'ai':
+        return (
+          <CommandPanel
+            state={command}
+            onAsk={askCommand}
+            onApply={applyCommand}
+            onCancel={() => setCommand((c) => ({ ...c, plan: null }))}
+            onUndo={() => {
+              undo();
+              setCommand((c) => ({ ...c, done: null }));
+            }}
           />
         );
       case 'stickers':

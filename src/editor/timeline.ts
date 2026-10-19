@@ -18,6 +18,7 @@ import {
   MediaAsset,
   Project,
   TextClip,
+  TextKeyframe,
 } from './types';
 
 export function uid(): string {
@@ -240,6 +241,35 @@ export function transformAt(clip: MainClip, progress: number): FrameTransform {
   };
 }
 
+export type TextTransform = Pick<TextClip, 'x' | 'y' | 'fontSize' | 'rotation'>;
+
+/** Where a text sits at a progress (0..1) through it: its own fields, or its keyframes. */
+export function textTransformAt(t: TextClip, progress: number): TextTransform {
+  const keys = t.keys;
+  if (!keys?.length) return { x: t.x, y: t.y, fontSize: t.fontSize, rotation: t.rotation };
+  const p = clamp(progress, 0, 1);
+  const pick = (k: TextKeyframe): TextTransform => ({ x: k.x, y: k.y, fontSize: k.fontSize, rotation: k.rotation });
+  if (keys.length === 1 || p <= keys[0].at) return pick(keys[0]);
+  const last = keys[keys.length - 1];
+  if (p >= last.at) return pick(last);
+  let i = 0;
+  while (i < keys.length - 2 && keys[i + 1].at < p) i++;
+  const a = keys[i];
+  const b = keys[i + 1];
+  const e = ease((p - a.at) / Math.max(1e-6, b.at - a.at));
+  const lerp = (x: number, y: number) => x + (y - x) * e;
+  return { x: lerp(a.x, b.x), y: lerp(a.y, b.y), fontSize: lerp(a.fontSize, b.fontSize), rotation: lerp(a.rotation, b.rotation) };
+}
+
+export const textProgress = (t: TextClip, time: number) => clamp((time - t.start) / Math.max(1e-6, t.duration), 0, 1);
+
+/** Adds or replaces the keyframe at `at` (0..1) with the text's current position, size and rotation. */
+export function setTextKeyframe(t: TextClip, at: number): TextKeyframe[] {
+  const keys = (t.keys ?? []).filter((k) => Math.abs(k.at - at) > 0.02);
+  keys.push({ at: clamp(at, 0, 1), x: t.x, y: t.y, fontSize: t.fontSize, rotation: t.rotation });
+  return keys.sort((a, b) => a.at - b.at);
+}
+
 export function createAudioClip(asset: MediaAsset, start: number): AudioClip {
   return {
     id: uid(),
@@ -425,6 +455,57 @@ export function splitAudioClip(a: AudioClip, t: number): [AudioClip, AudioClip] 
     { ...a, outPoint: cut, fadeOut: 0 },
     { ...a, id: uid(), start: t, inPoint: cut, fadeIn: 0 },
   ];
+}
+
+/** Inserts a held frame of `seconds` at timeline time t, splitting the clip when t is inside it. */
+export function insertFreeze(clips: MainClip[], lc: LaidOutClip, t: number, seconds = 2): { clips: MainClip[]; still: MainClip } {
+  const still: MainClip = {
+    ...lc.clip,
+    id: uid(),
+    inPoint: sourceTimeFor(lc, Math.min(t, lc.end - 1e-3)),
+    freeze: seconds,
+    speedCurve: null,
+    transition: { ...lc.clip.transition, type: 'none' },
+    animIn: { ...lc.clip.animIn, type: 'none' },
+    animOut: { ...lc.clip.animOut, type: 'none' },
+  };
+  const parts = splitMainClip(lc, t);
+  return {
+    still,
+    clips: clips.flatMap((c) => {
+      if (c.id !== lc.clip.id) return [c];
+      if (parts) return [parts[0], still, parts[1]];
+      return t - lc.start < lc.duration / 2 ? [still, c] : [c, still];
+    }),
+  };
+}
+
+/** Timeline times of every Nth beat of a music clip. */
+export function beatCuts(a: AudioClip, beats: number[], every: number): number[] {
+  return beats
+    .filter((b) => b >= a.inPoint && b < a.outPoint)
+    .map((b) => a.start + (b - a.inPoint))
+    .filter((_, i) => i % every === every - 1);
+}
+
+/** Re-times the main track so each clip ends on the next cut time. */
+export function retimeToCuts(clips: MainClip[], assets: Map<string, MediaAsset>, cuts: number[]): MainClip[] {
+  let cursor = 0;
+  return clips.map((c) => {
+    const end = cuts.find((x) => x > cursor + 0.3);
+    if (end === undefined) {
+      cursor += clipDuration(c);
+      return c;
+    }
+    const want = end - cursor;
+    const src = assets.get(c.assetId);
+    let next: MainClip = c;
+    if (c.freeze) next = { ...c, freeze: want };
+    else if (src?.kind === 'image') next = { ...c, outPoint: c.inPoint + want };
+    else if (src) next = { ...c, outPoint: Math.min(src.duration, c.inPoint + want * c.speed) };
+    cursor += clipDuration(next);
+    return next;
+  });
 }
 
 /** Greedy lane assignment so overlapping items on a track don't hide each other. */
