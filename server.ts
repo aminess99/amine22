@@ -176,6 +176,165 @@ const detectSpeechBounds = (audioPath: string, duration: number): Promise<Speech
     );
   });
 
+/**
+ * Speech-to-text with acoustic word timestamps through OpenRouter (Whisper).
+ * Unlike a chat model, Whisper measures where each word is in the audio.
+ */
+const transcribeWithOpenRouterWhisper = async (wavPath: string): Promise<TranscribedWord[]> => {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) return [];
+  // FLAC keeps every sample (no encoder padding) at about half the size of WAV.
+  const flacPath = wavPath.replace(/\.wav$/, ".flac");
+  await new Promise<void>((resolve, reject) =>
+    execFile(ffmpegInstaller.path, ["-y", "-i", wavPath, "-c:a", "flac", "-ac", "1", "-ar", "16000", flacPath], (err) => (err ? reject(err) : resolve())),
+  );
+  try {
+    const form = new FormData();
+    form.append("file", new Blob([await fs.promises.readFile(flacPath)], { type: "audio/flac" }), "audio.flac");
+    form.append("model", process.env.WHISPER_MODEL || "openai/whisper-large-v3");
+    form.append("response_format", "verbose_json");
+    form.append("timestamp_granularities[]", "word");
+    const response = await fetch("https://openrouter.ai/api/v1/audio/transcriptions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "HTTP-Referer": process.env.APP_URL || "https://replit.com",
+        "X-Title": "AI Video Captioner",
+      },
+      body: form,
+    });
+    if (!response.ok) throw new Error(`Whisper ${response.status}: ${(await response.text()).slice(0, 300)}`);
+    const data: any = await response.json();
+    const raw: any[] = Array.isArray(data.words) && data.words.length ? data.words : (data.segments ?? []).flatMap((seg: any) => seg.words ?? []);
+    return raw
+      .map((w) => ({ word: String(w.word ?? w.text ?? "").trim(), start: Number(w.start), end: Number(w.end) }))
+      .filter((w) => w.word && Number.isFinite(w.start) && Number.isFinite(w.end) && w.end >= w.start);
+  } finally {
+    fs.promises.unlink(flacPath).catch(() => {});
+  }
+};
+
+/** Stretches of speech between pauses (silencedetect), in seconds. */
+const detectSpeechSegments = (audioPath: string, duration: number): Promise<SpeechBounds[]> =>
+  new Promise((resolve) => {
+    execFile(
+      ffmpegInstaller.path,
+      ["-hide_banner", "-i", audioPath, "-af", "silencedetect=noise=-35dB:d=0.25", "-f", "null", "-"],
+      { maxBuffer: 4 * 1024 * 1024 },
+      (_error, _stdout, stderr) => {
+        const starts = Array.from(stderr.matchAll(/silence_start:\s*([0-9.]+)/g)).map((m) => Number(m[1]));
+        const ends = Array.from(stderr.matchAll(/silence_end:\s*([0-9.]+)/g)).map((m) => Number(m[1]));
+        const segments: SpeechBounds[] = [];
+        let cursor = 0;
+        starts.forEach((silenceStart, i) => {
+          if (silenceStart - cursor > 0.08) segments.push({ start: cursor, end: silenceStart });
+          cursor = ends[i] ?? duration;
+        });
+        if (duration - cursor > 0.08) segments.push({ start: cursor, end: duration });
+        resolve(segments);
+      },
+    );
+  });
+
+/**
+ * Pins a chat model's estimated word times to the real speech: each word joins
+ * the stretch of speech its time falls in (keeping order), and each stretch's
+ * words are spread over it with their original rhythm. Drift can't build up
+ * past a pause. Skipped when the audio has no clear pauses (music under speech).
+ */
+const alignToSpeech = (words: TranscribedWord[], segments: SpeechBounds[], duration: number): TranscribedWord[] => {
+  if (words.length < 2 || segments.length < 2) return words;
+  const speech = segments.reduce((s, g) => s + g.end - g.start, 0);
+  if (segments.some((g) => g.end - g.start > Math.max(20, speech * 0.6))) return words;
+  // Assign words to stretches with dynamic programming: each stretch should hold
+  // about as many letters as its length allows at the speaker's pace, and words
+  // should stay near their estimated times. Order is always kept.
+  const n = words.length;
+  const m = segments.length;
+  const weight = words.map((w) => Math.max(1, Array.from(w.word).length));
+  const prefix = [0];
+  weight.forEach((w) => prefix.push(prefix[prefix.length - 1] + w));
+  const rate = prefix[n] / speech;
+  const mid = words.map((w) => (w.start + w.end) / 2);
+  const dist = (t: number, g: SpeechBounds) => (t < g.start ? g.start - t : t > g.end ? t - g.end : 0);
+  const fill = (letters: number, g: SpeechBounds) => {
+    const expected = rate * (g.end - g.start);
+    return ((letters - expected) * (letters - expected)) / (expected + 2);
+  };
+  const MAX_GROUP = 80;
+  const groups = new Map<number, TranscribedWord[]>();
+  if (n * m <= 400000) {
+    // dp[j][i]: best cost placing the first i words in the first j stretches.
+    const dp = Array.from({ length: m + 1 }, () => new Float64Array(n + 1).fill(Infinity));
+    const from = Array.from({ length: m + 1 }, () => new Int32Array(n + 1).fill(-1));
+    dp[0][0] = 0;
+    for (let j = 0; j < m; j++) {
+      const g = segments[j];
+      for (let i = 0; i <= n; i++) {
+        // Stretch j left without words (noise, music).
+        const skip = dp[j][i] + fill(0, g);
+        if (skip < dp[j + 1][i]) {
+          dp[j + 1][i] = skip;
+          from[j + 1][i] = i;
+        }
+        let timeCost = 0;
+        for (let k = i - 1; k >= Math.max(0, i - MAX_GROUP); k--) {
+          timeCost += dist(mid[k], g) * 3;
+          if (dp[j][k] === Infinity) continue;
+          const c = dp[j][k] + fill(prefix[i] - prefix[k], g) + timeCost;
+          if (c < dp[j + 1][i]) {
+            dp[j + 1][i] = c;
+            from[j + 1][i] = k;
+          }
+        }
+      }
+    }
+    if (dp[m][n] < Infinity) {
+      let i = n;
+      for (let j = m; j > 0; j--) {
+        const k = from[j][i];
+        if (k < i) groups.set(j - 1, words.slice(k, i));
+        i = k;
+      }
+    }
+  }
+  if (!groups.size) {
+    // Very long transcripts: nearest stretch, in order.
+    let last = 0;
+    for (const w of words) {
+      let best = last;
+      for (let j = last; j < m; j++) if (dist((w.start + w.end) / 2, segments[j]) < dist((w.start + w.end) / 2, segments[best])) best = j;
+      last = best;
+      groups.set(best, [...(groups.get(best) ?? []), w]);
+    }
+  }
+  const out: TranscribedWord[] = [];
+  for (const [i, group] of [...groups.entries()].sort((a, b) => a[0] - b[0])) {
+    const g = segments[i];
+    const from = group[0].start;
+    const to = group[group.length - 1].end;
+    const span = to - from;
+    const weights = group.map((w) => Math.max(1, Array.from(w.word).length));
+    const total = weights.reduce((a, b) => a + b, 0);
+    let acc = 0;
+    group.forEach((w, k) => {
+      let start: number;
+      let end: number;
+      if (span > 0.15) {
+        // Keep the model's rhythm inside the stretch, rescaled to its real bounds.
+        start = g.start + ((w.start - from) / span) * (g.end - g.start);
+        end = g.start + ((w.end - from) / span) * (g.end - g.start);
+      } else {
+        start = g.start + (acc / total) * (g.end - g.start);
+        end = g.start + ((acc + weights[k]) / total) * (g.end - g.start);
+      }
+      acc += weights[k];
+      out.push({ ...w, start: Math.min(duration, Math.max(0, start)), end: Math.min(duration, Math.max(start, end)) });
+    });
+  }
+  return out;
+};
+
 const calibrateWordTimeline = (
   words: Array<{ word: string; start: number; end: number }>,
   speechBounds: SpeechBounds,
@@ -806,12 +965,14 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
       }
 
       const fileToTranscribe = audioTempPath;
-      const audioDuration = await new Promise<number>((resolve) => {
+      const probedDuration = await new Promise<number>((resolve) => {
         ffmpeg.ffprobe(fileToTranscribe, (probeError, metadata) => {
           const duration = Number(metadata?.format?.duration);
           resolve(!probeError && Number.isFinite(duration) ? duration : 0);
         });
       });
+      // ffprobe isn't installed on every host; a 16 kHz mono 16-bit WAV is 32000 bytes a second.
+      const audioDuration = probedDuration || Math.max(0, (fs.statSync(fileToTranscribe).size - 44) / 32000);
 
       let extractedWords: Array<{ word: string; start: number; end: number }> = [];
       let transcriptionFailure: string | null = null;
@@ -830,6 +991,16 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
       // the local Whisper model. TRANSCRIBE_ENGINE=whisper keeps the local model first.
       const preferOpenRouter = !!openRouterClient && process.env.TRANSCRIBE_ENGINE !== "whisper";
       if (!preferOpenRouter) await runFasterWhisper();
+
+      if (extractedWords.length === 0 && openRouterClient && process.env.TRANSCRIBE_ENGINE !== "gemini") {
+        try {
+          console.log("Transcribing with OpenRouter Whisper (acoustic word timestamps)...");
+          extractedWords = await transcribeWithOpenRouterWhisper(fileToTranscribe);
+          console.log(`OpenRouter Whisper completed with ${extractedWords.length} words.`);
+        } catch (whisperErr: any) {
+          console.warn("OpenRouter Whisper failed, falling back to the chat model:", whisperErr?.message || whisperErr);
+        }
+      }
 
       if (extractedWords.length === 0 && openRouterClient) {
         try {
@@ -887,6 +1058,8 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
         if (extractedWords.length > 1 && audioDuration > 0) {
           const speechBounds = await detectSpeechBounds(fileToTranscribe, audioDuration);
           extractedWords = calibrateWordTimeline(extractedWords, speechBounds, audioDuration);
+          // Chat-model times are estimates: pin them to the real pauses so they can't drift.
+          extractedWords = alignToSpeech(extractedWords, await detectSpeechSegments(fileToTranscribe, audioDuration), audioDuration);
         }
 
         console.log(`OpenRouter transcription completed with ${extractedWords.length} words.`);

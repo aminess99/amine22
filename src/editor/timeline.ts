@@ -411,6 +411,75 @@ export function splitMainClip(lc: LaidOutClip, t: number): [MainClip, MainClip] 
   ];
 }
 
+/** Timeline time at which a clip shows a source time, or null when it doesn't show it. */
+export function timelineTimeOf(lc: LaidOutClip, src: number): number | null {
+  const c = lc.clip;
+  if (c.freeze || src < c.inPoint - 0.02 || src > c.outPoint + 0.02) return null;
+  const u = clamp((src - c.inPoint) / Math.max(1e-6, c.outPoint - c.inPoint), 0, 1);
+  return lc.start + (c.speedCurve ? curveInverse(c.speedCurve, u) : u) * lc.duration;
+}
+
+/**
+ * Re-places auto captions after the main track changed, from where their words
+ * are in the source: they move, stretch or shrink with their clip, and lose the
+ * words that were cut out (a caption with none left is removed).
+ */
+export function followCaptions(prev: Project, next: Project, assets: Map<string, MediaAsset>): Project {
+  if (prev.clips === next.clips || !next.texts.some((t) => t.src)) return next;
+  const layout = layoutMainTrack(next.clips, assets);
+  // A clip whose file isn't loaded yet would shift everything after it.
+  if (layout.length !== next.clips.length) return next;
+  let changed = false;
+  const texts: TextClip[] = [];
+  for (const t of next.texts) {
+    const src = t.src;
+    // Without matching word lists (the line was rewritten by hand) the caption stays put.
+    if (!src || !t.words || t.words.length !== src.words.length) {
+      texts.push(t);
+      continue;
+    }
+    const words: NonNullable<TextClip['words']> = [];
+    const kept: number[] = [];
+    let lastClip: LaidOutClip | null = null;
+    src.words.forEach((w, i) => {
+      for (const lc of layout) {
+        if (lc.asset.id !== src.assetId || w.start < lc.clip.inPoint - 0.02 || w.start >= lc.clip.outPoint) continue;
+        const start = timelineTimeOf(lc, w.start);
+        if (start === null) continue;
+        const end = timelineTimeOf(lc, Math.min(w.end, lc.clip.outPoint)) ?? start;
+        words.push({ text: t.words![i].text, start, end: Math.max(start, end) });
+        kept.push(i);
+        lastClip = lc;
+        return;
+      }
+    });
+    if (!words.length || !lastClip) {
+      changed = true;
+      continue;
+    }
+    const start = words[0].start;
+    const end = Math.min(words[words.length - 1].end + src.hold, (lastClip as LaidOutClip).end);
+    const duration = Math.max(0.2, end - start);
+    const same = words.length === t.words.length && Math.abs(start - t.start) < 1e-4 && Math.abs(duration - t.duration) < 1e-4 && words.every((w, i) => Math.abs(w.start - t.words![i].start) < 1e-4);
+    if (same) {
+      texts.push(t);
+      continue;
+    }
+    changed = true;
+    const keep = words.length === src.words.length;
+    texts.push({
+      ...t,
+      start,
+      duration,
+      words,
+      text: keep ? t.text : words.map((w) => w.text).join(' '),
+      // Words that were cut out are gone for good from this caption.
+      src: keep ? src : { ...src, words: kept.map((i) => src.words[i]) },
+    });
+  }
+  return changed ? { ...next, texts } : next;
+}
+
 export function splitTextClip(text: TextClip, t: number): [TextClip, TextClip] | null {
   const local = t - text.start;
   if (local < MIN_CLIP_DURATION || text.duration - local < MIN_CLIP_DURATION) return null;
@@ -422,6 +491,11 @@ export function splitTextClip(text: TextClip, t: number): [TextClip, TextClip] |
     const wb = text.words.filter((w) => w.start >= t);
     if (wa.length) Object.assign(a, { words: wa, text: wa.map((w) => w.text).join(' ') });
     if (wb.length) Object.assign(b, { words: wb, text: wb.map((w) => w.text).join(' ') });
+    // The halves keep following the speech: split the source words the same way.
+    if (text.src && text.src.words.length === text.words.length) {
+      a.src = { ...text.src, words: text.src.words.slice(0, wa.length), hold: 0 };
+      b.src = { ...text.src, words: text.src.words.slice(wa.length) };
+    }
   }
   return [a, b];
 }

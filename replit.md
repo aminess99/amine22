@@ -18,7 +18,9 @@ Phase 3 additions: autosave to IndexedDB (`src/editor/persistence.ts`), a pictur
 
 ## Deploy on Render
 
-`render.yaml` defines a Node web service (`npm ci && npm run build`, then `npm start`, health check `/api/health`). Set `OPENROUTER_API_KEY` in the Render dashboard. When that key is present, transcription uses OpenRouter first and the local faster-whisper model only as a fallback; set `TRANSCRIBE_ENGINE=whisper` to keep the local model first on hosts that can run it.
+`render.yaml` defines a Node web service (`npm ci && npm run build`, then `npm start`, health check `/api/health`). Set `OPENROUTER_API_KEY` in the Render dashboard. When that key is present, transcription uses OpenRouter first: Whisper (`WHISPER_MODEL`, default `openai/whisper-large-v3`) for acoustic word timestamps, then the chat model (`OPENROUTER_MODEL`) whose estimated times are pinned to the real pauses (`alignToSpeech`), then the local faster-whisper model. `TRANSCRIBE_ENGINE=whisper` keeps the local model first; `TRANSCRIBE_ENGINE=gemini` skips OpenRouter Whisper.
+
+Auto captions remember where their words are in the source (`TextClip.src`); every edit goes through `followCaptions`, so captions move, stretch and lose cut-out words along with their clip.
 
 Editing commands (the editor's "أوامر" panel) post the request and a summary of the project to `/api/command`, which asks `COMMAND_MODEL` (default `google/gemini-2.5-flash`) through OpenRouter for a list of editor actions. The prompt and action list live in `src/editor/commandSpec.ts`; the client applies them in `src/editor/commands.ts` as one undo step.
 

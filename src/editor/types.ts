@@ -306,6 +306,12 @@ export interface TextClip {
   captionStyle?: string;
   /** Emoji shown above the caption. */
   emoji?: string;
+  /**
+   * Where an auto caption's words are in the source video, so the caption follows
+   * the speech when clips are trimmed, moved or sped up. `hold` is how long the
+   * caption stays after its last word.
+   */
+  src?: { assetId: string; words: { text: string; start: number; end: number }[]; hold: number };
   // Fields added later; absent means the default noted.
   animLoop?: TextAnimLoop; // 'none'
   /** Second fill colour: the text fades from `color` (top) to this (bottom). */

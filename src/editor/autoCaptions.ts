@@ -1,6 +1,6 @@
 import { getWordEmoji } from '../lib/emojiMatcher';
 import { TEXT_PRESETS, captionStyleFields } from './constants';
-import { uid } from './timeline';
+import { timelineTimeOf, uid } from './timeline';
 import { LaidOutClip, TextClip } from './types';
 
 interface Word {
@@ -86,27 +86,28 @@ export async function generateCaptions(
       (percent) => onProgress({ stage: 'upload', clip: i + 1, clips: videos.length, percent }),
       () => onProgress({ stage: 'transcribe', clip: i + 1, clips: videos.length })
     );
-    const { inPoint, outPoint, speed } = lc.clip;
-    const words = all
-      .filter((w) => w.end > inPoint && w.start < outPoint)
-      .map((w) => ({
-        text: w.text,
-        start: lc.start + (Math.max(w.start, inPoint) - inPoint) / speed,
-        end: lc.start + (Math.min(w.end, outPoint) - inPoint) / speed,
-      }));
+    const { inPoint, outPoint } = lc.clip;
+    const source = all.filter((w) => w.start >= inPoint - 0.02 && w.start < outPoint);
+    // Through the clip's speed (and speed curve), so captions match what is heard.
+    const words = source.map((w) => {
+      const start = timelineTimeOf(lc, Math.max(w.start, inPoint)) ?? lc.start;
+      return { text: w.text, start, end: Math.max(start, timelineTimeOf(lc, Math.min(w.end, outPoint)) ?? start) };
+    });
     for (let j = 0; j < words.length; j += wordsPerCaption) {
       const group = words.slice(j, j + wordsPerCaption);
       const next = words[j + wordsPerCaption];
       const start = group[0].start;
       // Hold each caption until the next one starts (short gaps), so it doesn't flicker.
       const end = next && next.start - group[group.length - 1].end < 0.6 ? next.start : group[group.length - 1].end + 0.2;
+      const duration = Math.max(0.2, Math.min(end, lc.end) - start);
       captions.push({
         ...base,
         ...look,
         id: uid(),
         text: group.map((w) => w.text).join(' '),
         start,
-        duration: Math.max(0.2, Math.min(end, lc.end) - start),
+        duration,
+        src: { assetId: lc.asset.id, words: source.slice(j, j + wordsPerCaption), hold: Math.max(0, start + duration - group[group.length - 1].end) },
         x: 0.5,
         y: styleId === 'cinematic' || styleId === 'plain' ? 0.84 : 0.72,
         rotation: 0,
