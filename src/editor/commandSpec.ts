@@ -1,4 +1,5 @@
 import { VOICE_EFFECTS } from './audioTools';
+import { TTS_STYLES, TTS_VOICES } from './tts';
 import {
   ASPECT_SIZES,
   BLEND_MODES,
@@ -81,6 +82,7 @@ export type EditAction =
       muted?: boolean;
     }
   | { op: 'delete_pip'; pips: ClipTarget }
+  | { op: 'tts'; text: string; voice?: string; style?: string; start?: number }
   | { op: 'seek'; time: number }
   | { op: 'play' }
   | { op: 'export' };
@@ -141,6 +143,7 @@ Actions (use only these):
 - {"op":"add_pip","media":n,"start":s,"x":0-1,"y":0-1,"scale":0.1-1,"shape":"rect"|"rounded"|"circle","chroma":true or "#rrggbb"}  add a library file as picture-in-picture; "chroma" removes its green (or given) background right away
 - {"op":"pip","pips":…, any of "start","x","y" (centre, 0-1),"scale" (width fraction 0.1-1),"rotation","opacity" 0-1,"shape","blend" (${BLEND_MODES.map((b) => b.id).join(', ')}),"anim_in"/"anim_out" (${OVERLAY_ANIMS.map((b) => b.id).join(', ')}),"flip_h","volume" 0-1,"muted"}
 - {"op":"delete_pip","pips":…}
+- {"op":"tts","text":"...","voice":id,"style":id,"start":s}  text to speech (voice-over) added as an audio track. Write the text in the language the user wants spoken. Voices: ${TTS_VOICES.map((v) => `${v.id} (${v.hint})`).join(', ')}. Styles: ${ids(TTS_STYLES)}
 - {"op":"seek","time":s}   {"op":"play"}   {"op":"export"}
 
 Rules: use the fewest actions that do exactly what was asked. Never invent clip numbers that do not exist. Clamp values to the ranges above.

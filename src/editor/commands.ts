@@ -19,6 +19,7 @@ import {
   presetAdjustments,
 } from './constants';
 import { MAX_REVERSE_SECONDS, reverseVideo } from './reverse';
+import { MAX_TTS_CHARS, TTS_STYLES, TTS_VOICES, synthesizeSpeech } from './tts';
 import { clipsFromRanges, findSpeechRanges } from './silence';
 import {
   audioClipEnd,
@@ -220,6 +221,10 @@ export function describeAction(a: EditAction): string | null {
       return `تعديل ${targetText(a.pips, 'الفيديو فوق الفيديو')}`;
     case 'delete_pip':
       return `حذف ${targetText(a.pips, 'الفيديو فوق الفيديو')}`;
+    case 'tts':
+      return typeof a.text === 'string' && a.text.trim()
+        ? `صوت ${label(TTS_VOICES, a.voice) ?? TTS_VOICES[0].label} يقول: "${a.text.slice(0, 40)}${a.text.length > 40 ? '…' : ''}"`
+        : null;
     case 'seek':
       return `الانتقال إلى ${formatTime(num(a.time, 0, 1e5, 0))}`;
     case 'play':
@@ -674,6 +679,16 @@ export async function executeActions(
       const processed = await register(encodeWav(buffer, `${asset.name.replace(/\.[^.]+$/, '')} - ${label}.wav`));
       p = { ...p, audios: p.audios.map((x) => (x.id === id ? { ...x, assetId: processed.id, inPoint: 0, outPoint: processed.duration } : x)) };
     }
+  }
+
+  // Text to speech: each line becomes a new audio track.
+  for (const a of actions) {
+    if (a.op !== 'tts' || typeof a.text !== 'string' || !a.text.trim()) continue;
+    onStatus('جاري توليد الصوت...', null);
+    const voice = known(TTS_VOICES, a.voice) ? a.voice : TTS_VOICES[0].id;
+    const style = known(TTS_STYLES, a.style) ? a.style : TTS_STYLES[0].id;
+    const speech = await register(await synthesizeSpeech(a.text.trim().slice(0, MAX_TTS_CHARS), voice, style));
+    p = { ...p, audios: [...p.audios, createAudioClip(speech, num(a.start, 0, 1e5, 0))] };
   }
 
   // 6. Captions: delete, generate on the final cut, then restyle.

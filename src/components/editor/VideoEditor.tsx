@@ -61,6 +61,7 @@ import { clipsFromRanges, findSpeechRanges } from '../../editor/silence';
 import { applyTemplate } from '../../editor/templates';
 import { useHistory } from '../../editor/useHistory';
 import { commandContext, executeActions, requestCommand } from '../../editor/commands';
+import { synthesizeSpeech } from '../../editor/tts';
 import {
   GestureDelta,
   applyClipGesture,
@@ -73,7 +74,7 @@ import { usePreviewEngine } from '../../editor/usePreviewEngine';
 import { CommandPanel, CommandState } from './CommandPanel';
 import { EditorExportModal } from './EditorExportModal';
 import { AudioInspector, ClipInspector, OverlayInspector, ProjectInspector, TextInspector, TransitionInspector } from './EditorInspector';
-import { CaptionManager, FiltersPanel, MediaPanel, StickersPanel, TemplatesPanel, TextPanel, TransitionsPanel, VoiceRecorder } from './EditorPanels';
+import { CaptionManager, FiltersPanel, MediaPanel, StickersPanel, TemplatesPanel, TextPanel, TextToSpeech, TransitionsPanel, VoiceRecorder } from './EditorPanels';
 import { EditorTimeline } from './EditorTimeline';
 import { ToolButton } from './ui';
 import { frameAt } from './previews';
@@ -1120,13 +1121,22 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
             kinds={['audio']}
             loading={loading}
             extra={
-              <VoiceRecorder
-                onStart={() => {
-                  setSheetOpen(false);
-                  onRecordStart();
-                }}
-                onStop={onRecordStop}
-              />
+              <div className="space-y-2">
+                <VoiceRecorder
+                  onStart={() => {
+                    setSheetOpen(false);
+                    onRecordStart();
+                  }}
+                  onStop={onRecordStop}
+                />
+                <TextToSpeech
+                  onCreate={async (text, voice, style) => {
+                    const asset = await registerAsset(await synthesizeSpeech(text, voice, style));
+                    addAudio(asset);
+                    setSheetOpen(false);
+                  }}
+                />
+              </div>
             }
             onFiles={(f) => addFiles(f, false)}
             onAdd={(a) => {

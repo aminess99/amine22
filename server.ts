@@ -317,6 +317,72 @@ async function startServer() {
     }
   });
 
+  // Text to speech through OpenRouter's speech endpoint. Gemini TTS returns raw
+  // 24 kHz 16-bit mono PCM, which is wrapped in a WAV header for the browser.
+  const ttsHits = new Map<string, number[]>();
+  app.post("/api/tts", async (req, res) => {
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey || apiKey === "MY_OPENROUTER_API_KEY") {
+      return res.status(503).json({ error: "OPENROUTER_API_KEY is not set" });
+    }
+    const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+    const voice = typeof req.body?.voice === "string" && /^[A-Za-z_]{2,40}$/.test(req.body.voice) ? req.body.voice : "Kore";
+    const instructions = typeof req.body?.instructions === "string" ? req.body.instructions.slice(0, 300) : "";
+    if (!text || text.length > 2000) return res.status(400).json({ error: "Invalid text" });
+    const ip = req.ip || "unknown";
+    const now = Date.now();
+    const hits = (ttsHits.get(ip) ?? []).filter((t) => now - t < 60_000);
+    if (hits.length >= 10) return res.status(429).json({ error: "Too many requests" });
+    hits.push(now);
+    ttsHits.set(ip, hits);
+
+    try {
+      const response = await fetch("https://openrouter.ai/api/v1/audio/speech", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": process.env.APP_URL || "https://replit.com",
+          "X-Title": "AI Video Captioner",
+        },
+        body: JSON.stringify({
+          model: process.env.TTS_MODEL || "google/gemini-3.8-flash-lite-tts",
+          input: text,
+          voice,
+          response_format: "pcm",
+          ...(instructions ? { instructions } : {}),
+        }),
+      });
+      if (!response.ok) {
+        console.error("TTS failed:", response.status, (await response.text()).slice(0, 500));
+        return res.status(502).json({ error: "Speech model failed" });
+      }
+      const pcm = Buffer.from(await response.arrayBuffer());
+      res.setHeader("Content-Type", "audio/wav");
+      // Already a WAV file: pass it through.
+      if (pcm.subarray(0, 4).toString() === "RIFF") return res.send(pcm);
+      const sampleRate = 24000;
+      const header = Buffer.alloc(44);
+      header.write("RIFF", 0);
+      header.writeUInt32LE(36 + pcm.length, 4);
+      header.write("WAVE", 8);
+      header.write("fmt ", 12);
+      header.writeUInt32LE(16, 16);
+      header.writeUInt16LE(1, 20); // PCM
+      header.writeUInt16LE(1, 22); // mono
+      header.writeUInt32LE(sampleRate, 24);
+      header.writeUInt32LE(sampleRate * 2, 28);
+      header.writeUInt16LE(2, 32);
+      header.writeUInt16LE(16, 34);
+      header.write("data", 36);
+      header.writeUInt32LE(pcm.length, 40);
+      res.send(Buffer.concat([header, pcm]));
+    } catch (error) {
+      console.error("TTS failed:", error);
+      res.status(502).json({ error: "Speech model failed" });
+    }
+  });
+
   // SEO: robots.txt for search engines
   app.get("/robots.txt", (req, res) => {
     res.type("text/plain");
