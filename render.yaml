@@ -27,3 +27,6 @@ services:
       # Vision model that watches videos (scenes, events, highlights, reframe).
       - key: VISION_MODEL
         value: google/gemini-3.8-flash
+      # Speech-to-text with acoustic word timestamps (captions); the chat model is the fallback.
+      - key: WHISPER_MODEL
+        value: openai/whisper-large-v3

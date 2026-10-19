@@ -57,6 +57,7 @@ import {
   beatCuts,
   retimeToCuts,
   setTextKeyframe,
+  followCaptions,
   sourceTimeFor,
   textProgress,
   textTransformAt,
@@ -116,7 +117,13 @@ interface VideoEditorProps {
 }
 
 export function VideoEditor({ onBack }: VideoEditorProps) {
-  const { state: project, update, undo, redo, reset, canUndo, canRedo } = useHistory<Project>(INITIAL_PROJECT);
+  const { state: project, update: rawUpdate, undo, redo, reset, canUndo, canRedo } = useHistory<Project>(INITIAL_PROJECT);
+  // Every edit goes through here: when clips change, auto captions follow their speech.
+  const assetsForCaptions = useRef<Map<string, MediaAsset>>(new Map());
+  const update = useCallback(
+    (fn: (p: Project) => Project, key?: string) => rawUpdate((p) => followCaptions(p, fn(p), assetsForCaptions.current), key),
+    [rawUpdate]
+  );
   const [assetList, setAssetList] = useState<MediaAsset[]>([]);
   const [loading, setLoading] = useState(0);
   const [errors, setErrors] = useState<string[]>([]);
@@ -132,6 +139,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
   const [captionState, setCaptionState] = useState<{ busy: boolean; status: string | null; progress: number | null }>({ busy: false, status: null, progress: null });
 
   const assets = useMemo(() => new Map(assetList.map((a) => [a.id, a])), [assetList]);
+  assetsForCaptions.current = assets;
   const layout = useMemo(() => layoutMainTrack(project.clips, assets), [project.clips, assets]);
   const duration = useMemo(() => projectDuration(project, layout), [project, layout]);
 
