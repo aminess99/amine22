@@ -20,6 +20,7 @@ import {
 } from './constants';
 import { FONT_GROUPS, FONT_LIST } from './fonts';
 import { TEXT_TEMPLATES } from './textTemplates';
+import { PROJECT_TEMPLATES } from './templates';
 
 /** Look and motion fields shared by add_text and text_style. */
 export interface TextStyleFields {
@@ -117,6 +118,14 @@ export type EditAction =
     }
   | { op: 'delete_pip'; pips: ClipTarget }
   | { op: 'tts'; text: string; voice?: string; style?: string; start?: number }
+  | { op: 'extract_audio'; clips: ClipTarget }
+  | { op: 'crop'; clips: ClipTarget; x?: number; y?: number; w?: number; h?: number; reset?: boolean }
+  | { op: 'clip_duration'; clips: ClipTarget; seconds: number }
+  | { op: 'audio_edit'; audios: ClipTarget; start?: number; trim_start?: number; duration?: number }
+  | { op: 'delete_audio'; audios: ClipTarget }
+  | { op: 'pip_layer'; pip: number; to: 'front' | 'back' | 'forward' | 'backward' }
+  | { op: 'caption_line'; line: number; text?: string; delete?: boolean }
+  | { op: 'project_template'; template: string }
   | { op: 'seek'; time: number }
   | { op: 'play' }
   | { op: 'export' };
@@ -184,8 +193,17 @@ Actions (use only these):
 - {"op":"pip","pips":…, any of "start","x","y" (centre, 0-1),"scale" (width fraction 0.1-1),"rotation","opacity" 0-1,"shape","blend" (${BLEND_MODES.map((b) => b.id).join(', ')}),"anim_in"/"anim_out" (${OVERLAY_ANIMS.map((b) => b.id).join(', ')}),"flip_h","volume" 0-1,"muted"}
 - {"op":"delete_pip","pips":…}
 - {"op":"tts","text":"...","voice":id,"style":id,"start":s}  text to speech (voice-over) added as an audio track. Write the text in the language the user wants spoken. Voices: ${TTS_VOICES.map((v) => `${v.id} (${v.hint})`).join(', ')}. Styles: ${ids(TTS_STYLES)}
+- {"op":"extract_audio","clips":…}  detach/separate a video clip's sound onto its own audio track (the clip is muted)
+- {"op":"crop","clips":…,"x":0-1,"y":0-1,"w":0-1,"h":0-1}  keep that part of the frame (fractions of the source); {"reset":true} removes the crop
+- {"op":"clip_duration","clips":…,"seconds":s}  how long an image stays, or trim a video clip to that length
+- {"op":"audio_edit","audios":…,"start":s (move the track on the timeline),"trim_start":s (skip the first seconds of the file),"duration":s (cut the track to this length)}
+- {"op":"delete_audio","audios":…}
+- {"op":"pip_layer","pip":n,"to":"front"|"back"|"forward"|"backward"}  stacking order of picture-in-picture layers
+- {"op":"caption_line","line":n,"text":"..."}  fix the words of one caption line (n from "captions"); {"delete":true} removes it
+- {"op":"project_template","template":id}  restyle the whole video in one go: ${PROJECT_TEMPLATES.map((t) => `${t.id} (${t.label}: ${t.description})`).join(', ')}
 - {"op":"seek","time":s}   {"op":"play"}   {"op":"export"}
 
 Rules: use the fewest actions that do exactly what was asked. Never invent clip numbers that do not exist. Clamp values to the ranges above.
+Map the user's words to the closest action: e.g. "افصل الصوت" / "استخرج الصوت" → extract_audio; "قص الصورة" (frame) → crop; "أطول/أقصر" for an image → clip_duration.
 If the request needs something the editor cannot do (e.g. remove a background, generate new footage, recognise objects in the picture), return no actions and say so briefly.`;
 }

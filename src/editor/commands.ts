@@ -23,6 +23,8 @@ import {
   presetAdjustments,
 } from './constants';
 import { MAX_REVERSE_SECONDS, reverseVideo } from './reverse';
+import { computePeaks } from './media';
+import { PROJECT_TEMPLATES, applyTemplate } from './templates';
 import { MAX_TTS_CHARS, TTS_STYLES, TTS_VOICES, synthesizeSpeech } from './tts';
 import { FONT_LIST } from './fonts';
 import { TEXT_TEMPLATES, templateTexts } from './textTemplates';
@@ -92,7 +94,7 @@ export function commandContext(project: Project, assets: Map<string, MediaAsset>
       volume: r2(a.volume),
     })),
     texts: texts.map((t, i) => ({ n: i + 1, text: t.text.slice(0, 60), start: r2(t.start), end: r2(t.start + t.duration), font: t.font, y: r2(t.y) })),
-    captions: captions.slice(0, 400).map((t) => ({ start: r2(t.start), end: r2(t.start + t.duration), text: t.text })),
+    captions: captions.slice(0, 400).map((t, i) => ({ n: i + 1, start: r2(t.start), end: r2(t.start + t.duration), text: t.text })),
     caption_style: captions[0]?.captionStyle,
     pips: project.overlays.map((o, i) => ({
       n: i + 1,
@@ -238,6 +240,29 @@ export function describeAction(a: EditAction): string | null {
       return typeof a.text === 'string' && a.text.trim()
         ? `صوت ${label(TTS_VOICES, a.voice) ?? TTS_VOICES[0].label} يقول: "${a.text.slice(0, 40)}${a.text.length > 40 ? '…' : ''}"`
         : null;
+    case 'extract_audio':
+      return `فصل صوت ${clips} إلى مسار صوتي`;
+    case 'crop':
+      return a.reset ? `إلغاء قص الإطار في ${clips}` : `قص الإطار في ${clips}`;
+    case 'clip_duration':
+      return `مدة ${clips}: ${num(a.seconds, 0.1, 600, 3)} ث`;
+    case 'audio_edit': {
+      const parts: string[] = [];
+      if (a.start !== undefined) parts.push(`يبدأ عند ${formatTime(num(a.start, 0, 1e5, 0), true)}`);
+      if (a.trim_start !== undefined) parts.push(`تخطي أول ${num(a.trim_start, 0, 1e5, 0)} ث`);
+      if (a.duration !== undefined) parts.push(`مدته ${num(a.duration, 0.1, 1e5, 1)} ث`);
+      return `${targetText(a.audios, 'المسارات الصوتية')}: ${parts.join('، ')}`;
+    }
+    case 'delete_audio':
+      return `حذف ${targetText(a.audios, 'المسارات الصوتية')}`;
+    case 'pip_layer':
+      return `ترتيب الفيديو فوق الفيديو ${a.pip}: ${{ front: 'إلى الأمام', back: 'إلى الخلف', forward: 'طبقة للأمام', backward: 'طبقة للخلف' }[a.to] ?? ''}`;
+    case 'caption_line':
+      return a.delete ? `حذف سطر الكابشن ${a.line}` : typeof a.text === 'string' ? `تعديل سطر الكابشن ${a.line} إلى "${a.text.slice(0, 30)}"` : null;
+    case 'project_template': {
+      const tpl = PROJECT_TEMPLATES.find((x) => x.id === a.template);
+      return tpl ? `تطبيق قالب "${tpl.label}" على الفيديو` : null;
+    }
     case 'seek':
       return `الانتقال إلى ${formatTime(num(a.time, 0, 1e5, 0))}`;
     case 'play':
@@ -417,9 +442,62 @@ export async function executeActions(
     p = { ...p, texts: p.texts.map((t) => (isCaption(t) ? fn(t) : t)) };
   };
 
+  // A project template restyles everything, so it goes first and later steps refine it.
+  for (const a of actions) if (a.op === 'project_template' && PROJECT_TEMPLATES.some((x) => x.id === a.template)) p = applyTemplate(p, assets, a.template);
+  const captions0 = start.texts.filter(isCaption).sort((x, y) => x.start - y.start);
+
   // 1. Property edits, in the order asked.
   for (const a of actions) {
     switch (a.op) {
+      case 'crop':
+        editClips(a.clips, (c) => {
+          if (a.reset) return { ...c, crop: { x: 0, y: 0, w: 1, h: 1 } };
+          const w = num(a.w, 0.05, 1, c.crop.w);
+          const h = num(a.h, 0.05, 1, c.crop.h);
+          return { ...c, crop: { w, h, x: num(a.x, 0, 1 - w, Math.min(c.crop.x, 1 - w)), y: num(a.y, 0, 1 - h, Math.min(c.crop.y, 1 - h)) } };
+        });
+        break;
+      case 'audio_edit': {
+        const ids = audioIds(a.audios);
+        p = {
+          ...p,
+          audios: p.audios.map((x) => {
+            if (!ids.has(x.id)) return x;
+            const full = assets.get(x.assetId)?.duration ?? x.outPoint;
+            const inPoint = a.trim_start === undefined ? x.inPoint : num(a.trim_start, 0, Math.max(0, full - 0.1), x.inPoint);
+            const length = a.duration === undefined ? x.outPoint - x.inPoint : num(a.duration, 0.1, 1e5, x.outPoint - x.inPoint);
+            return { ...x, start: a.start === undefined ? x.start : num(a.start, 0, 1e5, x.start), inPoint, outPoint: Math.min(full, inPoint + length) };
+          }),
+        };
+        break;
+      }
+      case 'delete_audio': {
+        const ids = audioIds(a.audios);
+        p = { ...p, audios: p.audios.filter((x) => !ids.has(x.id)) };
+        break;
+      }
+      case 'pip_layer': {
+        const id = start.overlays[Number(a.pip) - 1]?.id;
+        const from = p.overlays.findIndex((o) => o.id === id);
+        if (from < 0) break;
+        const overlays = [...p.overlays];
+        const [moved] = overlays.splice(from, 1);
+        // Later in the list is drawn on top.
+        const to = a.to === 'front' ? overlays.length : a.to === 'back' ? 0 : a.to === 'forward' ? Math.min(overlays.length, from + 1) : Math.max(0, from - 1);
+        overlays.splice(to, 0, moved);
+        p = { ...p, overlays };
+        break;
+      }
+      case 'caption_line': {
+        const id = captions0[Number(a.line) - 1]?.id;
+        if (!id) break;
+        if (a.delete) p = { ...p, texts: p.texts.filter((t) => t.id !== id) };
+        else if (typeof a.text === 'string' && a.text.trim()) {
+          const text = a.text.trim().slice(0, 300);
+          p = { ...p, texts: p.texts.map((t) => (t.id === id ? { ...t, text, words: t.words ? retimeWords(t.words, text) : undefined } : t)) };
+        }
+        break;
+      }
       case 'speed': {
         const speed = num(a.speed, 0.25, 4, 1);
         editClips(a.clips, (c) => ({ ...c, speed, freeze: null }));
@@ -628,9 +706,17 @@ export async function executeActions(
     p = { ...p, texts: p.texts.map((t) => (t.start >= x.at && t.words ? { ...push(t), words: t.words.map((w) => ({ ...w, start: w.start + x.freeze, end: w.end + x.freeze })) } : push(t))), overlays: p.overlays.map(push) };
   }
 
-  // 4. Clip list changes, by id so earlier steps don't shift them.
+  // 4. Clip lengths and list changes, by id so earlier steps don't shift them.
   for (const a of actions) {
-    if (a.op === 'delete_clip') {
+    if (a.op === 'clip_duration') {
+      const seconds = num(a.seconds, 0.1, 600, 3);
+      editClips(a.clips, (c) => {
+        const asset = assets.get(c.assetId);
+        if (c.freeze) return { ...c, freeze: seconds };
+        if (asset?.kind === 'image') return { ...c, outPoint: c.inPoint + seconds, speedCurve: null };
+        return { ...c, outPoint: Math.min(asset?.duration ?? c.outPoint, c.inPoint + seconds * c.speed), speedCurve: null };
+      });
+    } else if (a.op === 'delete_clip') {
       const ids = clipIds(a.clips);
       p = { ...p, clips: p.clips.filter((c) => !ids.has(c.id)) };
     } else if (a.op === 'duplicate_clip') {
@@ -721,6 +807,29 @@ export async function executeActions(
     p = { ...p, clips: retimeToCuts(p.clips, assets, beatCuts(track, asset.beats, Math.round(num(a.every, 1, 4, 1)))) };
   }
 
+  // Detach clip sound onto audio tracks (after beat sync, so it matches the final cut).
+  const extractIds = new Set(actions.flatMap((a) => (a.op === 'extract_audio' ? [...clipIds(a.clips)] : [])));
+  for (const lc of extractIds.size ? layoutMainTrack(p.clips, assets) : []) {
+    if (!extractIds.has(lc.clip.id) || lc.asset.kind !== 'video') continue;
+    if (!lc.asset.hasAudio) {
+      note('أحد المقاطع لا يحتوي على صوت لفصله.');
+      continue;
+    }
+    if (lc.clip.speed !== 1 || lc.clip.speedCurve || lc.clip.freeze) {
+      note('فصل الصوت يعمل على المقاطع بسرعتها الأصلية. أعد السرعة إلى 1x أولاً.');
+      continue;
+    }
+    let asset = lc.asset;
+    if (!asset.peaks) {
+      onStatus('جاري تجهيز موجة الصوت...', null);
+      asset = { ...asset, peaks: await computePeaks(asset.file) };
+      assets.set(asset.id, asset);
+      hooks.saveAsset(asset);
+    }
+    const track: AudioClip = { ...createAudioClip(asset, lc.start), inPoint: lc.clip.inPoint, outPoint: lc.clip.outPoint, volume: lc.clip.volume };
+    p = { ...p, clips: p.clips.map((c) => (c.id === lc.clip.id ? { ...c, muted: true } : c)), audios: [...p.audios, track] };
+  }
+
   // Voice effects (after beat sync, so detached sound matches the final cut): on audio tracks, or on a video clip's sound after detaching it to a track.
   for (const a of actions) {
     if (a.op !== 'voice_effect' || !known(VOICE_EFFECTS, a.effect)) continue;
@@ -732,6 +841,12 @@ export async function executeActions(
       const detachedFrom = new Set<string>();
       for (const lc of layoutMainTrack(p.clips, assets)) {
         if (!ids.has(lc.clip.id) || lc.asset.kind !== 'video' || !lc.asset.hasAudio) continue;
+        if (extractIds.has(lc.clip.id)) {
+          // Already detached above: apply the effect to that track.
+          const track = p.audios.find((x) => x.assetId === lc.asset.id && Math.abs(x.start - lc.start) < 1e-3);
+          if (track) targets.add(track.id);
+          continue;
+        }
         if (lc.clip.speed !== 1 || lc.clip.speedCurve || lc.clip.freeze) {
           note('تأثيرات الصوت على الفيديو تعمل على المقاطع بسرعتها الأصلية.');
           continue;
