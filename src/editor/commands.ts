@@ -1,28 +1,48 @@
+import { VOICE_EFFECTS, VoiceEffect, applyVoiceEffect, detectBeats, encodeWav } from './audioTools';
 import { CaptionProgress, emojiFor, generateCaptions } from './autoCaptions';
 import { ClipTarget, CommandResponse, EditAction } from './commandSpec';
 import {
   ASPECT_SIZES,
+  BLEND_MODES,
   CAPTION_STYLES,
   CLIP_ANIMS,
   EFFECTS,
   FILTER_PRESETS,
+  MASKS,
   MIN_CLIP_DURATION,
   MOTION_PRESETS,
+  OVERLAY_ANIMS,
   SPEED_CURVES,
   TEXT_PRESETS,
   TRANSITIONS,
   captionStyleFields,
   presetAdjustments,
 } from './constants';
+import { MAX_REVERSE_SECONDS, reverseVideo } from './reverse';
 import { clipsFromRanges, findSpeechRanges } from './silence';
-import { audioClipEnd, clamp, formatTime, layoutMainTrack, motionFromPreset, splitMainClip, uid } from './timeline';
-import { AspectRatio, LaidOutClip, MainClip, MediaAsset, Project, Selection, TextClip, TransitionType } from './types';
+import {
+  audioClipEnd,
+  beatCuts,
+  clamp,
+  createAudioClip,
+  createMainClip,
+  createOverlayClip,
+  formatTime,
+  insertFreeze,
+  layoutMainTrack,
+  motionFromPreset,
+  overlayEnd,
+  retimeToCuts,
+  splitMainClip,
+  uid,
+} from './timeline';
+import { AspectRatio, AudioClip, BlendMode, ChromaKey, LaidOutClip, MainClip, MaskShape, MediaAsset, OverlayAnim, OverlayClip, Project, Selection, TextClip, TransitionType } from './types';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const isCaption = (t: TextClip) => !!t.words?.length;
 
 /** What the model is told about the project: enough to resolve "clip 2" or "where I say hello". */
-export function commandContext(project: Project, assets: Map<string, MediaAsset>, time: number, selection: Selection) {
+export function commandContext(project: Project, assets: Map<string, MediaAsset>, library: MediaAsset[], time: number, selection: Selection) {
   const layout = layoutMainTrack(project.clips, assets);
   const texts = project.texts.filter((t) => !isCaption(t));
   const captions = project.texts.filter(isCaption).sort((a, b) => a.start - b.start);
@@ -35,7 +55,7 @@ export function commandContext(project: Project, assets: Map<string, MediaAsset>
       const t = project.texts.find((x) => x.id === selection.id);
       return t && isCaption(t) ? { caption: t.text } : { text: texts.findIndex((x) => x.id === selection.id) + 1 };
     }
-    return { overlay: true };
+    return { pip: project.overlays.findIndex((o) => o.id === selection.id) + 1 };
   };
   return {
     duration: r2(layout.length ? layout[layout.length - 1].end : 0),
@@ -66,7 +86,17 @@ export function commandContext(project: Project, assets: Map<string, MediaAsset>
     texts: texts.map((t, i) => ({ n: i + 1, text: t.text.slice(0, 60), start: r2(t.start), end: r2(t.start + t.duration) })),
     captions: captions.slice(0, 400).map((t) => ({ start: r2(t.start), end: r2(t.start + t.duration), text: t.text })),
     caption_style: captions[0]?.captionStyle,
-    overlays: project.overlays.length,
+    pips: project.overlays.map((o, i) => ({
+      n: i + 1,
+      name: assets.get(o.assetId)?.name.slice(0, 40),
+      start: r2(o.start),
+      end: r2(overlayEnd(o)),
+      x: r2(o.x),
+      y: r2(o.y),
+      scale: r2(o.scale),
+      chroma: !!o.chroma,
+    })),
+    media: library.map((a, i) => ({ n: i + 1, type: a.kind, name: a.name.slice(0, 40), duration: r2(a.duration) })),
   };
 }
 
@@ -165,6 +195,31 @@ export function describeAction(a: EditAction): string | null {
       return 'حذف كل الكابشن';
     case 'remove_silence':
       return `حذف الصمت من ${clips}`;
+    case 'mask':
+      return a.shape === null ? `إزالة القناع من ${clips}` : known(MASKS, a.shape) ? `قناع "${label(MASKS, a.shape)}" على ${clips}` : null;
+    case 'chroma': {
+      const target = a.pips ? targetText(a.pips, 'الفيديو فوق الفيديو') : clips;
+      return a.off ? `إلغاء إزالة اللون من ${target}` : `إزالة اللون ${a.color ?? '#00ff00'} (شاشة خضراء) من ${target}`;
+    }
+    case 'freeze':
+      return `تجميد الإطار عند ${formatTime(num(a.time, 0, 1e5, 0), true)} لمدة ${num(a.seconds, 0.5, 10, 2)} ث`;
+    case 'reverse':
+      return `عكس ${clips}`;
+    case 'voice_effect': {
+      if (!known(VOICE_EFFECTS, a.effect)) return null;
+      const target = a.clips ? `صوت ${targetText(a.clips, 'المقاطع')}` : targetText(a.audios, 'المسارات الصوتية');
+      return `تأثير "${label(VOICE_EFFECTS, a.effect)}" على ${target}`;
+    }
+    case 'beat_sync':
+      return `قص المقاطع على إيقاع المسار الصوتي ${a.audio}${num(a.every, 1, 4, 1) > 1 ? ` (كل ${num(a.every, 1, 4, 1)} نبضات)` : ''}`;
+    case 'add_media':
+      return `إضافة الملف ${a.media} من الوسائط`;
+    case 'add_pip':
+      return `إضافة الملف ${a.media} كفيديو فوق الفيديو`;
+    case 'pip':
+      return `تعديل ${targetText(a.pips, 'الفيديو فوق الفيديو')}`;
+    case 'delete_pip':
+      return `حذف ${targetText(a.pips, 'الفيديو فوق الفيديو')}`;
     case 'seek':
       return `الانتقال إلى ${formatTime(num(a.time, 0, 1e5, 0))}`;
     case 'play':
@@ -224,7 +279,19 @@ export interface ExecuteResult {
   seek?: number;
   play?: boolean;
   export?: boolean;
+  /** Steps that could not be done, explained in Arabic. */
+  notes: string[];
 }
+
+export interface ExecuteHooks {
+  onStatus: (message: string, progress: number | null) => void;
+  /** Adds a generated file (reversed video, processed audio) to the media library. */
+  registerAsset: (file: File) => Promise<MediaAsset>;
+  /** Stores changed asset data (e.g. detected beats). */
+  saveAsset: (asset: MediaAsset) => void;
+}
+
+const COLOR = /^#[0-9a-f]{6}$/i;
 
 /**
  * Applies the actions to a copy of the project. Clip numbers and times refer to the
@@ -232,10 +299,19 @@ export interface ExecuteResult {
  */
 export async function executeActions(
   start: Project,
-  assets: Map<string, MediaAsset>,
+  initialAssets: Map<string, MediaAsset>,
+  library: MediaAsset[],
   actions: EditAction[],
-  onStatus: (message: string, progress: number | null) => void
+  hooks: ExecuteHooks
 ): Promise<ExecuteResult> {
+  const { onStatus } = hooks;
+  // Grows as commands create files, so layouts see the new assets.
+  const assets = new Map(initialAssets);
+  const register = async (file: File) => {
+    const asset = await hooks.registerAsset(file);
+    assets.set(asset.id, asset);
+    return asset;
+  };
   const layout0 = layoutMainTrack(start.clips, assets);
   const clipIds = (t: ClipTarget | undefined): Set<string> => {
     if (t === 'all') return new Set(layout0.map((l) => l.clip.id));
@@ -244,13 +320,29 @@ export async function executeActions(
   };
   const audioIds = (t: ClipTarget | undefined) =>
     new Set(t === 'all' ? start.audios.map((a) => a.id) : (Array.isArray(t) ? t : []).map((n) => start.audios[Number(n) - 1]?.id).filter(Boolean));
+  const pipIds = (t: ClipTarget | undefined) =>
+    new Set(t === 'all' ? start.overlays.map((o) => o.id) : (Array.isArray(t) ? t : []).map((n) => start.overlays[Number(n) - 1]?.id).filter(Boolean));
+  const media = (n: unknown) => library[Number(n) - 1] as MediaAsset | undefined;
   const plainTexts0 = start.texts.filter((t) => !isCaption(t));
-  const result: ExecuteResult = { project: start };
+  const result: ExecuteResult = { project: start, notes: [] };
+  const note = (msg: string) => result.notes.push(msg);
   let p = start;
   const editClips = (t: ClipTarget | undefined, fn: (c: MainClip) => MainClip) => {
     const ids = clipIds(t);
     p = { ...p, clips: p.clips.map((c) => (ids.has(c.id) ? fn(c) : c)) };
   };
+  const editPips = (t: ClipTarget | undefined, fn: (o: OverlayClip) => OverlayClip) => {
+    const ids = pipIds(t);
+    p = { ...p, overlays: p.overlays.map((o) => (ids.has(o.id) ? fn(o) : o)) };
+  };
+  const chromaFrom = (a: Extract<EditAction, { op: 'chroma' }>, old: ChromaKey | null): ChromaKey | null =>
+    a.off
+      ? null
+      : {
+          color: typeof a.color === 'string' && COLOR.test(a.color) ? a.color : old?.color ?? '#00ff00',
+          similarity: num(a.similarity, 0, 1, old?.similarity ?? 0.4),
+          smoothness: num(a.smoothness, 0, 1, old?.smoothness ?? 0.2),
+        };
   const editCaptions = (fn: (t: TextClip) => TextClip) => {
     p = { ...p, texts: p.texts.map((t) => (isCaption(t) ? fn(t) : t)) };
   };
@@ -367,6 +459,52 @@ export async function executeActions(
         p = { ...p, texts: p.texts.filter((t) => !ids.has(t.id)) };
         break;
       }
+      case 'mask':
+        if (a.shape === null) editClips(a.clips, (c) => ({ ...c, mask: null }));
+        else if (known(MASKS, a.shape)) editClips(a.clips, (c) => ({ ...c, mask: { shape: a.shape as MaskShape, size: num(a.size, 0.1, 1.5, c.mask?.size ?? 0.8) } }));
+        break;
+      case 'chroma':
+        if (a.pips) editPips(a.pips, (o) => ({ ...o, chroma: chromaFrom(a, o.chroma) }));
+        if (a.clips) editClips(a.clips, (c) => ({ ...c, chroma: chromaFrom(a, c.chroma) }));
+        break;
+      case 'add_pip': {
+        const asset = media(a.media);
+        if (!asset || asset.kind === 'audio') {
+          note('لم أجد صورة أو فيديو بهذا الرقم في الوسائط.');
+          break;
+        }
+        const o = createOverlayClip(asset, num(a.start, 0, 1e5, 0));
+        o.x = num(a.x, 0, 1, o.x);
+        o.y = num(a.y, 0, 1, o.y);
+        o.scale = num(a.scale, 0.05, 1.5, o.scale);
+        if (a.shape === 'rect' || a.shape === 'rounded' || a.shape === 'circle') o.shape = a.shape;
+        if (a.chroma) o.chroma = { color: typeof a.chroma === 'string' && COLOR.test(a.chroma) ? a.chroma : '#00ff00', similarity: 0.4, smoothness: 0.2 };
+        p = { ...p, overlays: [...p.overlays, o] };
+        break;
+      }
+      case 'pip':
+        editPips(a.pips, (o) => ({
+          ...o,
+          start: optNum(a.start, 0, 1e5) ?? o.start,
+          x: optNum(a.x, 0, 1) ?? o.x,
+          y: optNum(a.y, 0, 1) ?? o.y,
+          scale: optNum(a.scale, 0.05, 1.5) ?? o.scale,
+          rotation: optNum(a.rotation, -360, 360) ?? o.rotation,
+          opacity: optNum(a.opacity, 0, 1) ?? o.opacity,
+          shape: a.shape === 'rect' || a.shape === 'rounded' || a.shape === 'circle' ? a.shape : o.shape,
+          blend: known(BLEND_MODES, a.blend) ? (a.blend as BlendMode) : o.blend,
+          animIn: known(OVERLAY_ANIMS, a.anim_in) ? (a.anim_in as OverlayAnim) : o.animIn,
+          animOut: known(OVERLAY_ANIMS, a.anim_out) ? (a.anim_out as OverlayAnim) : o.animOut,
+          flipH: typeof a.flip_h === 'boolean' ? a.flip_h : o.flipH,
+          volume: optNum(a.volume, 0, 1) ?? o.volume,
+          muted: typeof a.muted === 'boolean' ? a.muted : o.muted,
+        }));
+        break;
+      case 'delete_pip': {
+        const ids = pipIds(a.pips);
+        p = { ...p, overlays: p.overlays.filter((o) => !ids.has(o.id)) };
+        break;
+      }
       case 'seek':
         result.seek = num(a.time, 0, 1e5, 0);
         break;
@@ -379,7 +517,7 @@ export async function executeActions(
     }
   }
 
-  // 2. Splits, then 3. ripple deletes from the end backwards so earlier times stay valid.
+  // 2. Splits, then 3. ripple deletes and freeze frames from the end backwards so earlier times stay valid.
   for (const a of actions) {
     if (a.op !== 'split') continue;
     const t = num(a.time, 0, 1e5, 0);
@@ -387,12 +525,29 @@ export async function executeActions(
     const parts = lc && splitMainClip(lc, t);
     if (parts) p = { ...p, clips: p.clips.flatMap((c) => (c.id === lc.clip.id ? parts : [c])) };
   }
-  const ranges = actions
-    .filter((a): a is Extract<EditAction, { op: 'delete_range' }> => a.op === 'delete_range')
-    .map((a) => [num(a.start, 0, 1e5, 0), num(a.end, 0, 1e5, 0)] as const)
-    .filter(([s, e]) => e - s > 0.05)
-    .sort((x, y) => y[0] - x[0]);
-  for (const [s, e] of ranges) p = rippleDelete(p, assets, s, e);
+  const timed = actions
+    .flatMap((a) =>
+      a.op === 'delete_range'
+        ? [{ at: num(a.start, 0, 1e5, 0), end: num(a.end, 0, 1e5, 0), freeze: 0 }]
+        : a.op === 'freeze'
+          ? [{ at: num(a.time, 0, 1e5, 0), end: 0, freeze: num(a.seconds, 0.5, 10, 2) }]
+          : []
+    )
+    .filter((x) => x.freeze || x.end - x.at > 0.05)
+    .sort((x, y) => y.at - x.at);
+  for (const x of timed) {
+    if (!x.freeze) {
+      p = rippleDelete(p, assets, x.at, x.end);
+      continue;
+    }
+    const layout = layoutMainTrack(p.clips, assets);
+    const lc = layout.find((l) => x.at >= l.start && x.at < l.end) ?? layout[layout.length - 1];
+    if (!lc) continue;
+    p = { ...p, clips: insertFreeze(p.clips, lc, clamp(x.at, lc.start, lc.end), x.freeze).clips };
+    // Everything after the frozen moment moves later.
+    const push = <T extends { start: number }>(o: T): T => (o.start >= x.at ? { ...o, start: o.start + x.freeze } : o);
+    p = { ...p, texts: p.texts.map((t) => (t.start >= x.at && t.words ? { ...push(t), words: t.words.map((w) => ({ ...w, start: w.start + x.freeze, end: w.end + x.freeze })) } : push(t))), overlays: p.overlays.map(push) };
+  }
 
   // 4. Clip list changes, by id so earlier steps don't shift them.
   for (const a of actions) {
@@ -409,6 +564,25 @@ export async function executeActions(
       const clips = [...p.clips];
       const [moved] = clips.splice(from, 1);
       clips.splice(clamp(Math.round(Number(a.to)) - 1 || 0, 0, clips.length), 0, moved);
+      p = { ...p, clips };
+    } else if (a.op === 'add_media') {
+      const asset = media(a.media);
+      if (!asset) {
+        note('لم أجد ملفاً بهذا الرقم في الوسائط.');
+        continue;
+      }
+      if (asset.kind === 'audio') {
+        p = { ...p, audios: [...p.audios, createAudioClip(asset, typeof a.at === 'number' ? Math.max(0, a.at) : 0)] };
+        continue;
+      }
+      const clip = createMainClip(asset);
+      const clips = [...p.clips];
+      if (a.at === 'start') clips.unshift(clip);
+      else if (typeof a.at === 'number' || a.at === 'playhead') {
+        const t = typeof a.at === 'number' ? a.at : result.seek ?? 0;
+        const hit = layoutMainTrack(p.clips, assets).find((l) => t >= l.start && t < l.end);
+        clips.splice(hit ? hit.index + 1 : clips.length, 0, clip);
+      } else clips.push(clip);
       p = { ...p, clips };
     }
   }
@@ -428,6 +602,78 @@ export async function executeActions(
       clips.push(...(ranges.length ? clipsFromRanges(c, ranges) : [c]));
     }
     p = { ...p, clips };
+  }
+
+  // Reverse: renders each clip's range backwards into a new file.
+  const reverseIds = new Set(actions.flatMap((a) => (a.op === 'reverse' ? [...clipIds(a.clips)] : [])));
+  for (const id of reverseIds) {
+    const c = p.clips.find((x) => x.id === id);
+    const asset = c && assets.get(c.assetId);
+    if (!c || !asset || asset.kind !== 'video') continue;
+    if (c.outPoint - c.inPoint > MAX_REVERSE_SECONDS) {
+      note(`عكس الفيديو يعمل على مقاطع حتى ${MAX_REVERSE_SECONDS} ثانية.`);
+      continue;
+    }
+    const file = await reverseVideo(asset.file, c.inPoint, c.outPoint, asset.hasAudio, (pr) => onStatus(`جاري عكس المقطع... ${Math.round(pr * 100)}%`, pr));
+    const reversed = await register(file);
+    p = { ...p, clips: p.clips.map((x) => (x.id === id ? { ...x, assetId: reversed.id, inPoint: 0, outPoint: reversed.duration, speedCurve: null, freeze: null } : x)) };
+  }
+
+  // Beat sync: cut the main track on the music's beats.
+  for (const a of actions) {
+    if (a.op !== 'beat_sync') continue;
+    // Existing tracks keep their numbers; tracks added by this command follow them.
+    const track = p.audios[Number(a.audio) - 1];
+    let asset = track && assets.get(track.assetId);
+    if (!track || !asset) {
+      note('لم أجد المسار الصوتي المطلوب للمزامنة مع الإيقاع.');
+      continue;
+    }
+    if (!asset.beats) {
+      onStatus('جاري تحليل الإيقاع...', null);
+      asset = { ...asset, beats: await detectBeats(asset.file) };
+      assets.set(asset.id, asset);
+      hooks.saveAsset(asset);
+    }
+    if (!asset.beats?.length) {
+      note('لم أجد إيقاعاً واضحاً في هذا الصوت.');
+      continue;
+    }
+    p = { ...p, clips: retimeToCuts(p.clips, assets, beatCuts(track, asset.beats, Math.round(num(a.every, 1, 4, 1)))) };
+  }
+
+  // Voice effects (after beat sync, so detached sound matches the final cut): on audio tracks, or on a video clip's sound after detaching it to a track.
+  for (const a of actions) {
+    if (a.op !== 'voice_effect' || !known(VOICE_EFFECTS, a.effect)) continue;
+    const effect = a.effect as VoiceEffect;
+    const targets = new Set(audioIds(a.audios));
+    if (a.clips) {
+      const ids = clipIds(a.clips);
+      const detached: AudioClip[] = [];
+      const detachedFrom = new Set<string>();
+      for (const lc of layoutMainTrack(p.clips, assets)) {
+        if (!ids.has(lc.clip.id) || lc.asset.kind !== 'video' || !lc.asset.hasAudio) continue;
+        if (lc.clip.speed !== 1 || lc.clip.speedCurve || lc.clip.freeze) {
+          note('تأثيرات الصوت على الفيديو تعمل على المقاطع بسرعتها الأصلية.');
+          continue;
+        }
+        const track: AudioClip = { ...createAudioClip(lc.asset, lc.start), inPoint: lc.clip.inPoint, outPoint: lc.clip.outPoint, volume: lc.clip.volume };
+        detached.push(track);
+        detachedFrom.add(lc.clip.id);
+        targets.add(track.id);
+      }
+      p = { ...p, clips: p.clips.map((c) => (detachedFrom.has(c.id) ? { ...c, muted: true } : c)), audios: [...p.audios, ...detached] };
+    }
+    const label = VOICE_EFFECTS.find((v) => v.id === effect)!.label;
+    for (const id of targets) {
+      const track = p.audios.find((x) => x.id === id);
+      const asset = track && assets.get(track.assetId);
+      if (!track || !asset) continue;
+      onStatus(`جاري تطبيق "${label}" على الصوت...`, null);
+      const buffer = await applyVoiceEffect(asset.file, track.inPoint, track.outPoint, effect);
+      const processed = await register(encodeWav(buffer, `${asset.name.replace(/\.[^.]+$/, '')} - ${label}.wav`));
+      p = { ...p, audios: p.audios.map((x) => (x.id === id ? { ...x, assetId: processed.id, inPoint: 0, outPoint: processed.duration } : x)) };
+    }
   }
 
   // 6. Captions: delete, generate on the final cut, then restyle.

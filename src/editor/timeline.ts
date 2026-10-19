@@ -427,6 +427,57 @@ export function splitAudioClip(a: AudioClip, t: number): [AudioClip, AudioClip] 
   ];
 }
 
+/** Inserts a held frame of `seconds` at timeline time t, splitting the clip when t is inside it. */
+export function insertFreeze(clips: MainClip[], lc: LaidOutClip, t: number, seconds = 2): { clips: MainClip[]; still: MainClip } {
+  const still: MainClip = {
+    ...lc.clip,
+    id: uid(),
+    inPoint: sourceTimeFor(lc, Math.min(t, lc.end - 1e-3)),
+    freeze: seconds,
+    speedCurve: null,
+    transition: { ...lc.clip.transition, type: 'none' },
+    animIn: { ...lc.clip.animIn, type: 'none' },
+    animOut: { ...lc.clip.animOut, type: 'none' },
+  };
+  const parts = splitMainClip(lc, t);
+  return {
+    still,
+    clips: clips.flatMap((c) => {
+      if (c.id !== lc.clip.id) return [c];
+      if (parts) return [parts[0], still, parts[1]];
+      return t - lc.start < lc.duration / 2 ? [still, c] : [c, still];
+    }),
+  };
+}
+
+/** Timeline times of every Nth beat of a music clip. */
+export function beatCuts(a: AudioClip, beats: number[], every: number): number[] {
+  return beats
+    .filter((b) => b >= a.inPoint && b < a.outPoint)
+    .map((b) => a.start + (b - a.inPoint))
+    .filter((_, i) => i % every === every - 1);
+}
+
+/** Re-times the main track so each clip ends on the next cut time. */
+export function retimeToCuts(clips: MainClip[], assets: Map<string, MediaAsset>, cuts: number[]): MainClip[] {
+  let cursor = 0;
+  return clips.map((c) => {
+    const end = cuts.find((x) => x > cursor + 0.3);
+    if (end === undefined) {
+      cursor += clipDuration(c);
+      return c;
+    }
+    const want = end - cursor;
+    const src = assets.get(c.assetId);
+    let next: MainClip = c;
+    if (c.freeze) next = { ...c, freeze: want };
+    else if (src?.kind === 'image') next = { ...c, outPoint: c.inPoint + want };
+    else if (src) next = { ...c, outPoint: Math.min(src.duration, c.inPoint + want * c.speed) };
+    cursor += clipDuration(next);
+    return next;
+  });
+}
+
 /** Greedy lane assignment so overlapping items on a track don't hide each other. */
 export function assignLanes<T extends { id: string }>(
   items: T[],

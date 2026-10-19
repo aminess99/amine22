@@ -1,5 +1,9 @@
+import { VOICE_EFFECTS } from './audioTools';
 import {
   ASPECT_SIZES,
+  BLEND_MODES,
+  MASKS,
+  OVERLAY_ANIMS,
   CAPTION_STYLES,
   CLIP_ANIMS,
   EFFECTS,
@@ -51,6 +55,32 @@ export type EditAction =
   | { op: 'caption_emoji'; on: boolean }
   | { op: 'delete_captions' }
   | { op: 'remove_silence'; clips: ClipTarget }
+  | { op: 'mask'; clips: ClipTarget; shape: string | null; size?: number }
+  | { op: 'chroma'; clips?: ClipTarget; pips?: ClipTarget; color?: string; similarity?: number; smoothness?: number; off?: boolean }
+  | { op: 'freeze'; time: number; seconds?: number }
+  | { op: 'reverse'; clips: ClipTarget }
+  | { op: 'voice_effect'; audios?: ClipTarget; clips?: ClipTarget; effect: string }
+  | { op: 'beat_sync'; audio: number; every?: number }
+  | { op: 'add_media'; media: number; at?: 'end' | 'start' | 'playhead' | number }
+  | { op: 'add_pip'; media: number; start?: number; x?: number; y?: number; scale?: number; shape?: string; chroma?: string | boolean }
+  | {
+      op: 'pip';
+      pips: ClipTarget;
+      start?: number;
+      x?: number;
+      y?: number;
+      scale?: number;
+      rotation?: number;
+      opacity?: number;
+      shape?: string;
+      blend?: string;
+      anim_in?: string;
+      anim_out?: string;
+      flip_h?: boolean;
+      volume?: number;
+      muted?: boolean;
+    }
+  | { op: 'delete_pip'; pips: ClipTarget }
   | { op: 'seek'; time: number }
   | { op: 'play' }
   | { op: 'export' };
@@ -69,9 +99,9 @@ export function commandSystemPrompt(): string {
 Turn it into editing actions. Reply with ONLY a JSON object: {"reply": "...", "actions": [...]}.
 "reply" is one short sentence in the user's language describing what will happen, or asking for what is missing / explaining what is not possible (then actions is []).
 
-The project context is JSON: clips are on the main track, numbered from 1 in play order, with timeline start/end in seconds. "cut" N is the transition INTO clip N (between clip N-1 and N; cut 1 does nothing). Audio tracks and texts are numbered from 1 too. "captions" are word-timed subtitle lines with their timeline times; use them to find the moment where something is said.
+The project context is JSON: clips are on the main track, numbered from 1 in play order, with timeline start/end in seconds. "cut" N is the transition INTO clip N (between clip N-1 and N; cut 1 does nothing). Audio tracks, texts, "pips" (picture-in-picture videos/images floating above the main track) and the "media" library (files the user imported) are numbered from 1 too. "captions" are word-timed subtitle lines with their timeline times; use them to find the moment where something is said.
 Times are timeline seconds as they are NOW, before any action. Clip numbers also refer to the current list.
-Fields "clips", "cuts", "audios", "texts" take an array of numbers or the string "all". If the user selected something and says "this", use the selection.
+Fields "clips", "cuts", "audios", "texts", "pips" take an array of numbers or the string "all". If the user selected something and says "this", use the selection.
 
 Actions (use only these):
 - {"op":"delete_range","start":s,"end":e}  remove that span from the video and close the gap (e.g. "احذف أول 3 ثواني" → start 0 end 3; "آخر 5 ثواني" → duration-5 to duration)
@@ -101,6 +131,16 @@ Actions (use only these):
 - {"op":"caption_emoji","on":bool}
 - {"op":"delete_captions"}
 - {"op":"remove_silence","clips":…}  cut silent parts
+- {"op":"mask","clips":…,"shape":id or null,"size":0.1-1.5}  masks: ${ids(MASKS)}
+- {"op":"chroma","clips":… or "pips":…,"color":"#00ff00","similarity":0-1,"smoothness":0-1}  green screen: remove a colour. {"off":true} removes it. Usually on a pip placed over another video.
+- {"op":"freeze","time":s,"seconds":0.5-10}  insert a frozen frame at that moment
+- {"op":"reverse","clips":…}  play video clips backwards (max 60 s each)
+- {"op":"voice_effect","audios":… or "clips":…,"effect":id}  effects: ${ids(VOICE_EFFECTS)}. With "clips" the sound of those video clips is detached to an audio track first.
+- {"op":"beat_sync","audio":n,"every":1-4}  cut the clips on the beats of that music track (every Nth beat). A track added by add_media in the same command gets the next number.
+- {"op":"add_media","media":n,"at":"end"|"start"|"playhead"|seconds}  put a library file on the main track (videos/images) or as a new audio track (audio, "at" = start time)
+- {"op":"add_pip","media":n,"start":s,"x":0-1,"y":0-1,"scale":0.1-1,"shape":"rect"|"rounded"|"circle","chroma":true or "#rrggbb"}  add a library file as picture-in-picture; "chroma" removes its green (or given) background right away
+- {"op":"pip","pips":…, any of "start","x","y" (centre, 0-1),"scale" (width fraction 0.1-1),"rotation","opacity" 0-1,"shape","blend" (${BLEND_MODES.map((b) => b.id).join(', ')}),"anim_in"/"anim_out" (${OVERLAY_ANIMS.map((b) => b.id).join(', ')}),"flip_h","volume" 0-1,"muted"}
+- {"op":"delete_pip","pips":…}
 - {"op":"seek","time":s}   {"op":"play"}   {"op":"export"}
 
 Rules: use the fewest actions that do exactly what was asked. Never invent clip numbers that do not exist. Clamp values to the ranges above.

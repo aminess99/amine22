@@ -35,7 +35,6 @@ import { loadFonts } from '../../editor/renderer';
 import {
   audioClipEnd,
   clamp,
-  clipDuration,
   clipProgress,
   createAudioClip,
   createMainClip,
@@ -46,12 +45,14 @@ import {
   projectDuration,
   retimeWords,
   setKeyframe,
-  sourceTimeFor,
   splitAudioClip,
   splitMainClip,
   splitOverlayClip,
   splitTextClip,
   uid,
+  insertFreeze,
+  beatCuts,
+  retimeToCuts,
 } from '../../editor/timeline';
 import { AspectRatio, AudioClip, MainClip, MediaAsset, OverlayClip, Project, Selection, TextClip, TransitionType } from '../../editor/types';
 import { emojiFor, generateCaptions } from '../../editor/autoCaptions';
@@ -329,29 +330,12 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       const lc = layout.find((l) => l.clip.id === clipId);
       if (!lc) return;
       const t = clamp(engine.getTime(), lc.start, lc.end);
-      const still: MainClip = {
-        ...lc.clip,
-        id: uid(),
-        inPoint: sourceTimeFor(lc, Math.min(t, lc.end - 1e-3)),
-        freeze: 2,
-        speedCurve: null,
-        transition: { ...lc.clip.transition, type: 'none' },
-        animIn: { ...lc.clip.animIn, type: 'none' },
-        animOut: { ...lc.clip.animOut, type: 'none' },
-      };
-      const parts = splitMainClip(lc, t);
-      update((p) => ({
-        ...p,
-        clips: p.clips.flatMap((c) => {
-          if (c.id !== clipId) return [c];
-          if (parts) return [parts[0], still, parts[1]];
-          return t - lc.start < lc.duration / 2 ? [still, c] : [c, still];
-        }),
-      }));
+      const { clips, still } = insertFreeze(project.clips, lc, t);
+      update((p) => ({ ...p, clips }));
       setSelection({ kind: 'clip', id: still.id });
       setClipTool({ busy: null, message: 'تمت إضافة إطار مجمّد لمدة ثانيتين، ويمكنك تغيير مدته من الأسفل.' });
     },
-    [layout, engine, update]
+    [layout, engine, update, project.clips]
   );
 
   const reverseClip = useCallback(
@@ -444,29 +428,8 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       const a = project.audios.find((x) => x.id === audioId);
       const asset = a && assets.get(a.assetId);
       if (!a || !asset?.beats?.length) return;
-      const cuts = asset.beats
-        .filter((b) => b >= a.inPoint && b < a.outPoint)
-        .map((b) => a.start + (b - a.inPoint))
-        .filter((_, i) => i % every === every - 1);
-      update((p) => {
-        let cursor = 0;
-        const clips = p.clips.map((c) => {
-          const end = cuts.find((x) => x > cursor + 0.3);
-          if (end === undefined) {
-            cursor += clipDuration(c);
-            return c;
-          }
-          const want = end - cursor;
-          const src = assets.get(c.assetId);
-          let next: MainClip = c;
-          if (c.freeze) next = { ...c, freeze: want };
-          else if (src?.kind === 'image') next = { ...c, outPoint: c.inPoint + want };
-          else if (src) next = { ...c, outPoint: Math.min(src.duration, c.inPoint + want * c.speed) };
-          cursor += clipDuration(next);
-          return next;
-        });
-        return { ...p, clips };
-      });
+      const cuts = beatCuts(a, asset.beats, every);
+      update((p) => ({ ...p, clips: retimeToCuts(p.clips, assets, cuts) }));
       setAudioTool({ busy: null, message: 'تم قص المقاطع لتتبدل مع الإيقاع.' });
       pause();
       seek(0);
@@ -1036,7 +999,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
   const askCommand = async (text: string) => {
     setCommand((c) => ({ ...c, busy: 'thinking', error: null, plan: null, done: null }));
     try {
-      const res = await requestCommand(text, commandContext(project, assets, engine.getTime(), selection));
+      const res = await requestCommand(text, commandContext(project, assets, assetList, engine.getTime(), selection));
       setCommand((c) => ({ ...c, busy: null, plan: { command: text, ...res } }));
     } catch (err) {
       setCommand((c) => ({ ...c, busy: null, error: err instanceof Error ? err.message : 'تعذر تنفيذ الأمر.' }));
@@ -1047,9 +1010,16 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     if (!plan) return;
     setCommand((c) => ({ ...c, busy: 'applying', status: null, progress: null, error: null }));
     try {
-      const res = await executeActions(project, assets, plan.actions, (status, progress) => setCommand((c) => ({ ...c, status, progress })));
+      const res = await executeActions(project, assets, assetList, plan.actions, {
+        onStatus: (status, progress) => setCommand((c) => ({ ...c, status, progress })),
+        registerAsset,
+        saveAsset: (asset) => {
+          setAssetList((list) => list.map((x) => (x.id === asset.id ? asset : x)));
+          saveAsset(asset).catch(() => {});
+        },
+      });
       update(() => res.project);
-      setCommand((c) => ({ ...c, busy: null, plan: null, done: plan.command }));
+      setCommand((c) => ({ ...c, busy: null, plan: null, done: plan.command, error: res.notes.length ? [...new Set(res.notes)].join(' ') : null }));
       if (res.seek !== undefined) {
         pause();
         seek(res.seek);
