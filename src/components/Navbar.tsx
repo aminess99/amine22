@@ -12,11 +12,13 @@ import {
   User as UserIcon,
   LogOut,
   FolderOpen,
-  Scissors
+  Scissors,
+  Download
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../context/AuthContext';
 import { BRAND } from '../brand';
+import { useInstall } from '../pwa';
 
 export type PageTab = 'home' | 'editor' | 'templates' | 'features' | 'pricing' | 'help' | 'privacy' | 'terms' | 'contact';
 
@@ -31,6 +33,7 @@ export function Navbar({ currentPage, onNavigate, onStartVideo, onOpenSavedProje
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const { user, openAuthModal, logout } = useAuth();
+  const { mode: installMode, install } = useInstall();
 
   const navItems: { id: PageTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { id: 'home', label: 'الرئيسية', icon: Video },
@@ -223,6 +226,19 @@ export function Navbar({ currentPage, onNavigate, onStartVideo, onOpenSavedProje
               </button>
             );
           })}
+
+          {installMode === 'prompt' && (
+            <button
+              onClick={() => {
+                setMobileMenuOpen(false);
+                install();
+              }}
+              className="w-full px-4 py-3 rounded-xl text-xs font-bold flex items-center gap-2.5 bg-fuchsia-500/10 border border-fuchsia-500/30 text-fuchsia-200"
+            >
+              <Download className="w-4 h-4" />
+              <span>ثبّت التطبيق على هاتفك</span>
+            </button>
+          )}
 
           <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400 px-2">
             <button 

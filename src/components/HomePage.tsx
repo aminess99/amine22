@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { lazy, Suspense, useState } from 'react';
 import {
   ArrowLeft,
   AudioLines,
@@ -17,145 +17,50 @@ import {
   Wand2,
   GraduationCap,
   Mic,
+  Share,
 } from 'lucide-react';
+import { useInstall } from '../pwa';
 import { BRAND } from '../brand';
-import { captionStyleFields } from '../editor/constants';
-import { ensureFonts } from '../editor/fonts';
-import { renderFrame } from '../editor/renderer';
-import { TEXT_TEMPLATES, templateTexts } from '../editor/textTemplates';
-import { createMainClip, layoutMainTrack } from '../editor/timeline';
-import { MediaAsset, Project, TextClip } from '../editor/types';
-import { CaptionStyleThumb, ClipFxThumb, TextThumb, TransitionThumb } from './editor/previews';
 
 interface HomePageProps {
   onStart: () => void;
   onStartWithFiles: (files: File[]) => void;
 }
 
-const LOOP = 6;
-const SAMPLE = ['هذا', 'محرر', 'فيديو', 'ذكي', 'يفهم', 'كلامك'];
+// The live previews use the editor's renderer, so they load after the page shows.
+const HeroDemo = lazy(() => import('./HomeVisuals').then((m) => ({ default: m.HeroDemo })));
+const FeaturePreview = lazy(() => import('./HomeVisuals').then((m) => ({ default: m.FeaturePreview })));
+const TemplateCard = lazy(() => import('./HomeVisuals').then((m) => ({ default: m.TemplateCard })));
 
-/** A stand-in "video" frame: a sunset scene drawn once. */
-function demoFrame(): HTMLCanvasElement {
-  const c = document.createElement('canvas');
-  c.width = 540;
-  c.height = 960;
-  const g = c.getContext('2d')!;
-  const sky = g.createLinearGradient(0, 0, 0, 960);
-  sky.addColorStop(0, '#1e1b4b');
-  sky.addColorStop(0.45, '#7c3aed');
-  sky.addColorStop(0.7, '#f97316');
-  sky.addColorStop(1, '#0f172a');
-  g.fillStyle = sky;
-  g.fillRect(0, 0, 540, 960);
-  g.fillStyle = '#fde68a';
-  g.beginPath();
-  g.arc(270, 600, 110, 0, Math.PI * 2);
-  g.fill();
-  g.fillStyle = '#111827';
-  g.beginPath();
-  g.moveTo(0, 700);
-  g.quadraticCurveTo(140, 560, 290, 690);
-  g.quadraticCurveTo(420, 600, 540, 680);
-  g.lineTo(540, 960);
-  g.lineTo(0, 960);
-  g.fill();
-  return c;
+/** Offers to install the site as an app (or explains how on iPhone). */
+function InstallHint() {
+  const { mode, install } = useInstall();
+  if (mode === 'prompt')
+    return (
+      <button
+        onClick={install}
+        className="mx-auto mt-4 flex items-center gap-2 rounded-xl border border-fuchsia-500/30 bg-fuchsia-500/10 px-4 py-2 text-xs font-bold text-fuchsia-200 hover:bg-fuchsia-500/20 md:mx-0"
+      >
+        <Download className="h-4 w-4" /> ثبّت مونتاج كتطبيق على جهازك
+      </button>
+    );
+  if (mode === 'ios')
+    return (
+      <p className="mt-4 text-xs text-slate-400">
+        لتثبيته كتطبيق على الآيفون: اضغط زر المشاركة <Share className="inline h-3.5 w-3.5" /> ثم «إضافة إلى الشاشة الرئيسية».
+      </p>
+    );
+  return null;
 }
 
-/**
- * The hero: a phone-shaped preview drawn live by the editor's own renderer —
- * camera motion, word-by-word captions, a title template and sparkles.
- */
-function HeroDemo() {
-  const ref = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    const canvas = ref.current;
-    const ctx = canvas?.getContext('2d');
-    if (!canvas || !ctx) return;
-    const frame = demoFrame();
-    const asset = { id: 'hero', kind: 'image', name: '', file: null as unknown as File, url: '', duration: 0, width: 540, height: 960, hasAudio: false } as MediaAsset;
-    const clip = {
-      ...createMainClip(asset),
-      fit: 'cover' as const,
-      outPoint: LOOP,
-      motion: { preset: 'zoom-in', keys: [{ at: 0, tf: { zoom: 1, offsetX: 0, offsetY: 0, rotation: 0 } }, { at: 1, tf: { zoom: 1.25, offsetX: 0, offsetY: -0.03, rotation: 0 } }] },
-    };
-    const per = 0.42;
-    const caption: TextClip = {
-      ...captionStyleFields('beast'),
-      id: 'cap',
-      text: SAMPLE.join(' '),
-      start: 1.4,
-      duration: SAMPLE.length * per + 0.6,
-      x: 0.5,
-      y: 0.72,
-      rotation: 0,
-      align: 'center',
-      animIn: 'none',
-      animOut: 'fade',
-      words: SAMPLE.map((text, i) => ({ text, start: 1.4 + i * per, end: 1.4 + (i + 1) * per })),
-      emoji: '🔥',
-    };
-    const tpl = TEXT_TEMPLATES.find((t) => t.id === 'gold-3d')!;
-    const title = templateTexts(tpl, 0.1).map((t) => ({ ...t, text: 'مونتاج', y: 0.22, duration: 1.3 }));
-    const project: Project = {
-      aspect: '9:16',
-      background: '#000',
-      clips: [clip],
-      texts: [...title, caption],
-      audios: [],
-      overlays: [],
-      effects: [{ id: 'sp', type: 'sparkles', intensity: 0.6, speed: 1, start: 0, duration: LOOP }],
-    };
-    const layout = layoutMainTrack([clip], new Map([['hero', asset]]));
-    let fontsReady = false;
-    ensureFonts([caption.font, ...title.map((t) => t.font)]).then(() => (fontsReady = true));
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const W = 540;
-    const H = 960;
-    const draw = (time: number) => {
-      const w = Math.round(canvas.clientWidth * dpr);
-      const h = Math.round(canvas.clientHeight * dpr);
-      if (canvas.width !== w || canvas.height !== h) {
-        canvas.width = w;
-        canvas.height = h;
-      }
-      ctx.setTransform(w / W, 0, 0, h / H, 0, 0);
-      renderFrame(ctx, {
-        width: W,
-        height: H,
-        project: fontsReady ? project : { ...project, texts: [] },
-        layout,
-        time,
-        getFrame: () => frame,
-        getOverlayFrame: () => null,
-      });
-    };
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
-      ensureFonts([caption.font]).then(() => draw(2.6));
-      return;
-    }
-    let raf = 0;
-    const start = performance.now();
-    const loop = (now: number) => {
-      draw(((now - start) / 1000) % LOOP);
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-  return (
-    <div className="relative mx-auto w-[230px] sm:w-[260px]">
-      <div className="absolute -inset-8 rounded-[3rem] bg-gradient-to-tr from-fuchsia-600/30 via-indigo-600/20 to-cyan-500/30 blur-3xl" />
-      <div className="relative rounded-[2.2rem] border border-white/10 bg-slate-900 p-2 shadow-2xl">
-        <canvas ref={ref} className="block aspect-[9/16] w-full rounded-[1.7rem]" />
-      </div>
-    </div>
-  );
-}
+const TEMPLATE_IDS: [string, string][] = [
+  ['subscribe', 'اشترك'],
+  ['neon-sign', 'لافتة نيون'],
+  ['lower-third', 'اسم ولقب'],
+  ['sale', 'تخفيض'],
+];
 
-const FEATURES: { title: string; text: string; icon: React.ComponentType<{ className?: string }>; preview?: React.ReactNode }[] = [
+const FEATURES: { title: string; text: string; icon: React.ComponentType<{ className?: string }>; preview?: 'caption' | 'fx' | 'transition' }[] = [
   {
     title: 'حرّر بالكلام',
     text: 'اكتب "احذف أول 3 ثواني وأضف كابشن" فينفّذ المحرر الخطوات، ويمكنك التراجع بضغطة.',
@@ -165,13 +70,13 @@ const FEATURES: { title: string; text: string; icon: React.ComponentType<{ class
     title: 'كابشن تلقائي',
     text: '33 نمطاً متحركاً، كلمة بكلمة ومتزامنة مع الصوت، بالعربية والدارجة.',
     icon: MessageSquareText,
-    preview: <CaptionStyleThumb styleId="beast" />,
+    preview: 'caption',
   },
   {
     title: 'تأثيرات احترافية',
     text: 'أضواء، عدسات، ريترو، جزيئات وتقسيم الشاشة، مع معاينة لكل تأثير.',
     icon: Sparkles,
-    preview: <ClipFxThumb patch={{ fx: [{ type: 'light-leak', intensity: 0.8 }, { type: 'sparkles', intensity: 0.7 }] }} loop={3} />,
+    preview: 'fx',
   },
   {
     title: 'إزالة الخلفية',
@@ -187,7 +92,7 @@ const FEATURES: { title: string; text: string; icon: React.ComponentType<{ class
     title: 'انتقالات وقوالب',
     text: '30 انتقالاً و32 قالب نص متحرك و44 خطاً عربياً.',
     icon: PenLine,
-    preview: <TransitionThumb type="heart" />,
+    preview: 'transition',
   },
   {
     title: 'صوت وتعليق',
@@ -286,8 +191,11 @@ export function HomePage({ onStart, onStartWithFiles }: HomePageProps) {
             {pick}
           </div>
           <p className="mt-4 text-xs text-slate-500">بدون تسجيل · بدون علامة مائية · يعمل على الهاتف</p>
+          <InstallHint />
         </div>
-        <HeroDemo />
+        <Suspense fallback={<div className="mx-auto aspect-[9/16] w-[230px] rounded-[2.2rem] border border-white/10 bg-slate-900 sm:w-[260px]" />}>
+          <HeroDemo />
+        </Suspense>
       </section>
 
       {/* Features */}
@@ -298,7 +206,13 @@ export function HomePage({ onStart, onStartWithFiles }: HomePageProps) {
           {FEATURES.map((f) => (
             <div key={f.title} className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03]">
               <div className="flex aspect-[16/9] items-center justify-center bg-gradient-to-br from-slate-800 to-slate-900">
-                {f.preview ?? <f.icon className="h-10 w-10 text-fuchsia-300/80" />}
+                {f.preview ? (
+                  <Suspense fallback={<f.icon className="h-10 w-10 text-fuchsia-300/80" />}>
+                    <FeaturePreview kind={f.preview} />
+                  </Suspense>
+                ) : (
+                  <f.icon className="h-10 w-10 text-fuchsia-300/80" />
+                )}
               </div>
               <div className="p-4">
                 <h3 className="flex items-center gap-2 text-sm font-bold text-white">
@@ -338,17 +252,16 @@ export function HomePage({ onStart, onStartWithFiles }: HomePageProps) {
       <section className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
         <h2 className="text-center text-2xl font-extrabold text-white sm:text-3xl">قوالب نصوص متحركة جاهزة</h2>
         <div className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {['subscribe', 'neon-sign', 'lower-third', 'sale'].map((id) => {
-            const tpl = TEXT_TEMPLATES.find((t) => t.id === id)!;
-            return (
-              <div key={id} className="overflow-hidden rounded-2xl border border-white/10">
-                <div className="aspect-[4/5]">
-                  <TextThumb texts={templateTexts(tpl, 0.15)} loop={tpl.duration + 0.6} width={1080} height={1350} />
-                </div>
-                <p className="bg-white/[0.03] py-2 text-center text-xs text-slate-300">{tpl.label}</p>
+          {TEMPLATE_IDS.map(([id, label]) => (
+            <div key={id} className="overflow-hidden rounded-2xl border border-white/10">
+              <div className="aspect-[4/5] bg-slate-900">
+                <Suspense fallback={null}>
+                  <TemplateCard id={id} />
+                </Suspense>
               </div>
-            );
-          })}
+              <p className="bg-white/[0.03] py-2 text-center text-xs text-slate-300">{label}</p>
+            </div>
+          ))}
         </div>
       </section>
 

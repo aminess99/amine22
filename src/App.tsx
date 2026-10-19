@@ -1,20 +1,30 @@
-import { useState } from 'react';
-import { CaptionEditor } from './components/CaptionEditor';
+import { lazy, Suspense, useState } from 'react';
 import { HomePage } from './components/HomePage';
-import { VideoEditor } from './components/editor/VideoEditor';
 import { Navbar, PageTab } from './components/Navbar';
 import { Footer } from './components/Footer';
-import { TemplatesPage } from './components/pages/TemplatesPage';
-import { HelpCenterPage } from './components/pages/HelpCenterPage';
-import { PrivacyPolicyPage } from './components/pages/PrivacyPolicyPage';
-import { TermsPage } from './components/pages/TermsPage';
-import { ContactPage } from './components/pages/ContactPage';
-import { PricingPage } from './components/pages/PricingPage';
 import { AuthProvider } from './context/AuthContext';
 import { AuthModal } from './components/AuthModal';
-import { SavedProjectsModal } from './components/SavedProjectsModal';
-import { SavedProject } from './lib/firebaseProjects';
+import type { SavedProject } from './lib/firebaseProjects';
 import { TemplateType } from './types';
+
+// The editor and the secondary pages load on demand, so the home page opens fast.
+const CaptionEditor = lazy(() => import('./components/CaptionEditor').then((m) => ({ default: m.CaptionEditor })));
+const SavedProjectsModal = lazy(() => import('./components/SavedProjectsModal').then((m) => ({ default: m.SavedProjectsModal })));
+const VideoEditor = lazy(() => import('./components/editor/VideoEditor').then((m) => ({ default: m.VideoEditor })));
+const TemplatesPage = lazy(() => import('./components/pages/TemplatesPage').then((m) => ({ default: m.TemplatesPage })));
+const HelpCenterPage = lazy(() => import('./components/pages/HelpCenterPage').then((m) => ({ default: m.HelpCenterPage })));
+const PrivacyPolicyPage = lazy(() => import('./components/pages/PrivacyPolicyPage').then((m) => ({ default: m.PrivacyPolicyPage })));
+const TermsPage = lazy(() => import('./components/pages/TermsPage').then((m) => ({ default: m.TermsPage })));
+const ContactPage = lazy(() => import('./components/pages/ContactPage').then((m) => ({ default: m.ContactPage })));
+const PricingPage = lazy(() => import('./components/pages/PricingPage').then((m) => ({ default: m.PricingPage })));
+
+function Loading() {
+  return (
+    <div className="flex min-h-[60vh] w-full items-center justify-center bg-slate-950">
+      <div className="h-9 w-9 animate-spin rounded-full border-2 border-slate-700 border-t-fuchsia-500" />
+    </div>
+  );
+}
 
 function MainApp() {
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -27,6 +37,7 @@ function MainApp() {
   // If a video is loaded into the editor, render the caption editor view
   if (videoFile) {
     return (
+      <Suspense fallback={<Loading />}>
       <CaptionEditor 
         videoFile={videoFile} 
         onBack={() => {
@@ -36,11 +47,13 @@ function MainApp() {
         initialTemplate={selectedTemplate}
         initialProject={loadedProject}
       />
+      </Suspense>
     );
   }
 
   if (currentPage === 'editor') {
     return (
+      <Suspense fallback={<Loading />}>
       <VideoEditor
         initialFiles={initialFiles}
         onBack={() => {
@@ -48,6 +61,7 @@ function MainApp() {
           setCurrentPage('home');
         }}
       />
+      </Suspense>
     );
   }
 
@@ -93,6 +107,7 @@ function MainApp() {
       
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col items-center justify-center relative w-full">
+        <Suspense fallback={<Loading />}>
         {currentPage === 'home' && (
           <HomePage
             onStart={() => handleNavigate('editor')}
@@ -142,6 +157,7 @@ function MainApp() {
             onGoToHelp={() => handleNavigate('help')}
           />
         )}
+        </Suspense>
       </main>
 
       {/* Global Comprehensive Footer */}
@@ -151,11 +167,15 @@ function MainApp() {
       <AuthModal />
 
       {/* Saved Projects Modal */}
-      <SavedProjectsModal 
-        isOpen={isSavedProjectsOpen}
-        onClose={() => setIsSavedProjectsOpen(false)}
-        onSelectProject={handleSelectProject}
-      />
+      {isSavedProjectsOpen && (
+        <Suspense fallback={null}>
+          <SavedProjectsModal
+            isOpen={isSavedProjectsOpen}
+            onClose={() => setIsSavedProjectsOpen(false)}
+            onSelectProject={handleSelectProject}
+          />
+        </Suspense>
+      )}
 
     </div>
   );

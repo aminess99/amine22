@@ -1581,7 +1581,15 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    app.use(
+      express.static(distPath, {
+        setHeaders: (res, filePath) => {
+          // Build files carry a content hash, so they never change; the service worker must always be fresh.
+          if (filePath.includes(`${path.sep}assets${path.sep}`)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          else if (filePath.endsWith('sw.js')) res.setHeader('Cache-Control', 'no-cache');
+        },
+      })
+    );
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
