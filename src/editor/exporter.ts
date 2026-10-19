@@ -19,7 +19,8 @@ import {
 } from 'mediabunny';
 import { ASPECT_SIZES } from './constants';
 import { timeStretch } from './timeStretch';
-import { loadFonts, renderFrame } from './renderer';
+import { ensureFonts } from './fonts';
+import { renderFrame } from './renderer';
 import { curveRate, overlayEnd, getMainFrameState, layoutMainTrack, projectDuration } from './timeline';
 import { LaidOutClip, MediaAsset, Project } from './types';
 
@@ -183,7 +184,7 @@ export async function exportProject(
   const quality = QUALITY[options.quality];
 
   onProgress(0, 'تجهيز الخطوط والصوت...');
-  await loadFonts(project.texts.map((t) => t.font));
+  await ensureFonts(project.texts.map((t) => t.font));
 
   let format: Mp4OutputFormat | WebMOutputFormat = new Mp4OutputFormat({ fastStart: 'in-memory' });
   let extension: ExportResult['extension'] = 'mp4';

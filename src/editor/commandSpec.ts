@@ -11,9 +11,41 @@ import {
   FILTER_PRESETS,
   MOTION_PRESETS,
   SPEED_CURVES,
+  TEXT_ANIMS_IN,
+  TEXT_ANIMS_LOOP,
+  TEXT_ANIMS_OUT,
+  TEXT_BG_SHAPES,
   TEXT_PRESETS,
   TRANSITIONS,
 } from './constants';
+import { FONT_GROUPS, FONT_LIST } from './fonts';
+import { TEXT_TEMPLATES } from './textTemplates';
+
+/** Look and motion fields shared by add_text and text_style. */
+export interface TextStyleFields {
+  text?: string;
+  font?: string;
+  size?: number;
+  bold?: boolean;
+  color?: string;
+  gradient?: string | null;
+  glow?: string | null;
+  stroke_color?: string;
+  stroke_width?: number;
+  background?: string | null;
+  bg_shape?: string;
+  shadow?: boolean;
+  extrude?: number;
+  extrude_color?: string;
+  opacity?: number;
+  x?: number;
+  y?: number;
+  rotation?: number;
+  duration?: number;
+  anim_in?: string;
+  anim_out?: string;
+  anim_loop?: string;
+}
 
 /** Clip numbers (1-based, as listed in the context) or every clip. */
 export type ClipTarget = number[] | 'all';
@@ -47,7 +79,9 @@ export type EditAction =
   | { op: 'transform'; clips: ClipTarget; zoom?: number; rotation?: number; fit?: 'contain' | 'cover'; flip_h?: boolean; flip_v?: boolean }
   | { op: 'aspect'; aspect: string }
   | { op: 'background'; color: string }
-  | { op: 'add_text'; text: string; start: number; duration?: number; preset?: string; y?: number; color?: string }
+  | ({ op: 'add_text'; text: string; start: number; duration?: number; preset?: string } & TextStyleFields)
+  | ({ op: 'text_style'; texts: ClipTarget | 'captions' } & TextStyleFields)
+  | { op: 'add_template'; template: string; start?: number; texts?: string[] }
   | { op: 'delete_texts'; texts: ClipTarget }
   | { op: 'generate_captions'; style?: string; words_per_line?: number; emoji?: boolean }
   | { op: 'caption_style'; style: string }
@@ -124,7 +158,13 @@ Actions (use only these):
 - {"op":"transform","clips":…,"zoom":0.2-5,"rotation":degrees,"fit":"contain"|"cover","flip_h":bool,"flip_v":bool}
 - {"op":"aspect","aspect":one of ${Object.keys(ASPECT_SIZES).join(', ')}}  (9:16 TikTok/Reels/Shorts, 16:9 YouTube, 1:1 square, 4:5 Instagram post)
 - {"op":"background","color":"#rrggbb"}
-- {"op":"add_text","text":"...","start":s,"duration":s,"preset":id,"y":0-1 (0 top, 1 bottom),"color":"#rrggbb"}  presets: ${ids(TEXT_PRESETS)}
+- {"op":"add_text","text":"...","start":s,"duration":s,"preset":id, plus any text style field below}  presets: ${ids(TEXT_PRESETS)}
+- {"op":"text_style","texts":… or "captions", any of: "text","font","size" (px, 20-300; titles ~120, body ~60),"bold","color","gradient" (second colour or null),"glow" (colour or null),"stroke_color","stroke_width" (0-16),"background" (colour or null),"bg_shape" (${TEXT_BG_SHAPES.map((b) => b.id).join(', ')}),"shadow","extrude" (3D depth 0-0.25),"extrude_color","opacity" 0-1,"x","y" (0-1),"rotation","duration","anim_in","anim_out","anim_loop"}
+  Fonts (family, style): ${FONT_LIST.map((f) => `${f.family} (${FONT_GROUPS.find((g) => g.id === f.group)!.label})`).join(', ')}
+  anim_in: ${ids(TEXT_ANIMS_IN)}
+  anim_out: ${ids(TEXT_ANIMS_OUT)}
+  anim_loop (repeats while shown): ${ids(TEXT_ANIMS_LOOP)}
+- {"op":"add_template","template":id,"start":s,"texts":["first line","second line"]}  ready-made animated text designs; "texts" replaces their sample wording in order. Templates: ${TEXT_TEMPLATES.map((t) => `${t.id} (${t.label}: ${t.items.map((i) => i.text).join(' / ')})`).join(', ')}
 - {"op":"delete_texts","texts":…}  plain texts/stickers (not captions)
 - {"op":"generate_captions","style":id,"words_per_line":1-8,"emoji":bool}  auto subtitles from speech. Only when there are no captions yet.
 - {"op":"caption_style","style":id}  restyle existing captions. Caption styles: ${ids(CAPTION_STYLES)}

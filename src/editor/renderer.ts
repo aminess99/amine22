@@ -1,5 +1,6 @@
 import { chromaKey, clipAnimState, drawChannelSplit, effectState, maskPath } from './clipFx';
-import { activeOverlays, activeTexts, clamp, getMainFrameState, transformAt } from './timeline';
+import { textAnimState } from './textFx';
+import { activeOverlays, activeTexts, clamp, getMainFrameState, textProgress, textTransformAt, transformAt } from './timeline';
 import {
   Adjustments,
   FrameRef,
@@ -268,68 +269,35 @@ function wrapLines(text: string): string[] {
   return text.split('\n');
 }
 
-export function drawText(ctx: Ctx, t: TextClip, time: number, W: number, H: number): TextBounds {
-  const local = time - t.start;
-  const inDur = Math.min(0.45, t.duration / 2);
-  const outDur = Math.min(0.4, t.duration / 2);
-  const pIn = inDur > 0 ? clamp(local / inDur, 0, 1) : 1;
-  const pOut = outDur > 0 ? clamp((t.duration - local) / outDur, 0, 1) : 1;
+export function drawText(ctx: Ctx, t0: TextClip, time: number, W: number, H: number): TextBounds {
+  // Keyframes (when set) move, scale and turn the text through its duration.
+  const t: TextClip = t0.keys?.length ? { ...t0, ...textTransformAt(t0, textProgress(t0, time)) } : t0;
+  const fs = t.fontSize;
+  const anim = textAnimState(t, time, W, H, fs);
 
-  let alpha = 1;
-  let scale = 1;
-  let dy = 0;
   let content = t.text;
-
-  switch (t.animIn) {
-    case 'fade':
-      alpha *= easeOutCubic(pIn);
-      break;
-    case 'pop':
-      scale *= Math.max(0, easeOutBack(pIn));
-      alpha *= clamp(pIn * 3, 0, 1);
-      break;
-    case 'slide-up':
-      dy += (1 - easeOutCubic(pIn)) * H * 0.06;
-      alpha *= easeOutCubic(pIn);
-      break;
-    case 'zoom':
-      scale *= 1.6 - 0.6 * easeOutCubic(pIn);
-      alpha *= easeOutCubic(pIn);
-      break;
-    case 'typewriter': {
-      const chars = Array.from(t.text);
-      const typeDur = Math.min(1.5, t.duration * 0.6);
-      const n = Math.ceil(chars.length * clamp(local / typeDur, 0, 1));
-      content = chars.slice(0, n).join('');
-      break;
-    }
-  }
-  switch (t.animOut) {
-    case 'fade':
-      alpha *= pOut;
-      break;
-    case 'pop':
-      scale *= easeOutCubic(pOut);
-      break;
-    case 'slide-down':
-      dy += (1 - pOut) * H * 0.06;
-      alpha *= pOut;
-      break;
+  if (anim.chars !== null) content = Array.from(t.text).slice(0, anim.chars).join('');
+  else if (anim.words !== null) {
+    // Reveal whole words so Arabic letters stay joined.
+    let shown = 0;
+    content = t.text.replace(/\S+/g, (w) => (shown++ < anim.words! ? w : ''));
+    content = content.replace(/[ \t]+$/gm, '');
   }
 
   ctx.save();
-  ctx.font = `${t.bold ? 800 : 400} ${t.fontSize}px "${t.font}", "Cairo", sans-serif`;
+  ctx.font = `${t.bold ? 800 : 400} ${fs}px "${t.font}", "Cairo", sans-serif`;
   ctx.direction = ARABIC_RE.test(t.text) ? 'rtl' : 'ltr';
   ctx.textBaseline = 'middle';
 
-  const lineHeight = t.fontSize * 1.3;
-  // Measure the full text so the box doesn't jump while the typewriter reveals it.
+  const lineHeight = fs * (t.lineHeight ?? 1.3);
+  // Measure the full text so the box doesn't jump while a reveal is running.
   const fullLines = wrapLines(t.text);
   const widths = fullLines.map((l) => ctx.measureText(l).width);
   const blockW = Math.max(1, ...widths);
   const blockH = lineHeight * fullLines.length;
-  const padX = t.fontSize * 0.35;
-  const padY = t.fontSize * 0.15;
+  const shape = t.bgShape ?? 'box';
+  const padX = fs * (shape === 'banner' ? 0.7 : shape === 'pill' ? 0.55 : 0.35);
+  const padY = fs * (shape === 'banner' ? 0.25 : 0.15);
 
   const cx = t.x * W;
   const cy = t.y * H;
@@ -342,15 +310,30 @@ export function drawText(ctx: Ctx, t: TextClip, time: number, W: number, H: numb
     h: blockH + padY * 2,
   };
 
-  if (alpha <= 0.001 || scale <= 0.001) {
+  const alpha = anim.alpha * (t.opacity ?? 1);
+  if (alpha <= 0.001 || anim.scale <= 0.001) {
     ctx.restore();
     return bounds;
   }
 
   ctx.globalAlpha = alpha;
-  ctx.translate(cx, cy + dy);
-  if (t.rotation) ctx.rotate((t.rotation * Math.PI) / 180);
-  ctx.scale(scale, scale);
+  ctx.translate(cx + anim.dx, cy + anim.dy);
+  const rotation = t.rotation + anim.rotation;
+  if (rotation) ctx.rotate((rotation * Math.PI) / 180);
+  ctx.scale(anim.scale * anim.scaleX, anim.scale * anim.scaleY);
+  if (anim.blur > 0.3 && 'filter' in ctx) {
+    // Filters work in device pixels; scale the radius so preview and export match.
+    const m = ctx.getTransform();
+    ctx.filter = `blur(${(anim.blur * Math.hypot(m.a, m.b)).toFixed(1)}px)`;
+  }
+  if (anim.reveal !== null) {
+    const rtl = ctx.direction === 'rtl';
+    const w = (blockW + padX * 2) * anim.reveal;
+    const left = rtl ? blockW / 2 + padX - w : -blockW / 2 - padX;
+    ctx.beginPath();
+    ctx.rect(left, -blockH / 2 - padY - fs, w, blockH + padY * 2 + fs * 2);
+    ctx.clip();
+  }
 
   if (t.words?.length && t.highlight) {
     drawWordCaption(ctx, t, time, W);
@@ -359,18 +342,38 @@ export function drawText(ctx: Ctx, t: TextClip, time: number, W: number, H: numb
   }
 
   if (t.background) {
-    ctx.fillStyle = t.background;
-    const r = t.fontSize * 0.2;
-    ctx.beginPath();
-    if (typeof ctx.roundRect === 'function') {
-      ctx.roundRect(-blockW / 2 - padX, -blockH / 2 - padY, blockW + padX * 2, blockH + padY * 2, r);
+    const bx = -blockW / 2 - padX;
+    const by = -blockH / 2 - padY;
+    const bw = blockW + padX * 2;
+    const bh = blockH + padY * 2;
+    if (shape === 'outline') {
+      ctx.strokeStyle = t.background;
+      ctx.lineWidth = fs * 0.08;
+      roundRectPath(ctx, bx, by, bw, bh, fs * 0.25);
+      ctx.stroke();
+    } else if (shape === 'banner') {
+      // A slanted ribbon.
+      const k = bh * 0.25;
+      ctx.fillStyle = t.background;
+      ctx.beginPath();
+      ctx.moveTo(bx + k, by);
+      ctx.lineTo(bx + bw + k, by);
+      ctx.lineTo(bx + bw - k, by + bh);
+      ctx.lineTo(bx - k, by + bh);
+      ctx.closePath();
+      ctx.fill();
     } else {
-      ctx.rect(-blockW / 2 - padX, -blockH / 2 - padY, blockW + padX * 2, blockH + padY * 2);
+      ctx.fillStyle = t.background;
+      roundRectPath(ctx, bx, by, bw, bh, shape === 'pill' ? bh / 2 : fs * 0.2);
+      ctx.fill();
     }
-    ctx.fill();
   }
 
   const lines = wrapLines(content);
+  const color = anim.hue !== null ? `hsl(${anim.hue}, 95%, 62%)` : t.color;
+  const color2 = anim.hue !== null ? `hsl(${(anim.hue + 70) % 360}, 95%, 58%)` : t.gradient ?? null;
+  const glowColor = t.glow ?? (anim.glow > 0 ? color : null);
+  const depth = (t.extrude ?? 0) * fs;
   // In RTL the canvas flips the meaning of 'left'/'right', so use start/end-agnostic x math.
   ctx.textAlign = 'center';
   lines.forEach((line, i) => {
@@ -380,16 +383,33 @@ export function drawText(ctx: Ctx, t: TextClip, time: number, W: number, H: numb
     if (t.align === 'left') x = -blockW / 2 + lw / 2;
     else if (t.align === 'right') x = blockW / 2 - lw / 2;
     else if (content !== t.text) {
-      // Typewriter: keep partially typed lines anchored where the full line will sit.
+      // Partial reveal: keep the line anchored where the full line will sit.
       const rtl = ctx.direction === 'rtl';
       x = rtl ? fullW / 2 - lw / 2 : -fullW / 2 + lw / 2;
     }
     const y = -blockH / 2 + lineHeight * (i + 0.5);
 
+    // 3D depth: the letters repeated down and to the side, darkest at the back.
+    if (depth > 0) {
+      const steps = Math.min(24, Math.ceil(depth / 1.5));
+      ctx.fillStyle = t.extrudeColor ?? '#000000';
+      for (let k = steps; k >= 1; k--) {
+        const d = (depth * k) / steps;
+        if (t.strokeWidth > 0) {
+          ctx.lineJoin = 'round';
+          ctx.lineWidth = t.strokeWidth * 2;
+          ctx.strokeStyle = t.extrudeColor ?? '#000000';
+          ctx.strokeText(line, x + d * 0.6, y + d);
+        }
+        ctx.fillText(line, x + d * 0.6, y + d);
+      }
+    }
+
     if (t.shadow) {
-      ctx.shadowColor = 'rgba(0,0,0,0.6)';
-      ctx.shadowBlur = t.fontSize * 0.15;
-      ctx.shadowOffsetY = t.fontSize * 0.05;
+      ctx.shadowColor = t.shadowColor ?? 'rgba(0,0,0,0.6)';
+      ctx.shadowBlur = fs * (t.shadowBlur ?? 0.15);
+      ctx.shadowOffsetX = fs * (t.shadowOffset ?? 0.05) * 0.4;
+      ctx.shadowOffsetY = fs * (t.shadowOffset ?? 0.05);
     }
     if (t.strokeWidth > 0) {
       ctx.lineJoin = 'round';
@@ -398,7 +418,33 @@ export function drawText(ctx: Ctx, t: TextClip, time: number, W: number, H: numb
       ctx.strokeText(line, x, y);
       ctx.shadowColor = 'transparent';
     }
-    ctx.fillStyle = t.color;
+    let fill: string | CanvasGradient = color;
+    if (color2) {
+      const g = ctx.createLinearGradient(0, y - fs * 0.5, 0, y + fs * 0.5);
+      g.addColorStop(0, color);
+      g.addColorStop(1, color2);
+      fill = g;
+    }
+    if (anim.glitch > 0) {
+      // RGB split: cyan and magenta copies pulled apart.
+      const off = fs * 0.07 * anim.glitch;
+      const a = ctx.globalAlpha;
+      ctx.globalAlpha = a * 0.8;
+      ctx.fillStyle = '#22d3ee';
+      ctx.fillText(line, x - off, y);
+      ctx.fillStyle = '#f0abfc';
+      ctx.fillText(line, x + off, y + off * 0.3);
+      ctx.globalAlpha = a;
+    }
+    if (glowColor) {
+      ctx.shadowColor = glowColor;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      ctx.shadowBlur = fs * (0.25 + 0.35 * anim.glow);
+      ctx.fillStyle = fill;
+      ctx.fillText(line, x, y);
+    }
+    ctx.fillStyle = fill;
     ctx.fillText(line, x, y);
     ctx.shadowColor = 'transparent';
   });
@@ -712,14 +758,4 @@ export function renderFrame(ctx: Ctx, opts: RenderOptions): TextBounds[] {
     }
   }
   return bounds;
-}
-
-export async function loadFonts(fonts: string[]) {
-  if (!document.fonts) return;
-  await Promise.all(
-    [...new Set(fonts)].flatMap((f) => [
-      document.fonts.load(`400 40px "${f}"`).catch(() => []),
-      document.fonts.load(`800 40px "${f}"`).catch(() => []),
-    ])
-  );
 }

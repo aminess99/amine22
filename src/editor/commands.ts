@@ -1,6 +1,6 @@
 import { VOICE_EFFECTS, VoiceEffect, applyVoiceEffect, detectBeats, encodeWav } from './audioTools';
 import { CaptionProgress, emojiFor, generateCaptions } from './autoCaptions';
-import { ClipTarget, CommandResponse, EditAction } from './commandSpec';
+import { ClipTarget, CommandResponse, EditAction, TextStyleFields } from './commandSpec';
 import {
   ASPECT_SIZES,
   BLEND_MODES,
@@ -13,6 +13,10 @@ import {
   MOTION_PRESETS,
   OVERLAY_ANIMS,
   SPEED_CURVES,
+  TEXT_ANIMS_IN,
+  TEXT_ANIMS_LOOP,
+  TEXT_ANIMS_OUT,
+  TEXT_BG_SHAPES,
   TEXT_PRESETS,
   TRANSITIONS,
   captionStyleFields,
@@ -20,6 +24,8 @@ import {
 } from './constants';
 import { MAX_REVERSE_SECONDS, reverseVideo } from './reverse';
 import { MAX_TTS_CHARS, TTS_STYLES, TTS_VOICES, synthesizeSpeech } from './tts';
+import { FONT_LIST } from './fonts';
+import { TEXT_TEMPLATES, templateTexts } from './textTemplates';
 import { clipsFromRanges, findSpeechRanges } from './silence';
 import {
   audioClipEnd,
@@ -34,10 +40,11 @@ import {
   motionFromPreset,
   overlayEnd,
   retimeToCuts,
+  retimeWords,
   splitMainClip,
   uid,
 } from './timeline';
-import { AspectRatio, AudioClip, BlendMode, ChromaKey, LaidOutClip, MainClip, MaskShape, MediaAsset, OverlayAnim, OverlayClip, Project, Selection, TextClip, TransitionType } from './types';
+import { AspectRatio, AudioClip, BlendMode, ChromaKey, LaidOutClip, MainClip, MaskShape, MediaAsset, OverlayAnim, OverlayClip, Project, Selection, TextAnimIn, TextAnimLoop, TextAnimOut, TextBgShape, TextClip, TransitionType } from './types';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const isCaption = (t: TextClip) => !!t.words?.length;
@@ -84,7 +91,7 @@ export function commandContext(project: Project, assets: Map<string, MediaAsset>
       end: r2(audioClipEnd(a)),
       volume: r2(a.volume),
     })),
-    texts: texts.map((t, i) => ({ n: i + 1, text: t.text.slice(0, 60), start: r2(t.start), end: r2(t.start + t.duration) })),
+    texts: texts.map((t, i) => ({ n: i + 1, text: t.text.slice(0, 60), start: r2(t.start), end: r2(t.start + t.duration), font: t.font, y: r2(t.y) })),
     captions: captions.slice(0, 400).map((t) => ({ start: r2(t.start), end: r2(t.start + t.duration), text: t.text })),
     caption_style: captions[0]?.captionStyle,
     pips: project.overlays.map((o, i) => ({
@@ -179,7 +186,13 @@ export function describeAction(a: EditAction): string | null {
     case 'background':
       return `لون الخلفية ${a.color}`;
     case 'add_text':
-      return typeof a.text === 'string' && a.text.trim() ? `إضافة نص "${a.text.slice(0, 30)}" عند ${formatTime(num(a.start, 0, 1e5, 0))}` : null;
+      return typeof a.text === 'string' && a.text.trim() ? `إضافة نص "${a.text.slice(0, 30)}" عند ${formatTime(num(a.start, 0, 1e5, 0))}${styleSummary(a)}` : null;
+    case 'text_style':
+      return `تعديل ${a.texts === 'captions' ? 'الكابشن' : targetText(a.texts, 'النصوص')}${styleSummary(a) || ''}`;
+    case 'add_template': {
+      const tpl = TEXT_TEMPLATES.find((x) => x.id === a.template);
+      return tpl ? `إضافة قالب "${tpl.label}" عند ${formatTime(num(a.start, 0, 1e5, 0))}` : null;
+    }
     case 'delete_texts':
       return `حذف ${targetText(a.texts, 'النصوص')}`;
     case 'generate_captions':
@@ -234,6 +247,58 @@ export function describeAction(a: EditAction): string | null {
     default:
       return null;
   }
+}
+
+/** A short Arabic list of the style changes, e.g. " (خط أميري، دخول ارتداد)". */
+function styleSummary(a: TextStyleFields): string {
+  const parts: string[] = [];
+  const font = FONT_LIST.find((f) => f.family === a.font);
+  if (font) parts.push(`خط ${font.label}`);
+  if (a.size) parts.push(`حجم ${Math.round(num(a.size, 20, 300, 72))}`);
+  if (a.color) parts.push(`لون ${a.color}`);
+  if (a.gradient) parts.push('تدرج');
+  if (a.glow) parts.push('توهج');
+  if (a.extrude) parts.push('ثلاثي الأبعاد');
+  if (label(TEXT_ANIMS_IN, a.anim_in)) parts.push(`دخول ${label(TEXT_ANIMS_IN, a.anim_in)}`);
+  if (label(TEXT_ANIMS_OUT, a.anim_out)) parts.push(`خروج ${label(TEXT_ANIMS_OUT, a.anim_out)}`);
+  if (label(TEXT_ANIMS_LOOP, a.anim_loop)) parts.push(`حركة ${label(TEXT_ANIMS_LOOP, a.anim_loop)}`);
+  return parts.length ? ` (${parts.join('، ')})` : '';
+}
+
+const colorOr = (v: unknown, fallback: string) => (typeof v === 'string' && COLOR.test(v) ? v : fallback);
+/** A colour, null to remove it, or the current value when not given / invalid. */
+const optColor = (v: unknown, cur: string | null | undefined) =>
+  v === null ? null : typeof v === 'string' && (COLOR.test(v) || /^rgba?\(/.test(v)) ? v : cur ?? null;
+
+/** Applies the style fields the model gave to a text, validating each. */
+function styleText(t: TextClip, a: TextStyleFields): TextClip {
+  const n: TextClip = { ...t };
+  if (typeof a.text === 'string' && a.text.trim()) {
+    n.text = a.text.slice(0, 300);
+    if (n.words) n.words = retimeWords(n.words, n.text);
+  }
+  if (FONT_LIST.some((f) => f.family === a.font)) n.font = a.font!;
+  if (a.size !== undefined) n.fontSize = Math.round(num(a.size, 20, 300, t.fontSize));
+  if (typeof a.bold === 'boolean') n.bold = a.bold;
+  n.color = colorOr(a.color, t.color);
+  if (a.gradient !== undefined) n.gradient = optColor(a.gradient, t.gradient);
+  if (a.glow !== undefined) n.glow = optColor(a.glow, t.glow);
+  n.strokeColor = colorOr(a.stroke_color, t.strokeColor);
+  if (a.stroke_width !== undefined) n.strokeWidth = num(a.stroke_width, 0, 16, t.strokeWidth);
+  if (a.background !== undefined) n.background = optColor(a.background, t.background);
+  if (known(TEXT_BG_SHAPES, a.bg_shape)) n.bgShape = a.bg_shape as TextBgShape;
+  if (typeof a.shadow === 'boolean') n.shadow = a.shadow;
+  if (a.extrude !== undefined) n.extrude = num(a.extrude, 0, 0.25, 0);
+  if (a.extrude_color !== undefined) n.extrudeColor = colorOr(a.extrude_color, t.extrudeColor ?? '#000000');
+  if (a.opacity !== undefined) n.opacity = num(a.opacity, 0.05, 1, 1);
+  if (a.x !== undefined) n.x = num(a.x, 0, 1, t.x);
+  if (a.y !== undefined) n.y = num(a.y, 0, 1, t.y);
+  if (a.rotation !== undefined) n.rotation = num(a.rotation, -180, 180, t.rotation);
+  if (a.duration !== undefined) n.duration = num(a.duration, 0.3, 600, t.duration);
+  if (known(TEXT_ANIMS_IN, a.anim_in)) n.animIn = a.anim_in as TextAnimIn;
+  if (known(TEXT_ANIMS_OUT, a.anim_out)) n.animOut = a.anim_out as TextAnimOut;
+  if (known(TEXT_ANIMS_LOOP, a.anim_loop)) n.animLoop = a.anim_loop as TextAnimLoop;
+  return n;
 }
 
 // ---------------------------------------------------------------- applying
@@ -445,18 +510,27 @@ export async function executeActions(
       case 'add_text': {
         if (typeof a.text !== 'string' || !a.text.trim()) break;
         const preset = TEXT_PRESETS.find((x) => x.id === a.preset) ?? TEXT_PRESETS[0];
-        const text: TextClip = {
-          ...preset.style,
-          id: uid(),
-          text: a.text.slice(0, 200),
-          start: num(a.start, 0, 1e5, 0),
-          duration: num(a.duration, 0.3, 600, 3),
-          x: 0.5,
-          y: optNum(a.y, 0.05, 0.95) ?? preset.style.y,
-          rotation: 0,
-        };
-        if (typeof a.color === 'string' && /^#[0-9a-f]{6}$/i.test(a.color)) text.color = a.color;
-        p = { ...p, texts: [...p.texts, text] };
+        const base: TextClip = { ...preset.style, id: uid(), start: num(a.start, 0, 1e5, 0), duration: 3, x: 0.5, rotation: 0 };
+        p = { ...p, texts: [...p.texts, styleText(base, a)] };
+        break;
+      }
+      case 'text_style': {
+        if (a.texts === 'captions') break; // applied after captions are generated
+        const ids = new Set(a.texts === 'all' ? plainTexts0.map((t) => t.id) : (Array.isArray(a.texts) ? a.texts : []).map((n) => plainTexts0[Number(n) - 1]?.id));
+        p = { ...p, texts: p.texts.map((t) => (ids.has(t.id) ? styleText(t, a) : t)) };
+        break;
+      }
+      case 'add_template': {
+        const tpl = TEXT_TEMPLATES.find((x) => x.id === a.template);
+        if (!tpl) break;
+        const texts = templateTexts(tpl, num(a.start, 0, 1e5, 0));
+        const lines = Array.isArray(a.texts) ? a.texts : [];
+        // Countdown-style templates repeat one design; only replace distinct sample lines.
+        texts.forEach((t, i) => {
+          const line = lines[i];
+          if (typeof line === 'string' && line.trim()) t.text = line.slice(0, 300);
+        });
+        p = { ...p, texts: [...p.texts, ...texts] };
         break;
       }
       case 'delete_texts': {
@@ -711,6 +785,7 @@ export async function executeActions(
     else if (a.op === 'caption_size')
       editCaptions((t) => ({ ...t, fontSize: Math.round(((CAPTION_STYLES.find((c) => c.id === t.captionStyle)?.fontSize ?? 80) * num(a.percent, 50, 200, 100)) / 100) }));
     else if (a.op === 'caption_emoji') editCaptions((t) => ({ ...t, emoji: a.on ? emojiFor(t.words ?? []) : undefined }));
+    else if (a.op === 'text_style' && a.texts === 'captions') editCaptions((t) => styleText(t, { ...a, text: undefined }));
   }
 
   result.project = p;

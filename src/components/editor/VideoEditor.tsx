@@ -27,11 +27,12 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { ASPECT_SIZES, CAPTION_STYLES, captionStyleFields, DEFAULT_TRANSITION_DURATION, FONTS, TEXT_PRESETS, presetAdjustments } from '../../editor/constants';
+import { ASPECT_SIZES, CAPTION_STYLES, captionStyleFields, DEFAULT_TRANSITION_DURATION, TEXT_PRESETS, presetAdjustments } from '../../editor/constants';
 import { computePeaks, extractVideoFrames, loadAsset } from '../../editor/media';
 import { VOICE_EFFECTS, VoiceEffect, applyVoiceEffect, decodeFile, detectBeats, encodeWav } from '../../editor/audioTools';
 import { reverseVideo } from '../../editor/reverse';
-import { loadFonts } from '../../editor/renderer';
+import { ensureFonts } from '../../editor/fonts';
+import { templateTexts, TextTemplate } from '../../editor/textTemplates';
 import {
   audioClipEnd,
   clamp,
@@ -53,6 +54,9 @@ import {
   insertFreeze,
   beatCuts,
   retimeToCuts,
+  setTextKeyframe,
+  textProgress,
+  textTransformAt,
 } from '../../editor/timeline';
 import { AspectRatio, AudioClip, MainClip, MediaAsset, OverlayClip, Project, Selection, TextClip, TransitionType } from '../../editor/types';
 import { emojiFor, generateCaptions } from '../../editor/autoCaptions';
@@ -155,9 +159,11 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
     });
   }, [playing, subscribeFrame]);
 
+  // Load the fonts the project's texts use (Google Fonts, on demand).
+  const fontKey = [...new Set(project.texts.map((t) => t.font))].sort().join('|');
   useEffect(() => {
-    loadFonts(FONTS);
-  }, []);
+    if (fontKey) ensureFonts(fontKey.split('|'));
+  }, [fontKey]);
 
   // Free object URLs when leaving the editor.
   const assetsRef = useRef(assetList);
@@ -598,8 +604,19 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       update((p) => ({ ...p, texts: [...p.texts, text] }));
       setSelection({ kind: 'text', id: text.id });
       setPanel('edit');
-      loadFonts([text.font]);
       previewRange(start, start + 1.3);
+    },
+    [update, engine, previewRange]
+  );
+
+  const addTemplate = useCallback(
+    (tpl: TextTemplate) => {
+      const start = engine.getTime();
+      const texts = templateTexts(tpl, start);
+      update((p) => ({ ...p, texts: [...p.texts, ...texts] }));
+      setSelection({ kind: 'text', id: texts[0].id });
+      setPanel('edit');
+      previewRange(start, start + Math.min(3, Math.max(...texts.map((t) => t.start + t.duration)) - start));
     },
     [update, engine, previewRange]
   );
@@ -841,7 +858,13 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       next = applyClipGesture(item0 as MainClip, d, lc ? clipProgress(lc, engine.getTime()) : undefined);
       updateClip(id, () => next as MainClip, key);
     } else if (kind === 'text') {
-      next = applyTextGesture(item0 as TextClip, d);
+      const t0 = item0 as TextClip;
+      if (t0.keys?.length) {
+        // Start from where the text is on screen now, and save the result as a keyframe there.
+        const at = textProgress(t0, engine.getTime());
+        const moved = applyTextGesture({ ...t0, ...textTransformAt(t0, at) }, d);
+        next = { ...moved, keys: setTextKeyframe(moved, at) };
+      } else next = applyTextGesture(t0, d);
       updateText(id, () => next as TextClip, key);
     } else {
       next = applyOverlayGesture(item0 as OverlayClip, d);
@@ -1070,7 +1093,28 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       onLayer={(dir) => moveOverlay(selectedOverlay.id, dir)}
     />
   ) : selectedText ? (
-    <TextInspector text={selectedText} patch={(fn, key) => updateText(selectedText.id, fn, key)} actions={actions} preview={previewSelection} />
+    <TextInspector
+      // With keyframes, the sliders show (and edit) where the text is at the playhead.
+      text={selectedText.keys?.length ? { ...selectedText, ...textTransformAt(selectedText, textProgress(selectedText, time)) } : selectedText}
+      progress={textProgress(selectedText, time)}
+      patch={(fn, key) =>
+        updateText(
+          selectedText.id,
+          (t) => {
+            const at = textProgress(t, engine.getTime());
+            const cur = t.keys?.length ? { ...t, ...textTransformAt(t, at) } : t;
+            const n = fn(cur);
+            // Auto-key: position/size/rotation edits land on a keyframe at the playhead.
+            const moved = n.x !== cur.x || n.y !== cur.y || n.fontSize !== cur.fontSize || n.rotation !== cur.rotation;
+            if (!t.keys?.length || n.keys !== t.keys) return n;
+            return moved ? { ...n, keys: setTextKeyframe(n, at) } : { ...n, x: t.x, y: t.y, fontSize: t.fontSize, rotation: t.rotation };
+          },
+          key
+        )
+      }
+      actions={actions}
+      preview={previewSelection}
+    />
   ) : selectedAudio ? (
     <AudioInspector
       audio={selectedAudio}
@@ -1150,6 +1194,10 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
           <TextPanel
             onAdd={(id) => {
               addText(id);
+              setSheetOpen(false);
+            }}
+            onTemplate={(tpl) => {
+              addTemplate(tpl);
               setSheetOpen(false);
             }}
             captions={{ ...captionState, run: runCaptions }}

@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import { captionStyleFields } from '../../editor/constants';
 import { cssFilter, drawText } from '../../editor/renderer';
-import { Adjustments, OverlayAnim, TextClip, TextAnimIn, TextAnimOut, TransitionType } from '../../editor/types';
+import { ensureFonts } from '../../editor/fonts';
+import { Adjustments, TextClip, TransitionType } from '../../editor/types';
 
 const LOOP_MS = 2400;
 
@@ -171,7 +172,7 @@ export function MotionThumb({ src, from, to }: { src?: string; from: React.CSSPr
 
 // ---------------------------------------------------------------- text & overlay animations
 
-const IN_FRAMES: Record<TextAnimIn | OverlayAnim, Frames> = {
+const IN_FRAMES: Record<string, Frames> = {
   none: steady({ opacity: 1 }),
   fade: [{ opacity: 0, offset: 0 }, { opacity: 1, offset: 0.45 }, { opacity: 1, offset: 1 }],
   pop: [{ transform: 'scale(0)', offset: 0 }, { transform: 'scale(1.18)', offset: 0.3 }, { transform: 'scale(1)', offset: 0.45 }, { transform: 'scale(1)', offset: 1 }],
@@ -180,7 +181,7 @@ const IN_FRAMES: Record<TextAnimIn | OverlayAnim, Frames> = {
   typewriter: [{ clipPath: 'inset(0 0 0 100%)', offset: 0 }, { clipPath: 'inset(0 0 0 0%)', offset: 0.6 }, { clipPath: 'inset(0 0 0 0%)', offset: 1 }],
 };
 
-const OUT_FRAMES: Record<TextAnimOut | OverlayAnim, Frames> = {
+const OUT_FRAMES: Record<string, Frames> = {
   none: steady({ opacity: 1 }),
   fade: [{ opacity: 1, offset: 0 }, { opacity: 1, offset: 0.4 }, { opacity: 0, offset: 0.85 }, { opacity: 0, offset: 1 }],
   pop: [{ transform: 'scale(1)', offset: 0 }, { transform: 'scale(1)', offset: 0.4 }, { transform: 'scale(0)', offset: 0.85 }, { transform: 'scale(0)', offset: 1 }],
@@ -206,7 +207,7 @@ export function AnimChip({
   onClick: () => void;
 }) {
   const ref = useRef<HTMLSpanElement>(null);
-  const frames = (phase === 'in' ? IN_FRAMES : OUT_FRAMES)[id as keyof typeof IN_FRAMES & keyof typeof OUT_FRAMES] ?? steady({ opacity: 1 });
+  const frames = (phase === 'in' ? IN_FRAMES : OUT_FRAMES)[id] ?? steady({ opacity: 1 });
   useLoop(ref, frames, { duration: 1800 }, [id, phase]);
   return (
     <button
@@ -342,4 +343,99 @@ export function CaptionStyleThumb({ styleId }: { key?: React.Key; styleId: strin
     return () => cancelAnimationFrame(raf);
   }, [styleId]);
   return <canvas ref={ref} className="block h-full w-full" />;
+}
+
+// ---------------------------------------------------------------- live text previews
+
+/** One animation frame loop shared by every visible text preview. */
+const tickers = new Set<(now: number) => void>();
+let tickRaf = 0;
+function tick(now: number) {
+  tickers.forEach((fn) => fn(now));
+  tickRaf = tickers.size ? requestAnimationFrame(tick) : 0;
+}
+function addTicker(fn: (now: number) => void) {
+  tickers.add(fn);
+  if (!tickRaf) tickRaf = requestAnimationFrame(tick);
+  return () => {
+    tickers.delete(fn);
+  };
+}
+
+/**
+ * Texts drawn by the real renderer on a looping clock, so a preview shows exactly
+ * what the video will. Animates only while on screen.
+ */
+export function TextThumb({
+  texts,
+  loop,
+  width = 1080,
+  height = 1080,
+  still,
+  className,
+}: {
+  key?: React.Key;
+  texts: TextClip[];
+  /** Seconds before the preview starts over. */
+  loop: number;
+  /** Logical size the texts are laid out in. */
+  width?: number;
+  height?: number;
+  /** Time shown when motion is reduced. */
+  still?: number;
+  className?: string;
+}) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const textsRef = useRef(texts);
+  textsRef.current = texts;
+  const signature = JSON.stringify(texts);
+  useEffect(() => {
+    const canvas = ref.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    let fontsReady = false;
+    ensureFonts(textsRef.current.map((t) => t.font)).then(() => {
+      fontsReady = true;
+      draw(stillTime);
+    });
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const stillTime = still ?? loop * 0.6;
+    const draw = (time: number) => {
+      const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
+      const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      const bg = ctx.createLinearGradient(0, 0, w, h);
+      bg.addColorStop(0, '#334155');
+      bg.addColorStop(1, '#0f172a');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, w, h);
+      if (!fontsReady) return;
+      // Cover the thumb with the logical frame, centred.
+      const k = Math.max(w / width, h / height);
+      ctx.setTransform(k, 0, 0, k, (w - width * k) / 2, (h - height * k) / 2);
+      for (const t of textsRef.current) if (time >= t.start && time < t.start + t.duration) drawText(ctx, t, time, width, height);
+    };
+    draw(stillTime);
+    if (reducedMotion()) return;
+    let stop: (() => void) | null = null;
+    const start = performance.now();
+    const io = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && !stop) stop = addTicker((now) => draw(((now - start) / 1000) % loop));
+      else if (!entry.isIntersecting && stop) {
+        stop();
+        stop = null;
+      }
+    });
+    io.observe(canvas);
+    return () => {
+      io.disconnect();
+      stop?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature, loop, width, height, still]);
+  return <canvas ref={ref} className={className ?? 'block h-full w-full'} />;
 }

@@ -4,7 +4,8 @@ import { cn } from '../../lib/utils';
 import { CAPTION_STYLES, FILTER_PRESETS, STICKERS, TEXT_PRESETS, TRANSITIONS, presetAdjustments } from '../../editor/constants';
 import { PROJECT_TEMPLATES, templatePreview } from '../../editor/templates';
 import { MAX_TTS_CHARS, TTS_STYLES, TTS_VOICES } from '../../editor/tts';
-import { CaptionStyleThumb, FilterThumb, TemplateThumb, TransitionThumb } from './previews';
+import { CaptionStyleThumb, FilterThumb, TemplateThumb, TextThumb, TransitionThumb } from './previews';
+import { TEMPLATE_GROUPS, TEXT_TEMPLATES, TemplateGroup, TextTemplate, templateLength, templateTexts } from '../../editor/textTemplates';
 import { cssFilter } from '../../editor/renderer';
 import { formatTime } from '../../editor/timeline';
 import { AssetKind, MediaAsset, TextClip, TransitionType } from '../../editor/types';
@@ -303,10 +304,62 @@ function CaptionsSection({ captions, manager }: { captions: CaptionTool; manager
   );
 }
 
-export function TextPanel({ onAdd, captions, manager }: { onAdd: (presetId: string) => void; captions: CaptionTool; manager: CaptionManager }) {
+function TemplatesSection({ onAdd }: { onAdd: (tpl: TextTemplate) => void }) {
+  const [group, setGroup] = React.useState<TemplateGroup>('titles');
+  const list = TEXT_TEMPLATES.filter((t) => t.group === group);
+  return (
+    <div className="space-y-2">
+      <h4 className="text-xs font-bold text-slate-300">قوالب نصوص متحركة</h4>
+      <div className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1">
+        {TEMPLATE_GROUPS.map((g) => (
+          <button
+            key={g.id}
+            type="button"
+            onClick={() => setGroup(g.id)}
+            className={cn('shrink-0 rounded-lg px-2.5 py-1.5 text-[11px]', group === g.id ? 'bg-cyan-400/15 text-cyan-100 ring-1 ring-cyan-400' : 'bg-white/5 text-slate-300')}
+          >
+            {g.label}
+          </button>
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {list.map((tpl) => (
+          <TemplateCard key={tpl.id} tpl={tpl} onAdd={onAdd} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TemplateCard({ tpl, onAdd }: { key?: React.Key; tpl: TextTemplate; onAdd: (tpl: TextTemplate) => void }) {
+  const texts = React.useMemo(() => templateTexts(tpl, 0.15), [tpl]);
+  const loop = templateLength(tpl) + 0.6;
+  return (
+    <button type="button" onClick={() => onAdd(tpl)} className="overflow-hidden rounded-xl bg-slate-800/80 text-center ring-1 ring-white/5 transition hover:ring-cyan-400/60">
+      <span className="block aspect-[4/5] w-full">
+        <TextThumb texts={texts} loop={loop} width={1080} height={1350} still={Math.min(loop - 0.7, 1.4)} />
+      </span>
+      <span className="block py-1 text-[11px] text-slate-300">{tpl.label}</span>
+    </button>
+  );
+}
+
+export function TextPanel({
+  onAdd,
+  onTemplate,
+  captions,
+  manager,
+}: {
+  onAdd: (presetId: string) => void;
+  onTemplate: (tpl: TextTemplate) => void;
+  captions: CaptionTool;
+  manager: CaptionManager;
+}) {
   return (
     <div className="space-y-4 p-4">
       <CaptionsSection captions={captions} manager={manager} />
+      <TemplatesSection onAdd={onTemplate} />
+      <h4 className="text-xs font-bold text-slate-300">نص بسيط</h4>
     <div className="grid grid-cols-2 gap-2">
       {TEXT_PRESETS.map((p) => (
         <button
