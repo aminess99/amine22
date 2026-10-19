@@ -11,6 +11,7 @@ import os from "os";
 import { execFile, execSync } from "child_process";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import { commandSystemPrompt } from "./src/editor/commandSpec";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -259,6 +260,8 @@ setInterval(() => {
 
 async function startServer() {
   const app = express();
+  // Render (and most hosts) sit behind one proxy; this makes req.ip the visitor.
+  app.set("trust proxy", 1);
   const PORT = Number(process.env.PORT) || 5000;
 
   app.use(express.json({ limit: "500mb" }));
@@ -267,6 +270,51 @@ async function startServer() {
   // Health check endpoint
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
+  });
+
+  // Editing commands: turns a natural-language request into editor actions.
+  // The system prompt is fixed here so the endpoint can't be used as a general chatbot.
+  const commandHits = new Map<string, number[]>();
+  app.post("/api/command", async (req, res) => {
+    const client = getOpenRouterClient();
+    if (!client) {
+      return res.status(503).json({ error: "OPENROUTER_API_KEY is not set" });
+    }
+    const command = typeof req.body?.command === "string" ? req.body.command.trim() : "";
+    const context = JSON.stringify(req.body?.context ?? {});
+    if (!command || command.length > 600 || context.length > 60_000) {
+      return res.status(400).json({ error: "Invalid command" });
+    }
+    // At most 20 commands a minute per visitor.
+    const ip = req.ip || "unknown";
+    const now = Date.now();
+    const hits = (commandHits.get(ip) ?? []).filter((t) => now - t < 60_000);
+    if (hits.length >= 20) return res.status(429).json({ error: "Too many commands" });
+    hits.push(now);
+    commandHits.set(ip, hits);
+
+    try {
+      const response = await client.chat.completions.create({
+        model: process.env.COMMAND_MODEL || "google/gemini-2.5-flash",
+        temperature: 0.1,
+        max_tokens: 2000,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: commandSystemPrompt() },
+          { role: "user", content: `Project context:\n${context}\n\nCommand: ${command}` },
+        ],
+      });
+      const raw = response.choices[0]?.message?.content ?? "";
+      const json = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
+      const parsed = JSON.parse(json);
+      res.json({
+        reply: typeof parsed.reply === "string" ? parsed.reply : "",
+        actions: Array.isArray(parsed.actions) ? parsed.actions : [],
+      });
+    } catch (error) {
+      console.error("Command failed:", error);
+      res.status(502).json({ error: "Command model failed" });
+    }
   });
 
   // SEO: robots.txt for search engines

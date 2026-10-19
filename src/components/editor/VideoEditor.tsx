@@ -23,6 +23,7 @@ import {
   Type,
   Undo2,
   Upload,
+  Wand2,
   X,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -58,6 +59,7 @@ import { clearAll, loadSaved, saveAsset, saveProject } from '../../editor/persis
 import { clipsFromRanges, findSpeechRanges } from '../../editor/silence';
 import { applyTemplate } from '../../editor/templates';
 import { useHistory } from '../../editor/useHistory';
+import { commandContext, executeActions, requestCommand } from '../../editor/commands';
 import {
   GestureDelta,
   applyClipGesture,
@@ -67,6 +69,7 @@ import {
   resetClipTransform,
 } from '../../editor/gestures';
 import { usePreviewEngine } from '../../editor/usePreviewEngine';
+import { CommandPanel, CommandState } from './CommandPanel';
 import { EditorExportModal } from './EditorExportModal';
 import { AudioInspector, ClipInspector, OverlayInspector, ProjectInspector, TextInspector, TransitionInspector } from './EditorInspector';
 import { CaptionManager, FiltersPanel, MediaPanel, StickersPanel, TemplatesPanel, TextPanel, TransitionsPanel, VoiceRecorder } from './EditorPanels';
@@ -74,10 +77,11 @@ import { EditorTimeline } from './EditorTimeline';
 import { ToolButton } from './ui';
 import { frameAt } from './previews';
 
-type PanelId = 'media' | 'audio' | 'text' | 'stickers' | 'filters' | 'transitions' | 'templates' | 'edit';
+type PanelId = 'media' | 'ai' | 'audio' | 'text' | 'stickers' | 'filters' | 'transitions' | 'templates' | 'edit';
 
 const PANELS: { id: PanelId; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'media', label: 'الوسائط', icon: Film },
+  { id: 'ai', label: 'أوامر', icon: Wand2 },
   { id: 'audio', label: 'الصوت', icon: Music },
   { id: 'text', label: 'نصوص', icon: Type },
   { id: 'stickers', label: 'ملصقات', icon: Smile },
@@ -1027,6 +1031,36 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
 
   const actions = { onSplit: splitAtPlayhead, onDuplicate: duplicateSelection, onDelete: deleteSelection };
 
+  // ---------- editing commands ----------
+  const [command, setCommand] = useState<CommandState>({ busy: null, status: null, progress: null, error: null, plan: null, done: null });
+  const askCommand = async (text: string) => {
+    setCommand((c) => ({ ...c, busy: 'thinking', error: null, plan: null, done: null }));
+    try {
+      const res = await requestCommand(text, commandContext(project, assets, engine.getTime(), selection));
+      setCommand((c) => ({ ...c, busy: null, plan: { command: text, ...res } }));
+    } catch (err) {
+      setCommand((c) => ({ ...c, busy: null, error: err instanceof Error ? err.message : 'تعذر تنفيذ الأمر.' }));
+    }
+  };
+  const applyCommand = async () => {
+    const plan = command.plan;
+    if (!plan) return;
+    setCommand((c) => ({ ...c, busy: 'applying', status: null, progress: null, error: null }));
+    try {
+      const res = await executeActions(project, assets, plan.actions, (status, progress) => setCommand((c) => ({ ...c, status, progress })));
+      update(() => res.project);
+      setCommand((c) => ({ ...c, busy: null, plan: null, done: plan.command }));
+      if (res.seek !== undefined) {
+        pause();
+        seek(res.seek);
+      }
+      if (res.play) play();
+      if (res.export) setExporting(true);
+    } catch (err) {
+      setCommand((c) => ({ ...c, busy: null, error: err instanceof Error ? err.message : 'فشل تنفيذ الأمر.' }));
+    }
+  };
+
   const inspector = selectedClip ? (
     <ClipInspector
       clip={selectedClip.clip}
@@ -1140,6 +1174,19 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
             }}
             captions={{ ...captionState, run: runCaptions }}
             manager={captionManager}
+          />
+        );
+      case 'ai':
+        return (
+          <CommandPanel
+            state={command}
+            onAsk={askCommand}
+            onApply={applyCommand}
+            onCancel={() => setCommand((c) => ({ ...c, plan: null }))}
+            onUndo={() => {
+              undo();
+              setCommand((c) => ({ ...c, done: null }));
+            }}
           />
         );
       case 'stickers':
