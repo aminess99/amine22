@@ -21,6 +21,7 @@ import {
 import { FONT_GROUPS, FONT_LIST } from './fonts';
 import { TEXT_TEMPLATES } from './textTemplates';
 import { PROJECT_TEMPLATES } from './templates';
+import { SFX_LIST } from './sfx';
 
 /** Look and motion fields shared by add_text and text_style. */
 export interface TextStyleFields {
@@ -126,6 +127,10 @@ export type EditAction =
   | { op: 'pip_layer'; pip: number; to: 'front' | 'back' | 'forward' | 'backward' }
   | { op: 'caption_line'; line: number; text?: string; delete?: boolean }
   | { op: 'project_template'; template: string }
+  | { op: 'sfx'; sound: string; at?: number[]; where?: 'cuts' | 'texts'; volume?: number }
+  | { op: 'sfx_search'; query: string; at?: number[]; volume?: number }
+  | { op: 'reframe'; clips: ClipTarget }
+  | { op: 'make_short'; start: number; end: number }
   | { op: 'seek'; time: number }
   | { op: 'play' }
   | { op: 'export' };
@@ -201,9 +206,15 @@ Actions (use only these):
 - {"op":"pip_layer","pip":n,"to":"front"|"back"|"forward"|"backward"}  stacking order of picture-in-picture layers
 - {"op":"caption_line","line":n,"text":"..."}  fix the words of one caption line (n from "captions"); {"delete":true} removes it
 - {"op":"project_template","template":id}  restyle the whole video in one go: ${PROJECT_TEMPLATES.map((t) => `${t.id} (${t.label}: ${t.description})`).join(', ')}
+- {"op":"sfx","sound":id,"at":[seconds…] or "where":"cuts"|"texts","volume":0-1}  built-in sound effect at those times; "cuts" = on every transition between clips, "texts" = when each text appears. Sounds: ${SFX_LIST.map((x) => `${x.id} (${x.label})`).join(', ')}
+- {"op":"sfx_search","query":"english keywords","at":[seconds…],"volume":0-1}  a real recorded sound from the Freesound library (applause, laughter, rain, door, crowd, car…) when no built-in sound fits
+- {"op":"reframe","clips":…}  smart reframe: fill the frame and follow the main subject (for horizontal video in a vertical frame). Needs vision data for the clip.
+- {"op":"make_short","start":s,"end":s}  keep only that part of the video as a vertical short (9:16, reframed). Use a highlight from "vision" when the user asks for a short/best moment.
 - {"op":"seek","time":s}   {"op":"play"}   {"op":"export"}
 
 Rules: use the fewest actions that do exactly what was asked. Never invent clip numbers that do not exist. Clamp values to the ranges above.
+"vision" (when present) is what an AI saw in each analysed clip: scenes, events and highlights with frame-accurate timeline times. Use it to find visual moments ("the part with the car", "when I smile", "the jump"): use those exact times for split/delete_range/freeze/sfx/add_text. Prefer scene boundaries and event times over guesses. Scenes with quality blurry/dark/shaky/boring are candidates when asked to remove bad parts.
+If the request depends on what is visible but there is no "vision" data for that clip, return no actions and reply that the user should first press "تحليل الفيديو" (Analyse video) in the commands panel.
 Map the user's words to the closest action: e.g. "افصل الصوت" / "استخرج الصوت" → extract_audio; "قص الصورة" (frame) → crop; "أطول/أقصر" for an image → clip_duration.
 If the request needs something the editor cannot do (e.g. remove a background, generate new footage, recognise objects in the picture), return no actions and say so briefly.`;
 }

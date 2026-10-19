@@ -383,6 +383,214 @@ async function startServer() {
     }
   });
 
+  // Sound effects from Freesound, limited to CC0 (no attribution, commercial use allowed).
+  // Arabic searches are translated to English keywords first, since Freesound tags are English.
+  const sfxHits = new Map<string, number[]>();
+  const sfxTranslations = new Map<string, string>();
+  const sfxLimited = (req: express.Request, limit: number) => {
+    const ip = req.ip || "unknown";
+    const now = Date.now();
+    const hits = (sfxHits.get(ip) ?? []).filter((t) => now - t < 60_000);
+    if (hits.length >= limit) return true;
+    hits.push(now);
+    sfxHits.set(ip, hits);
+    return false;
+  };
+  const toEnglishKeywords = async (query: string) => {
+    if (!/[؀-ۿ]/.test(query)) return query;
+    const cached = sfxTranslations.get(query);
+    if (cached) return cached;
+    const client = getOpenRouterClient();
+    if (!client) return query;
+    try {
+      const response = await client.chat.completions.create({
+        model: process.env.COMMAND_MODEL || "google/gemini-2.5-flash",
+        temperature: 0,
+        max_tokens: 20,
+        messages: [
+          { role: "system", content: "Translate the sound-effect search into 1-3 English keywords for a sound library. Reply with the keywords only." },
+          { role: "user", content: query },
+        ],
+      });
+      const words = (response.choices[0]?.message?.content ?? "").replace(/[^a-zA-Z0-9 -]/g, " ").trim().slice(0, 60);
+      if (words) sfxTranslations.set(query, words);
+      return words || query;
+    } catch {
+      return query;
+    }
+  };
+
+  app.get("/api/sfx/search", async (req, res) => {
+    const key = process.env.FREESOUND_API_KEY;
+    if (!key) return res.status(503).json({ error: "FREESOUND_API_KEY is not set" });
+    const q = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 80) : "";
+    if (!q) return res.status(400).json({ error: "Missing query" });
+    if (sfxLimited(req, 30)) return res.status(429).json({ error: "Too many requests" });
+    try {
+      const query = await toEnglishKeywords(q);
+      const url = new URL("https://freesound.org/apiv2/search/text/");
+      url.searchParams.set("query", query);
+      url.searchParams.set("filter", 'license:"Creative Commons 0" duration:[0 TO 30]');
+      url.searchParams.set("fields", "id,name,duration,username");
+      url.searchParams.set("page_size", "24");
+      url.searchParams.set("token", key);
+      const response = await fetch(url);
+      if (!response.ok) {
+        console.error("Freesound search failed:", response.status, (await response.text()).slice(0, 300));
+        return res.status(502).json({ error: "Search failed" });
+      }
+      const data = await response.json();
+      res.json({
+        query,
+        results: (data.results ?? []).map((s: any) => ({ id: s.id, name: String(s.name ?? ""), duration: Number(s.duration) || 0, user: String(s.username ?? "") })),
+      });
+    } catch (error) {
+      console.error("Freesound search failed:", error);
+      res.status(502).json({ error: "Search failed" });
+    }
+  });
+
+  app.get("/api/sfx/file/:id", async (req, res) => {
+    const key = process.env.FREESOUND_API_KEY;
+    if (!key) return res.status(503).json({ error: "FREESOUND_API_KEY is not set" });
+    if (!/^\d{1,10}$/.test(req.params.id)) return res.status(400).json({ error: "Bad id" });
+    if (sfxLimited(req, 60)) return res.status(429).json({ error: "Too many requests" });
+    try {
+      // Look the sound up again so only CC0 sounds are ever served.
+      const info = await fetch(`https://freesound.org/apiv2/sounds/${req.params.id}/?fields=license,previews&token=${encodeURIComponent(key)}`);
+      if (!info.ok) return res.status(502).json({ error: "Lookup failed" });
+      const sound = await info.json();
+      if (!/publicdomain\/zero|Creative Commons 0/i.test(String(sound.license ?? ""))) return res.status(403).json({ error: "Not CC0" });
+      const preview = sound.previews?.["preview-hq-mp3"];
+      if (typeof preview !== "string" || !preview.startsWith("https://")) return res.status(502).json({ error: "No preview" });
+      const audio = await fetch(preview);
+      if (!audio.ok) return res.status(502).json({ error: "Download failed" });
+      res.setHeader("Content-Type", "audio/mpeg");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      res.send(Buffer.from(await audio.arrayBuffer()));
+    } catch (error) {
+      console.error("Freesound download failed:", error);
+      res.status(502).json({ error: "Download failed" });
+    }
+  });
+
+  // Video understanding: the browser uploads a small proxy (about 360p, 2 fps, mono audio) and the
+  // vision model returns scenes, events, the main subject's position, highlights and post text.
+  // Times come back to the second; the browser refines them to the frame.
+  const visionHits = new Map<string, number[]>();
+  const visionLimited = (req: express.Request, limit: number) => {
+    const ip = req.ip || "unknown";
+    const now = Date.now();
+    const hits = (visionHits.get(ip) ?? []).filter((t) => now - t < 10 * 60_000);
+    if (hits.length >= limit) return true;
+    hits.push(now);
+    visionHits.set(ip, hits);
+    return false;
+  };
+  const visionUpload = multer({ dest: path.join(os.tmpdir(), "uploads"), limits: { fileSize: 80 * 1024 * 1024 } });
+  const parseJsonReply = (raw: string) => JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
+
+  app.post("/api/analyze", visionUpload.single("video"), async (req, res) => {
+    req.setTimeout(600000);
+    res.setTimeout(600000);
+    const file = req.file;
+    const cleanup = () => file && fs.promises.unlink(file.path).catch(() => {});
+    const client = getOpenRouterClient();
+    if (!client) {
+      cleanup();
+      return res.status(503).json({ error: "OPENROUTER_API_KEY is not set" });
+    }
+    if (!file) return res.status(400).json({ error: "Missing video" });
+    if (visionLimited(req, 10)) {
+      cleanup();
+      return res.status(429).json({ error: "Too many requests" });
+    }
+    const duration = Number(req.body?.duration) || 0;
+    try {
+      const data = (await fs.promises.readFile(file.path)).toString("base64");
+      const mime = file.mimetype && file.mimetype.startsWith("video/") ? file.mimetype : "video/mp4";
+      const prompt = [
+        "Watch and listen to this video carefully. Return ONLY a JSON object with this shape:",
+        "{",
+        '  "summary": "2-3 sentences about the video",',
+        '  "language": "main spoken language code or none",',
+        '  "scenes": [{"start": s, "end": s, "description": "what is visible and happening", "quality": "good|blurry|dark|shaky|boring", "interest": 0-10}],',
+        '  "events": [{"time": s, "label": "short description", "kind": "cut|action|impact|expression|appear|text|gesture|speech"}],',
+        '  "subject": [{"time": s, "x": 0-1, "y": 0-1}],',
+        '  "highlights": [{"start": s, "end": s, "title": "catchy short title", "reason": "why it works", "score": 0-10}],',
+        '  "title": "video title", "description": "post description", "hashtags": ["#tag"], "thumbnail_time": s',
+        "}",
+        "Rules:",
+        "- Times are seconds from the start of THIS file, with decimals, as precise as you can.",
+        `- The video is ${duration ? duration.toFixed(2) : "unknown"} seconds long; never return times past the end.`,
+        "- scenes cover the whole video back to back; start a new scene at every camera cut or clear change of shot.",
+        "- events: 10-60 notable moments: actions (jump, throw, fall), impacts/sudden sounds, facial expressions (smile, laugh, surprise), objects or people appearing, on-screen text, gestures, and key spoken lines.",
+        "- subject: where the main subject (usually a person's face) is in the frame, once per second, x/y as fractions of width/height.",
+        "- highlights: 1-5 self-contained moments of 15-60 s that would work as TikTok/Reels shorts, best first. Start and end at sentence boundaries.",
+        "- Write summary, descriptions, labels, titles, description and reasons in the video's spoken language (Arabic if it is Arabic or there is no speech).",
+      ].join("\n");
+      const response = await client.chat.completions.create({
+        model: process.env.VISION_MODEL || "google/gemini-3.8-flash",
+        temperature: 0.2,
+        max_tokens: 12000,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: prompt },
+              { type: "video_url", video_url: { url: `data:${mime};base64,${data}` } },
+            ] as any,
+          },
+        ],
+      });
+      res.json(parseJsonReply(response.choices[0]?.message?.content ?? ""));
+    } catch (error) {
+      console.error("Video analysis failed:", error);
+      res.status(502).json({ error: "Analysis failed" });
+    } finally {
+      cleanup();
+    }
+  });
+
+  // Frame-level pick: for each question, numbered stills around a moment; the model names the frame.
+  app.post("/api/refine-frames", async (req, res) => {
+    const client = getOpenRouterClient();
+    if (!client) return res.status(503).json({ error: "OPENROUTER_API_KEY is not set" });
+    const groups = Array.isArray(req.body?.groups) ? req.body.groups.slice(0, 12) : [];
+    if (!groups.length) return res.status(400).json({ error: "Missing frames" });
+    if (visionLimited(req, 30)) return res.status(429).json({ error: "Too many requests" });
+    try {
+      const content: any[] = [
+        {
+          type: "text",
+          text: 'Each group below is a run of consecutive video frames, numbered from 0. For every group, pick the first frame where the described moment happens. Reply ONLY with JSON: {"picks": [frame number per group, in order]}.',
+        },
+      ];
+      groups.forEach((g: any, i: number) => {
+        const frames = Array.isArray(g?.frames) ? g.frames.slice(0, 16) : [];
+        content.push({ type: "text", text: `Group ${i + 1}: "${String(g?.label ?? "").slice(0, 120)}" (${frames.length} frames)` });
+        frames.forEach((f: unknown, j: number) => {
+          if (typeof f === "string" && f.startsWith("data:image/jpeg;base64,") && f.length < 200_000) {
+            content.push({ type: "text", text: `frame ${j}` }, { type: "image_url", image_url: { url: f } });
+          }
+        });
+      });
+      const response = await client.chat.completions.create({
+        model: process.env.VISION_MODEL || "google/gemini-3.8-flash",
+        temperature: 0,
+        max_tokens: 300,
+        response_format: { type: "json_object" },
+        messages: [{ role: "user", content }],
+      });
+      const parsed = parseJsonReply(response.choices[0]?.message?.content ?? "");
+      res.json({ picks: Array.isArray(parsed.picks) ? parsed.picks.map((n: unknown) => Number(n)) : [] });
+    } catch (error) {
+      console.error("Frame refine failed:", error);
+      res.status(502).json({ error: "Refine failed" });
+    }
+  });
+
   // SEO: robots.txt for search engines
   app.get("/robots.txt", (req, res) => {
     res.type("text/plain");

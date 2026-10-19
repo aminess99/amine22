@@ -24,6 +24,9 @@ import {
 } from './constants';
 import { MAX_REVERSE_SECONDS, reverseVideo } from './reverse';
 import { computePeaks } from './media';
+import { reframeClip } from './reframe';
+import { snapToFrame, videoFps } from './refine';
+import { SFX_LIST, autoSfxTimes, freesoundFile, searchFreesound, sfxFile } from './sfx';
 import { PROJECT_TEMPLATES, applyTemplate } from './templates';
 import { MAX_TTS_CHARS, TTS_STYLES, TTS_VOICES, synthesizeSpeech } from './tts';
 import { FONT_LIST } from './fonts';
@@ -96,6 +99,7 @@ export function commandContext(project: Project, assets: Map<string, MediaAsset>
     texts: texts.map((t, i) => ({ n: i + 1, text: t.text.slice(0, 60), start: r2(t.start), end: r2(t.start + t.duration), font: t.font, y: r2(t.y) })),
     captions: captions.slice(0, 400).map((t, i) => ({ n: i + 1, start: r2(t.start), end: r2(t.start + t.duration), text: t.text })),
     caption_style: captions[0]?.captionStyle,
+    vision: visionContext(layout),
     pips: project.overlays.map((o, i) => ({
       n: i + 1,
       name: assets.get(o.assetId)?.name.slice(0, 40),
@@ -109,6 +113,30 @@ export function commandContext(project: Project, assets: Map<string, MediaAsset>
     media: library.map((a, i) => ({ n: i + 1, type: a.kind, name: a.name.slice(0, 40), duration: r2(a.duration) })),
   };
 }
+
+/**
+ * What the vision model saw in each analysed clip, moved onto the timeline
+ * (only the part of the source the clip uses). Times are frame-accurate.
+ */
+function visionContext(layout: LaidOutClip[]) {
+  const out = [];
+  for (const lc of layout) {
+    const a = lc.asset.analysis;
+    if (!a) continue;
+    const { inPoint, outPoint, speed } = lc.clip;
+    const inside = (t: number) => t >= inPoint - 0.01 && t <= outPoint + 0.01;
+    const tl = (t: number) => r3(lc.start + (Math.min(outPoint, Math.max(inPoint, t)) - inPoint) / speed);
+    out.push({
+      clip: lc.index + 1,
+      summary: a.summary,
+      scenes: a.scenes.filter((s) => s.end > inPoint && s.start < outPoint).slice(0, 60).map((s) => ({ start: tl(s.start), end: tl(s.end), what: s.description, quality: s.quality, interest: s.interest })),
+      events: a.events.filter((e) => inside(e.time)).slice(0, 80).map((e) => ({ time: tl(e.time), what: e.label, kind: e.kind })),
+      highlights: a.highlights.filter((h) => h.end > inPoint && h.start < outPoint).map((h) => ({ start: tl(h.start), end: tl(h.end), title: h.title, score: h.score })),
+    });
+  }
+  return out.length ? out : undefined;
+}
+const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
 export async function requestCommand(command: string, context: unknown): Promise<CommandResponse> {
   let res: Response;
@@ -263,6 +291,18 @@ export function describeAction(a: EditAction): string | null {
       const tpl = PROJECT_TEMPLATES.find((x) => x.id === a.template);
       return tpl ? `تطبيق قالب "${tpl.label}" على الفيديو` : null;
     }
+    case 'sfx': {
+      const def = SFX_LIST.find((x) => x.id === a.sound);
+      if (!def) return null;
+      const where = a.where === 'cuts' ? 'عند كل انتقال' : a.where === 'texts' ? 'عند ظهور كل نص' : `عند ${(a.at ?? [0]).map((t) => formatTime(num(t, 0, 1e5, 0), true)).join('، ')}`;
+      return `مؤثر "${def.label}" ${where}`;
+    }
+    case 'sfx_search':
+      return typeof a.query === 'string' && a.query.trim() ? `صوت "${a.query}" من مكتبة Freesound عند ${(a.at ?? [0]).map((t) => formatTime(num(t, 0, 1e5, 0), true)).join('، ')}` : null;
+    case 'reframe':
+      return `تأطير ذكي يتبع الشخص في ${clips}`;
+    case 'make_short':
+      return `مقطع قصير عمودي من ${formatTime(num(a.start, 0, 1e5, 0), true)} إلى ${formatTime(num(a.end, 0, 1e5, 0), true)}`;
     case 'seek':
       return `الانتقال إلى ${formatTime(num(a.time, 0, 1e5, 0))}`;
     case 'play':
@@ -408,6 +448,17 @@ export async function executeActions(
     return asset;
   };
   const layout0 = layoutMainTrack(start.clips, assets);
+  // Frame rates, so cut times land on frame boundaries.
+  const fps = new Map<string, number>();
+  for (const lc of layout0) if (lc.asset.kind === 'video' && !fps.has(lc.asset.id)) fps.set(lc.asset.id, await videoFps(lc.asset));
+  /** Moves a timeline time to the start of the source frame showing there. */
+  const toFrame = (t: number) => {
+    const lc = layout0.find((l) => t >= l.start && t < l.end);
+    const rate = lc && fps.get(lc.asset.id);
+    if (!lc || !rate || lc.clip.freeze || lc.clip.speedCurve) return t;
+    const src = lc.clip.inPoint + (t - lc.start) * lc.clip.speed;
+    return lc.start + (snapToFrame(src, rate) - lc.clip.inPoint) / lc.clip.speed;
+  };
   const clipIds = (t: ClipTarget | undefined): Set<string> => {
     if (t === 'all') return new Set(layout0.map((l) => l.clip.id));
     const list = Array.isArray(t) ? t : typeof t === 'number' ? [t] : [];
@@ -677,7 +728,7 @@ export async function executeActions(
   // 2. Splits, then 3. ripple deletes and freeze frames from the end backwards so earlier times stay valid.
   for (const a of actions) {
     if (a.op !== 'split') continue;
-    const t = num(a.time, 0, 1e5, 0);
+    const t = toFrame(num(a.time, 0, 1e5, 0));
     const lc = layoutMainTrack(p.clips, assets).find((l) => t > l.start && t < l.end);
     const parts = lc && splitMainClip(lc, t);
     if (parts) p = { ...p, clips: p.clips.flatMap((c) => (c.id === lc.clip.id ? parts : [c])) };
@@ -685,10 +736,16 @@ export async function executeActions(
   const timed = actions
     .flatMap((a) =>
       a.op === 'delete_range'
-        ? [{ at: num(a.start, 0, 1e5, 0), end: num(a.end, 0, 1e5, 0), freeze: 0 }]
+        ? [{ at: toFrame(num(a.start, 0, 1e5, 0)), end: toFrame(num(a.end, 0, 1e5, 0)), freeze: 0 }]
         : a.op === 'freeze'
-          ? [{ at: num(a.time, 0, 1e5, 0), end: 0, freeze: num(a.seconds, 0.5, 10, 2) }]
-          : []
+          ? [{ at: toFrame(num(a.time, 0, 1e5, 0)), end: 0, freeze: num(a.seconds, 0.5, 10, 2) }]
+          : a.op === 'make_short'
+            ? // Keep [start, end]: cut what comes after, then what comes before.
+              [
+                { at: toFrame(num(a.end, 0, 1e5, 0)), end: 1e6, freeze: 0 },
+                { at: 0, end: toFrame(num(a.start, 0, 1e5, 0)), freeze: 0 },
+              ]
+            : []
     )
     .filter((x) => x.freeze || x.end - x.at > 0.05)
     .sort((x, y) => y.at - x.at);
@@ -750,6 +807,32 @@ export async function executeActions(
       } else clips.push(clip);
       p = { ...p, clips };
     }
+  }
+
+  // A short is vertical; then smart reframe follows the subject.
+  const short = actions.some((a) => a.op === 'make_short');
+  if (short) p = { ...p, aspect: '9:16' };
+  // By source video: splits and deletes give clip parts new ids.
+  const reframeAssets = new Set(
+    actions.flatMap((a) => (a.op === 'reframe' ? [...clipIds(a.clips)].map((id) => layout0.find((l) => l.clip.id === id)!.asset.id) : []))
+  );
+  if (short) for (const c of p.clips) if ((assets.get(c.assetId)?.width ?? 0) > (assets.get(c.assetId)?.height ?? 0)) reframeAssets.add(c.assetId);
+  if (reframeAssets.size) {
+    const { width, height } = ASPECT_SIZES[p.aspect];
+    let missing = false;
+    p = {
+      ...p,
+      clips: p.clips.map((c) => {
+        const asset = assets.get(c.assetId);
+        if (!asset || asset.kind !== 'video' || !reframeAssets.has(asset.id)) return c;
+        if (!asset.analysis) {
+          missing = true;
+          return { ...c, fit: 'cover' };
+        }
+        return reframeClip(c, asset, width, height) ?? { ...c, fit: 'cover' };
+      }),
+    };
+    if (missing) note('التأطير الذكي يحتاج تحليل الفيديو أولاً (زر "تحليل الفيديو"). ملأتُ الإطار بدون تتبع.');
   }
 
   // 5. Silence removal (decodes audio, so it is slow).
@@ -878,6 +961,39 @@ export async function executeActions(
     const style = known(TTS_STYLES, a.style) ? a.style : TTS_STYLES[0].id;
     const speech = await register(await synthesizeSpeech(a.text.trim().slice(0, MAX_TTS_CHARS), voice, style));
     p = { ...p, audios: [...p.audios, createAudioClip(speech, num(a.start, 0, 1e5, 0))] };
+  }
+
+  // Sound effects, placed on the final cut.
+  for (const a of actions) {
+    if (a.op !== 'sfx' && a.op !== 'sfx_search') continue;
+    const layout = layoutMainTrack(p.clips, assets);
+    let asset: MediaAsset;
+    let times: number[];
+    if (a.op === 'sfx') {
+      if (!SFX_LIST.some((x) => x.id === a.sound)) continue;
+      const moments =
+        a.where === 'cuts' ? layout.slice(1).map((l) => l.start)
+        : a.where === 'texts' ? p.texts.filter((t) => !isCaption(t)).map((t) => t.start)
+        : (Array.isArray(a.at) && a.at.length ? a.at : [0]).map((t) => num(t, 0, 1e5, 0));
+      if (!moments.length) {
+        note(a.where === 'cuts' ? 'لا توجد انتقالات لإضافة المؤثر عندها.' : 'لا توجد نصوص لإضافة المؤثر عندها.');
+        continue;
+      }
+      asset = await register(await sfxFile(a.sound));
+      times = a.where ? autoSfxTimes(a.sound, moments) : moments;
+    } else {
+      if (typeof a.query !== 'string' || !a.query.trim()) continue;
+      onStatus(`جاري البحث عن "${a.query}"...`, null);
+      const hits = await searchFreesound(a.query.trim());
+      if (!hits.length) {
+        note(`لم أجد صوتاً مناسباً لـ "${a.query}".`);
+        continue;
+      }
+      asset = await register(await freesoundFile(hits[0]));
+      times = (Array.isArray(a.at) && a.at.length ? a.at : [0]).map((t) => num(t, 0, 1e5, 0));
+    }
+    const volume = num(a.volume, 0.05, 1, 0.8);
+    p = { ...p, audios: [...p.audios, ...times.slice(0, 50).map((t) => ({ ...createAudioClip(asset, t), volume }))] };
   }
 
   // 6. Captions: delete, generate on the final cut, then restyle.

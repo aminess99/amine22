@@ -16,6 +16,8 @@ import {
   Scissors,
   SkipBack,
   SkipForward,
+  StepBack,
+  StepForward,
   SlidersHorizontal,
   Smile,
   Sparkles,
@@ -55,6 +57,7 @@ import {
   beatCuts,
   retimeToCuts,
   setTextKeyframe,
+  sourceTimeFor,
   textProgress,
   textTransformAt,
 } from '../../editor/timeline';
@@ -66,6 +69,10 @@ import { applyTemplate } from '../../editor/templates';
 import { useHistory } from '../../editor/useHistory';
 import { commandContext, executeActions, requestCommand } from '../../editor/commands';
 import { synthesizeSpeech } from '../../editor/tts';
+import { autoSfxTimes, sfxFile } from '../../editor/sfx';
+import { analyzeVideo, progressText } from '../../editor/analysis';
+import { videoFps } from '../../editor/refine';
+import { EditAction } from '../../editor/commandSpec';
 import {
   GestureDelta,
   applyClipGesture,
@@ -76,6 +83,8 @@ import {
 } from '../../editor/gestures';
 import { usePreviewEngine } from '../../editor/usePreviewEngine';
 import { CommandPanel, CommandState } from './CommandPanel';
+import { SfxPanel } from './SfxPanel';
+import { AiPanel, AiPanelState, AiShort } from './AiPanel';
 import { EditorExportModal } from './EditorExportModal';
 import { AudioInspector, ClipInspector, OverlayInspector, ProjectInspector, TextInspector, TransitionInspector } from './EditorInspector';
 import { CaptionManager, FiltersPanel, MediaPanel, StickersPanel, TemplatesPanel, TextPanel, TextToSpeech, TransitionsPanel, VoiceRecorder } from './EditorPanels';
@@ -151,6 +160,40 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
   const { time, playing, toggle, seek, pause, play, previewRange, captureFrame, subscribeFrame } = engine;
 
   // The time readout follows playback frame by frame without re-rendering the editor.
+  // Frame rates of the videos on the main track, for frame stepping.
+  const [fpsMap, setFpsMap] = useState<Map<string, number>>(new Map());
+  useEffect(() => {
+    for (const lc of layout) {
+      const a = lc.asset;
+      if (a.kind !== 'video' || fpsMap.has(a.id)) continue;
+      videoFps(a).then((f) => setFpsMap((m) => (m.has(a.id) ? m : new Map(m).set(a.id, f))));
+    }
+  }, [layout, fpsMap]);
+  /** The clip on screen at t and the source frame it shows. */
+  const frameUnder = (t: number) => {
+    const lc = layout.find((l) => t >= l.start && t < l.end) ?? layout[layout.length - 1];
+    const fps = lc && fpsMap.get(lc.asset.id);
+    if (!lc || !fps) return null;
+    const src = sourceTimeFor(lc, Math.min(t, lc.end - 1e-4));
+    return { lc, fps, index: Math.floor(src * fps + 1e-6) };
+  };
+  /** Moves the playhead exactly one frame of the clip under it. */
+  const stepFrameRef = useRef<(dir: 1 | -1) => void>(() => {});
+  const stepFrame = (dir: 1 | -1) => {
+    pause();
+    const t = engine.getTime();
+    const f = frameUnder(t);
+    if (!f || f.lc.clip.freeze || f.lc.clip.speedCurve) {
+      seek(clamp(t + dir / ((f?.fps ?? 30) * (f?.lc.clip.speed ?? 1)), 0, duration));
+      return;
+    }
+    const { lc, fps, index } = f;
+    // Aim a hair inside the target frame so rounding never lands on its neighbour.
+    const src = (index + dir) / fps + 0.25 / fps;
+    seek(clamp(lc.start + (src - lc.clip.inPoint) / lc.clip.speed, 0, duration));
+  };
+  stepFrameRef.current = stepFrame;
+
   const clockRef = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     if (!playing) return;
@@ -813,7 +856,8 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault();
         const dir = e.key === 'ArrowRight' ? 1 : -1;
-        seek(engine.getTime() + dir * (e.shiftKey ? 1 : 1 / 30));
+        if (e.shiftKey) seek(engine.getTime() + dir);
+        else stepFrameRef.current(dir);
       } else if (e.key === 'Home') {
         seek(0);
       } else if (e.key === 'End') {
@@ -1029,12 +1073,11 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
       setCommand((c) => ({ ...c, busy: null, error: err instanceof Error ? err.message : 'تعذر تنفيذ الأمر.' }));
     }
   };
-  const applyCommand = async () => {
-    const plan = command.plan;
-    if (!plan) return;
+  /** Applies editor actions (from a command or an AI panel button) as one undo step. */
+  const runActions = async (list: EditAction[], label: string) => {
     setCommand((c) => ({ ...c, busy: 'applying', status: null, progress: null, error: null }));
     try {
-      const res = await executeActions(project, assets, assetList, plan.actions, {
+      const res = await executeActions(project, assets, assetList, list, {
         onStatus: (status, progress) => setCommand((c) => ({ ...c, status, progress })),
         registerAsset,
         saveAsset: (asset) => {
@@ -1043,17 +1086,97 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
         },
       });
       update(() => res.project);
-      setCommand((c) => ({ ...c, busy: null, plan: null, done: plan.command, error: res.notes.length ? [...new Set(res.notes)].join(' ') : null }));
+      setCommand((c) => ({ ...c, busy: null, plan: null, done: label, error: res.notes.length ? [...new Set(res.notes)].join(' ') : null }));
       if (res.seek !== undefined) {
         pause();
         seek(res.seek);
       }
       if (res.play) play();
       if (res.export) setExporting(true);
+      return res;
     } catch (err) {
       setCommand((c) => ({ ...c, busy: null, error: err instanceof Error ? err.message : 'فشل تنفيذ الأمر.' }));
+      return null;
     }
   };
+  const applyCommand = async () => {
+    const plan = command.plan;
+    if (plan) await runActions(plan.actions, plan.command);
+  };
+
+  // ---------- AI video understanding ----------
+  const [analysis, setAnalysis] = useState<{ busy: boolean; status: string | null; progress: number | null; error: string | null }>({ busy: false, status: null, progress: null, error: null });
+  const mainVideos = useMemo(() => [...new Map(layout.filter((l) => l.asset.kind === 'video').map((l) => [l.asset.id, l.asset])).values()], [layout]);
+  const analyzeVideos = async () => {
+    const targets = mainVideos.filter((a) => !a.analysis);
+    setAnalysis({ busy: true, status: null, progress: 0, error: null });
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        const asset = targets[i];
+        const part = targets.length > 1 ? ` (${i + 1} من ${targets.length})` : '';
+        const result = await analyzeVideo(asset, (p) => {
+          const { text, bar } = progressText(p);
+          setAnalysis((a) => ({ ...a, status: text + part, progress: bar === null ? null : (i + bar) / targets.length }));
+        });
+        const updated = { ...asset, analysis: result, fps: await videoFps(asset) };
+        setAssetList((list) => list.map((x) => (x.id === asset.id ? updated : x)));
+        saveAsset(updated).catch(() => {});
+      }
+      setAnalysis({ busy: false, status: null, progress: null, error: null });
+    } catch (err) {
+      setAnalysis({ busy: false, status: null, progress: null, error: err instanceof Error ? err.message : 'تعذر تحليل الفيديو.' });
+    }
+  };
+  const badScenesRef = useRef<[number, number][]>([]);
+  // Analysis results moved onto the timeline (only the parts the clips use).
+  const aiState = useMemo<AiPanelState>(() => {
+    const shorts: AiShort[] = [];
+    const bad: [number, number][] = [];
+    let summary: string | null = null;
+    let publish: AiPanelState['publish'] = null;
+    let thumbnailTime: number | null = null;
+    for (const lc of layout) {
+      const a = lc.asset.analysis;
+      if (!a) continue;
+      const { inPoint, outPoint, speed } = lc.clip;
+      const tl = (t: number) => lc.start + (Math.min(outPoint, Math.max(inPoint, t)) - inPoint) / speed;
+      summary ??= a.summary || null;
+      publish ??= a.title || a.hashtags.length ? { title: a.title, description: a.description, hashtags: a.hashtags } : null;
+      if (thumbnailTime === null && a.thumbnailTime >= inPoint && a.thumbnailTime <= outPoint) thumbnailTime = tl(a.thumbnailTime);
+      // A highlight can span several clips cut from the same video: map each end through the clip that shows it.
+      const toTimeline = (src: number) => {
+        const hit = layout.find((l) => l.asset.id === lc.asset.id && src >= l.clip.inPoint - 0.01 && src <= l.clip.outPoint + 0.01);
+        return hit ? hit.start + (Math.min(hit.clip.outPoint, Math.max(hit.clip.inPoint, src)) - hit.clip.inPoint) / hit.clip.speed : null;
+      };
+      a.highlights.forEach((h, i) => {
+        const key = `${lc.asset.id}-${i}`;
+        if (shorts.some((x) => x.key === key)) return;
+        const start = toTimeline(h.start);
+        const end = toTimeline(h.end);
+        if (start === null || end === null || end - start < 1) return;
+        shorts.push({ key, start, end, title: h.title, reason: h.reason, score: h.score });
+      });
+      for (const sc of a.scenes) {
+        if (sc.quality === 'good' || sc.end <= inPoint || sc.start >= outPoint) continue;
+        const range: [number, number] = [tl(sc.start), tl(sc.end)];
+        // Merge touching scenes so no part is deleted twice.
+        const last = bad[bad.length - 1];
+        if (last && range[0] <= last[1] + 0.01) last[1] = Math.max(last[1], range[1]);
+        else bad.push(range);
+      }
+    }
+    badScenesRef.current = bad;
+    return {
+      videos: mainVideos.map((a) => ({ id: a.id, name: a.name, analyzed: !!a.analysis })),
+      ...analysis,
+      summary,
+      shorts: shorts.sort((x, y) => y.score - x.score).slice(0, 5),
+      publish,
+      thumbnailTime,
+      badScenes: bad.length,
+      canReframe: layout.some((l) => l.asset.analysis && l.asset.width > l.asset.height),
+    };
+  }, [layout, mainVideos, analysis]);
 
   const inspector = selectedClip ? (
     <ClipInspector
@@ -1180,6 +1303,17 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
                     setSheetOpen(false);
                   }}
                 />
+                <SfxPanel
+                  onAddBuiltIn={async (id) => addAudio(await registerAsset(await sfxFile(id)))}
+                  onAddFile={async (file) => addAudio(await registerAsset(file))}
+                  onAuto={async (id, where) => {
+                    const moments = where === 'cuts' ? layout.slice(1).map((l) => l.start) : project.texts.filter((t) => !t.words?.length).map((t) => t.start);
+                    if (!moments.length) throw new Error(where === 'cuts' ? 'أضف مقطعين على الأقل ليكون هناك انتقال.' : 'لا توجد نصوص أو ملصقات بعد.');
+                    const asset = await registerAsset(await sfxFile(id));
+                    const clips = autoSfxTimes(id, moments).map((t) => ({ ...createAudioClip(asset, t), volume: 0.8 }));
+                    update((p) => ({ ...p, audios: [...p.audios, ...clips] }));
+                  }}
+                />
               </div>
             }
             onFiles={(f) => addFiles(f, false)}
@@ -1206,6 +1340,24 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
         );
       case 'ai':
         return (
+          <>
+          <AiPanel
+            state={aiState}
+            onAnalyze={analyzeVideos}
+            onPreview={(a, b) => previewRange(a, b)}
+            onShort={(sh) => runActions([{ op: 'make_short', start: sh.start, end: sh.end }], `مقطع قصير: ${sh.title}`)}
+            onReframe={() => runActions([{ op: 'aspect', aspect: '9:16' }, { op: 'reframe', clips: 'all' }], 'تحويل إلى عمودي مع تأطير ذكي')}
+            onRemoveBad={() =>
+              runActions(
+                badScenesRef.current.map(([start, end]) => ({ op: 'delete_range' as const, start, end })),
+                'حذف اللقطات السيئة'
+              )
+            }
+            onSeek={(t) => {
+              pause();
+              seek(t);
+            }}
+          />
           <CommandPanel
             state={command}
             onAsk={askCommand}
@@ -1216,6 +1368,7 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
               setCommand((c) => ({ ...c, done: null }));
             }}
           />
+          </>
         );
       case 'stickers':
         return (
@@ -1442,6 +1595,9 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
               <button type="button" onClick={() => seek(0)} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white" title="البداية">
                 <SkipBack className="h-4 w-4" />
               </button>
+              <button type="button" onClick={() => stepFrame(-1)} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white" title="إطار للخلف (←)">
+                <StepBack className="h-4 w-4" />
+              </button>
               <button
                 type="button"
                 onClick={toggle}
@@ -1451,11 +1607,15 @@ export function VideoEditor({ onBack }: VideoEditorProps) {
               >
                 {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 translate-x-px" />}
               </button>
+              <button type="button" onClick={() => stepFrame(1)} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white" title="إطار للأمام (→)">
+                <StepForward className="h-4 w-4" />
+              </button>
               <button type="button" onClick={() => seek(duration)} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white" title="النهاية">
                 <SkipForward className="h-4 w-4" />
               </button>
               <span className="ml-1 text-[11px] tabular-nums text-slate-400">
                 <span ref={clockRef} className="text-white">{formatTime(time, true)}</span> / {formatTime(duration, true)}
+                {!playing && frameUnder(time) && <span className="mr-1.5 text-slate-500">· إطار {frameUnder(time)!.index}</span>}
               </span>
             </div>
             <div className="hidden items-center gap-1 sm:flex">
