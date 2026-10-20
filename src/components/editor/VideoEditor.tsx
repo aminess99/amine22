@@ -70,14 +70,14 @@ import { clearAll, loadSaved, saveAsset, saveProject } from '../../editor/persis
 import { audioFromRanges, clipsFromRanges, findSpeechRanges } from '../../editor/silence';
 import { applyTemplate } from '../../editor/templates';
 import { useHistory } from '../../editor/useHistory';
-import { commandContext, executeActions, requestCommand } from '../../editor/commands';
+import { commandContext, describeAction, executeActions, requestCommand } from '../../editor/commands';
 import { synthesizeSpeech } from '../../editor/tts';
 import { autoSfxTimes, sfxFile } from '../../editor/sfx';
 import { fxDef, newFxLayer } from '../../editor/proFx';
 import { BatchStatus, MAX_ANALYSIS_SECONDS, analyzeMany, batchFraction } from '../../editor/analysis';
-import { MAX_AUTO_FOOTAGE, buildFromPlan, requestPlan } from '../../editor/autoEdit';
+import { MAX_AUTO_FOOTAGE, buildFromPlan, requestPlan, reviewEdit } from '../../editor/autoEdit';
 import { AutoEditBrief, AutoEditPlan } from '../../editor/autoEditSpec';
-import { AutoEditModal, AutoEditStage } from './AutoEditModal';
+import { AutoEditModal, AutoEditReport, AutoEditStage } from './AutoEditModal';
 import { videoFps } from '../../editor/refine';
 import { EditAction } from '../../editor/commandSpec';
 import {
@@ -1327,24 +1327,64 @@ export function VideoEditor({ onBack, initialFiles, autoEdit }: VideoEditorProps
     if (autoStage.step !== 'plan' || !autoBrief.current) return;
     if (!isEmpty && !window.confirm('سيحل المونتاج الجديد محل ما في الخط الزمني الآن (يمكنك التراجع). متابعة؟')) return;
     const plan: AutoEditPlan = autoStage.plan;
+    const brief = autoBrief.current;
+    // Files made on the way (music, voice-over, sounds) join the map the reviewer and fixes use.
+    const known = new Map<string, MediaAsset>(assets);
+    const hooks = {
+      registerAsset: async (file: File) => {
+        const asset = await registerAsset(file);
+        known.set(asset.id, asset);
+        return asset;
+      },
+      saveAsset: (asset: MediaAsset) => {
+        known.set(asset.id, asset);
+        setAssetList((list) => list.map((x) => (x.id === asset.id ? asset : x)));
+        saveAsset(asset).catch(() => {});
+      },
+    };
+    let built;
     try {
-      const res = await buildFromPlan(plan, autoBrief.current, autoChosen.current, {
-        onStatus: (status, progress) => working(`ينفّذ المونتاج: ${status}`, progress),
-        registerAsset,
-        saveAsset: (asset) => {
-          setAssetList((list) => list.map((x) => (x.id === asset.id ? asset : x)));
-          saveAsset(asset).catch(() => {});
-        },
-      });
-      update(() => res.project);
-      setSelection(null);
-      setAutoOpen(false);
-      setNotice(res.notes.length ? [...new Set(res.notes)].join(' ') : `جاهز: «${plan.title}». شغّله، وعدّل ما تريد يدوياً أو بالأوامر.`);
-      seek(0);
+      built = await buildFromPlan(plan, brief, autoChosen.current, { ...hooks, onStatus: (status, progress) => working(`ينفّذ المونتاج: ${status}`, progress) });
     } catch (err) {
       setAutoStage({ step: 'error', message: err instanceof Error ? err.message : 'تعذر تنفيذ المونتاج.' });
+      return;
     }
+    update(() => built.project);
+    setSelection(null);
+    const report: AutoEditReport = { title: plan.title, score: null, summary: '', issues: [], fixes: [], rounds: 0, scoreBeforeFixes: false, notes: [...new Set<string>(built.notes)] };
+
+    // The reviewer watches the result and fixes what it finds; a second look only after big fixes.
+    let current = built.project;
+    for (let round = 1; brief.review && round <= 2; round++) {
+      try {
+        const library = [...known.values()];
+        const verdict = await reviewEdit(current, known, library, plan, brief, (status, progress) =>
+          working(`${round === 1 ? 'المراجعة الذكية' : 'مراجعة ثانية بعد الإصلاح'}: ${status}`, progress)
+        );
+        report.score = verdict.score;
+        report.scoreBeforeFixes = false;
+        report.summary = verdict.summary;
+        report.issues.push(...verdict.issues);
+        if (!verdict.actions.length) break;
+        working('المراجع يطبّق الإصلاحات...', null);
+        const fixed = await executeActions(current, known, library, verdict.actions, { ...hooks, onStatus: (status, progress) => working(`المراجع يطبّق الإصلاحات: ${status}`, progress) });
+        current = fixed.project;
+        update(() => current);
+        report.rounds++;
+        report.scoreBeforeFixes = true;
+        report.fixes.push(...(verdict.actions.map((a: EditAction) => describeAction(a)).filter(Boolean) as string[]));
+        report.notes.push(...fixed.notes);
+        if (verdict.ready || verdict.actions.length < 3) break;
+      } catch (err) {
+        report.notes.push(`لم تكتمل المراجعة: ${err instanceof Error ? err.message : ''}`);
+        break;
+      }
+    }
+    report.notes = [...new Set<string>(report.notes)];
+    seek(0);
+    setAutoStage({ step: 'done', report });
   };
+
 
   const badScenesRef = useRef<[number, number][]>([]);
   // Analysis results moved onto the timeline (only the parts the clips use).
@@ -1984,6 +2024,17 @@ export function VideoEditor({ onBack, initialFiles, autoEdit }: VideoEditorProps
           onBuild={buildAutoEdit}
           onBack={() => setAutoStage({ step: 'brief' })}
           onRetry={() => autoBrief.current && planAutoEdit(autoBrief.current)}
+          onExport={() => {
+            setAutoOpen(false);
+            pause();
+            setExporting(true);
+          }}
+          onUndoFixes={() => {
+            if (autoStage.step !== 'done') return;
+            for (let i = 0; i < autoStage.report.rounds; i++) undo();
+            setAutoOpen(false);
+            setNotice('رجعتُ إلى المونتاج كما بُني قبل إصلاحات المراجعة.');
+          }}
           onClose={() => {
             if (autoStage.step === 'working') return;
             setAutoOpen(false);

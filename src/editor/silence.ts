@@ -68,6 +68,19 @@ export async function findSpeechRanges(asset: MediaAsset, inPoint: number, outPo
   return padded.filter(([s, e]) => e - s >= 0.15);
 }
 
+// Speech ranges of whole files, by asset id (decoding audio is slow, so each file is read once).
+const wholeFile = new Map<string, Promise<[number, number][]>>();
+
+/** Speech ranges of a whole file in source seconds (cached; empty when it has no readable sound). */
+export function fileSpeech(asset: MediaAsset): Promise<[number, number][]> {
+  let job = wholeFile.get(asset.id);
+  if (!job) {
+    job = findSpeechRanges(asset, 0, asset.duration).catch(() => []);
+    wholeFile.set(asset.id, job);
+  }
+  return job;
+}
+
 /** Splits a clip into one clip per speech range. */
 export function clipsFromRanges(clip: MainClip, ranges: [number, number][]): MainClip[] {
   return ranges.map(([s, e], i) => ({
@@ -95,4 +108,53 @@ export function audioFromRanges(x: AudioClip, ranges: [number, number][]): Audio
     at += e - s;
     return piece;
   });
+}
+
+/** How a shot was placed around speech: its source range and the quiet before and after the words. */
+export interface SpeechFit {
+  start: number;
+  end: number;
+  /** Seconds of silence at the start / end of the range (Infinity when nobody speaks in it). */
+  head: number;
+  tail: number;
+  /** True when no pause was close enough and a word may still be cut. */
+  cutsWord: boolean;
+}
+
+/**
+ * Moves a shot's ends out of the middle of speech: the start goes back to where
+ * the sentence begins (or past it if that's far), the end goes on to where the
+ * sentence ends (or back before it), with a little room in the pause for a
+ * transition. `ranges` are a file's speech ranges (from fileSpeech).
+ */
+export function fitToSpeech(start: number, end: number, ranges: [number, number][], duration: number): SpeechFit {
+  const ROOM = 0.25;
+  const inside = (t: number) => ranges.findIndex(([a, b]) => t > a + 0.02 && t < b - 0.02);
+  let s = start;
+  let e = end;
+  const si = inside(s);
+  if (si >= 0) {
+    const [a, b] = ranges[si];
+    if (s - a <= 1.5) s = Math.max(ranges[si - 1]?.[1] ?? 0, a - ROOM);
+    // Close to the end of the sentence: start right after it instead.
+    else if (b - s <= 1) s = b;
+  }
+  const ei = inside(e);
+  if (ei >= 0) {
+    const [a, b] = ranges[ei];
+    if (b - e <= 2) e = Math.min(ranges[ei + 1]?.[0] ?? duration, b + ROOM);
+    // The sentence has barely begun: end just before it instead.
+    else if (e - a <= 1) e = a;
+  }
+  s = Math.max(0, s);
+  e = Math.min(duration, e);
+  if (e - s < 0.5) {
+    s = start;
+    e = end;
+  }
+  // The ranges include PADDING of quiet around the words; count it as silence.
+  const within = ranges.filter(([a, b]) => b > s && a < e);
+  const head = within.length ? Math.max(0, within[0][0] + PADDING - s) : Infinity;
+  const tail = within.length ? Math.max(0, e - (within[within.length - 1][1] - PADDING)) : Infinity;
+  return { start: s, end: e, head, tail, cutsWord: inside(s) >= 0 || inside(e) >= 0 };
 }

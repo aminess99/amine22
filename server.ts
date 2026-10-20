@@ -13,7 +13,7 @@ import { execFile, execSync } from "child_process";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import { commandSystemPrompt } from "./src/editor/commandSpec";
-import { autoEditSystemPrompt } from "./src/editor/autoEditSpec";
+import { autoEditSystemPrompt, reviewSystemPrompt } from "./src/editor/autoEditSpec";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -817,6 +817,49 @@ async function startServer() {
               role: "user",
               content: [
                 { type: "text", text: prompt },
+                { type: "video_url", video_url: { url: `data:${mime};base64,${data}` } },
+              ] as any,
+            },
+          ],
+        });
+        return parseJsonReply(response.choices[0]?.message?.content ?? "");
+      } finally {
+        cleanup();
+      }
+    });
+    res.status(202).json({ job });
+  });
+
+  // Auto edit review: the AI watches a light render of the finished edit and returns fixes as editing actions.
+  app.post("/api/auto-edit/review", visionUpload.single("video"), async (req, res) => {
+    const file = req.file;
+    const cleanup = () => file && fs.promises.unlink(file.path).catch(() => {});
+    const client = getOpenRouterClient();
+    if (!client) {
+      cleanup();
+      return res.status(503).json({ error: "OPENROUTER_API_KEY is not set" });
+    }
+    if (!file) return res.status(400).json({ error: "Missing video" });
+    const context = typeof req.body?.context === "string" ? req.body.context : "";
+    if (!context || context.length > 150_000 || visionLimited(req, 10)) {
+      cleanup();
+      return res.status(context ? 429 : 400).json({ error: context ? "Too many requests" : "Missing context" });
+    }
+    const job = startJob(async () => {
+      try {
+        const data = (await fs.promises.readFile(file.path)).toString("base64");
+        const mime = file.mimetype && file.mimetype.startsWith("video/") ? file.mimetype : "video/mp4";
+        const response = await client.chat.completions.create({
+          model: process.env.VISION_MODEL || "google/gemini-3.8-flash",
+          temperature: 0.2,
+          max_tokens: 6000,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: reviewSystemPrompt() },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: context },
                 { type: "video_url", video_url: { url: `data:${mime};base64,${data}` } },
               ] as any,
             },

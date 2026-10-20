@@ -4,6 +4,7 @@ import {
   Check,
   Clapperboard,
   Copy,
+  Download,
   Film,
   Image as ImageIcon,
   Loader2,
@@ -11,6 +12,7 @@ import {
   Music,
   Plus,
   RefreshCw,
+  ShieldCheck,
   Sparkles,
   Subtitles,
   Type,
@@ -31,7 +33,23 @@ export type AutoEditStage =
   | { step: 'brief' }
   | { step: 'working'; status: string; progress: number | null; files?: { asset: MediaAsset; status: BatchStatus }[] }
   | { step: 'plan'; plan: AutoEditPlan }
-  | { step: 'error'; message: string };
+  | { step: 'error'; message: string }
+  | { step: 'done'; report: AutoEditReport };
+
+/** What the reviewer found and fixed, shown when the edit is ready. */
+export interface AutoEditReport {
+  title: string;
+  /** Reviewer's score after its last look, or null when the review was off or failed. */
+  score: number | null;
+  summary: string;
+  issues: { time: number; problem: string; fix: string }[];
+  fixes: string[];
+  /** Undo steps the review added (one per round of fixes). */
+  rounds: number;
+  /** The score was given before the last fixes were applied. */
+  scoreBeforeFixes: boolean;
+  notes: string[];
+}
 
 interface Props {
   library: MediaAsset[];
@@ -49,6 +67,9 @@ interface Props {
   /** Tries the last step again (files already watched are not watched again). */
   onRetry?: () => void;
   onClose: () => void;
+  onExport: () => void;
+  /** Undoes the reviewer's fixes (keeps the edit as first built). */
+  onUndoFixes: () => void;
 }
 
 const ASPECTS: { id: AutoEditBrief['aspect']; label: string; hint: string }[] = [
@@ -110,7 +131,7 @@ const Chip: React.FC<{ active: boolean; onClick: () => void; children: React.Rea
 
 /** The auto edit ("مونتاج تلقائي") wizard: brief → AI watches and plans → review/revise → build. */
 export function AutoEditModal(props: Props) {
-  const { library, selected, onToggle, onAddFiles, loading, stage, notes, onPlan, onRevise, onBuild, onBack, onRetry, onClose } = props;
+  const { library, selected, onToggle, onAddFiles, loading, stage, notes, onPlan, onRevise, onBuild, onBack, onRetry, onClose, onExport, onUndoFixes } = props;
   const hasAudio = library.some((a) => a.kind === 'audio' && selected.has(a.id));
   const [brief, setBrief] = useState<AutoEditBrief>({
     aspect: '9:16',
@@ -121,6 +142,7 @@ export function AutoEditModal(props: Props) {
     captions: true,
     music: hasAudio ? 'library' : 'search',
     language: LANGUAGES[0],
+    review: true,
   });
   const [feedback, setFeedback] = useState('');
   // Keep a phone's screen on while the AI works, so the page isn't put to sleep mid-way.
@@ -274,6 +296,12 @@ export function AutoEditModal(props: Props) {
                 />
               </section>
 
+              <Chip active={brief.review} onClick={() => set({ review: !brief.review })}>
+                <span className="flex items-center justify-center gap-1.5">
+                  <ShieldCheck className="h-4 w-4" /> مراجعة ذكية بعد المونتاج {brief.review ? '✓' : ''}
+                  <span className="text-[10px] font-normal text-slate-400">(يشاهد النتيجة ويصلح الأخطاء)</span>
+                </span>
+              </Chip>
               <section className="grid gap-2 sm:grid-cols-3">
                 <Chip active={brief.captions} onClick={() => set({ captions: !brief.captions })}>
                   <span className="flex items-center justify-center gap-1.5"><Subtitles className="h-4 w-4" /> كابشن تلقائي {brief.captions ? '✓' : ''}</span>
@@ -355,9 +383,31 @@ export function AutoEditModal(props: Props) {
           )}
 
           {stage.step === 'plan' && <PlanView plan={stage.plan} library={chosen} notes={notes} />}
+          {stage.step === 'done' && <ReportView report={stage.report} />}
         </div>
 
         <div className="border-t border-white/5 p-3">
+          {stage.step === 'done' && (
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={onExport}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-l from-cyan-400 to-sky-500 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-500/20"
+              >
+                <Download className="h-4 w-4" /> تصدير الفيديو الآن
+              </button>
+              <div className="flex gap-2">
+                <button type="button" onClick={onClose} className="flex-1 rounded-xl bg-white/10 py-2.5 text-xs font-semibold text-white">
+                  شاهده وعدّل في المحرر
+                </button>
+                {stage.report.rounds > 0 && (
+                  <button type="button" onClick={onUndoFixes} className="rounded-xl bg-white/5 px-3 py-2.5 text-xs text-slate-300">
+                    تراجع عن إصلاحات المراجعة
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
           {stage.step === 'brief' && (
             <button
               type="button"
@@ -516,6 +566,55 @@ function PlanView({ plan, library, notes }: { plan: AutoEditPlan; library: Media
           <p className="select-text whitespace-pre-line text-xs text-slate-300">{publish}</p>
         </div>
       )}
+    </div>
+  );
+}
+
+function ReportView({ report }: { report: AutoEditReport }) {
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col items-center gap-2 py-2 text-center">
+        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/20">
+          <Check className="h-7 w-7 text-emerald-300" />
+        </div>
+        <h3 className="text-base font-extrabold text-white">«{report.title}» جاهز</h3>
+        {report.score !== null && (
+          <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-slate-200">
+            {report.scoreBeforeFixes ? 'تقييم المراجع قبل الإصلاحات' : 'تقييم المراجع الذكي'}: <b className={report.score >= 8 ? 'text-emerald-300' : report.score >= 6 ? 'text-amber-200' : 'text-red-300'}>{report.score}/10</b>
+          </span>
+        )}
+        {report.summary && <p className="max-w-lg text-xs leading-relaxed text-slate-300">{report.summary}</p>}
+      </div>
+      {report.fixes.length > 0 && (
+        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+          <h4 className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-emerald-200">
+            <ShieldCheck className="h-4 w-4" /> ما أصلحه المراجع
+          </h4>
+          <ul className="space-y-1 text-xs text-slate-200">
+            {report.fixes.map((f, i) => (
+              <li key={i}>✓ {f}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {report.issues.length > 0 && (
+        <div className="rounded-xl border border-white/5 bg-white/[0.03] p-3">
+          <h4 className="mb-1.5 text-xs font-bold text-slate-200">ما لاحظه أثناء المشاهدة</h4>
+          <ul className="space-y-1.5 text-xs">
+            {report.issues.map((x, i) => (
+              <li key={i} className="flex gap-2">
+                <span dir="ltr" className="shrink-0 tabular-nums text-slate-500">{formatTime(x.time)}</span>
+                <span className="text-slate-300">
+                  {x.problem}
+                  {x.fix && <span className="text-slate-500"> ← {x.fix}</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {report.notes.length > 0 && <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">{report.notes.join(' ')}</p>}
+      <p className="text-center text-[11px] text-slate-500">كل شيء على الخط الزمني الآن؛ يمكنك التعديل يدوياً أو بالأوامر قبل التصدير.</p>
     </div>
   );
 }
