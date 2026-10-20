@@ -1,6 +1,6 @@
 import { AUTO_STYLES, AutoEditBrief, AutoEditPlan, PlanSegment, PlanText, REVIEW_BLOCKED_OPS, ReviewResult } from './autoEditSpec';
 import { EditAction } from './commandSpec';
-import { waitForJob } from './jobs';
+import { connectionError, waitForJob } from './jobs';
 import { ExecuteHooks, commandContext, executeActions } from './commands';
 import { exportProject } from './exporter';
 import { CAPTION_STYLES, FILTER_PRESETS, MAX_IMAGE_DURATION, TEXT_PRESETS, TRANSITIONS, presetAdjustments } from './constants';
@@ -59,7 +59,7 @@ export async function requestPlan(brief: AutoEditBrief, library: MediaAsset[], p
     res = await fetch('/api/auto-edit/plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).catch(() => null);
     if (!res && attempt === 0) await new Promise((r) => setTimeout(r, 2000));
   }
-  if (!res) throw new Error('تعذر الاتصال بالخادم. تحقق من الإنترنت ثم اضغط «حاول مرة أخرى».');
+  if (!res) throw await connectionError();
   if (res.status === 404 || res.status === 405) throw new Error('المونتاج التلقائي يعمل على الموقع الكامل فقط.');
   if (res.status === 503) throw new Error('المونتاج التلقائي يحتاج مفتاح OpenRouter في إعدادات الخادم.');
   if (res.status === 429) throw new Error('طلبات كثيرة. انتظر دقيقة ثم حاول.');
@@ -316,7 +316,7 @@ export async function reviewEdit(
     res = await fetch('/api/auto-edit/review', { method: 'POST', body: form }).catch(() => null);
     if (!res && attempt === 0) await new Promise((r) => setTimeout(r, 2000));
   }
-  if (!res) throw new Error('تعذر الاتصال بالخادم للمراجعة.');
+  if (!res) throw await connectionError();
   if (res.status === 503) throw new Error('المراجعة تحتاج مفتاح OpenRouter في إعدادات الخادم.');
   if (res.status === 429) throw new Error('طلبات كثيرة. انتظر دقيقة ثم أعد المراجعة.');
   if (!res.ok) throw new Error('تعذرت المراجعة الآن.');

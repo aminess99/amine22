@@ -1,5 +1,5 @@
-import { waitForJob } from './jobs';
-import { ALL_FORMATS, BlobSource, BufferTarget, Conversion, Input, Mp4OutputFormat, Output, QUALITY_VERY_LOW } from 'mediabunny';
+import { connectionError, waitForJob } from './jobs';
+import { ALL_FORMATS, BlobSource, BufferTarget, Conversion, Input, Mp4OutputFormat, Output, QUALITY_VERY_LOW, WebMOutputFormat, getFirstEncodableAudioCodec, getFirstEncodableVideoCodec } from 'mediabunny';
 import { aiPickFrames, refineCut, refineMotion, refineOnset, snapToFrame, snapToSilence, videoFps } from './refine';
 import { MediaAsset, VideoAnalysis, VideoEvent, VideoScene } from './types';
 
@@ -7,20 +7,31 @@ export const MAX_ANALYSIS_SECONDS = 15 * 60;
 
 export type AnalysisProgress = { stage: 'proxy' | 'upload' | 'refine'; percent: number } | { stage: 'thinking' };
 
+/** Largest file sent as is when this browser can't make the small copy (the server holds it in memory). */
+const MAX_RAW_UPLOAD = 20 * 1024 * 1024;
+
 /**
  * A small copy of the video for the vision model: 360p, 2 frames a second,
  * mono 16 kHz sound. A phone uploads a few MB instead of the whole file.
+ * Uses whichever codecs this browser can encode (phones often lack AAC), as
+ * MP4 or WebM; without any audio encoder the copy is silent rather than missing.
  */
 async function makeProxy(asset: MediaAsset, onProgress: (p: number) => void): Promise<Blob> {
-  try {
+  const portrait = asset.height > asset.width;
+  const size = portrait ? { width: 360, height: Math.round((360 * asset.height) / Math.max(1, asset.width) / 2) * 2 } : { width: Math.round((360 * asset.width) / Math.max(1, asset.height) / 2) * 2, height: 360 };
+  const attempt = async (withAudio: boolean): Promise<Blob> => {
+    const videoCodec = await getFirstEncodableVideoCodec(['avc', 'vp9', 'vp8', 'av1'], { ...size, bitrate: QUALITY_VERY_LOW });
+    if (!videoCodec) throw new Error('no video encoder');
+    const audioCodec = withAudio ? await getFirstEncodableAudioCodec(['aac', 'opus'], { numberOfChannels: 1, sampleRate: 16000, bitrate: 32000 }) : null;
+    // MP4 for H.264 with AAC; anything else goes in WebM, which the vision model reads too.
+    const mp4 = videoCodec === 'avc' && (!audioCodec || audioCodec === 'aac');
     const input = new Input({ source: new BlobSource(asset.file), formats: ALL_FORMATS });
-    const output = new Output({ format: new Mp4OutputFormat({ fastStart: 'in-memory' }), target: new BufferTarget() });
-    const portrait = asset.height > asset.width;
+    const output = new Output({ format: mp4 ? new Mp4OutputFormat({ fastStart: 'in-memory' }) : new WebMOutputFormat(), target: new BufferTarget() });
     const conversion = await Conversion.init({
       input,
       output,
-      video: { ...(portrait ? { width: 360 } : { height: 360 }), frameRate: 2, codec: 'avc', bitrate: QUALITY_VERY_LOW, forceTranscode: true },
-      audio: { numberOfChannels: 1, sampleRate: 16000, codec: 'aac', bitrate: 32000, forceTranscode: true },
+      video: { ...(portrait ? { width: 360 } : { height: 360 }), frameRate: 2, codec: videoCodec, bitrate: QUALITY_VERY_LOW, forceTranscode: true },
+      audio: audioCodec ? { numberOfChannels: 1, sampleRate: 16000, codec: audioCodec, bitrate: 32000, forceTranscode: true } : { discard: true },
       showWarnings: false,
     });
     if (!conversion.isValid) throw new Error('invalid');
@@ -28,11 +39,18 @@ async function makeProxy(asset: MediaAsset, onProgress: (p: number) => void): Pr
     await conversion.execute();
     const buffer = (output.target as BufferTarget).buffer;
     if (!buffer) throw new Error('empty');
-    return new Blob([buffer], { type: 'video/mp4' });
+    return new Blob([buffer], { type: mp4 ? 'video/mp4' : 'video/webm' });
+  };
+  try {
+    return await attempt(true);
   } catch {
-    // No encoder on this browser: send the original when it's small enough.
-    if (asset.file.size <= 60 * 1024 * 1024) return asset.file;
-    throw new Error('تعذر تجهيز الفيديو للتحليل على هذا المتصفح. جرّب فيديو أصغر أو متصفح Chrome.');
+    try {
+      return await attempt(false);
+    } catch {
+      // No encoder at all: only a small file may go as it is.
+      if (asset.file.size <= MAX_RAW_UPLOAD) return asset.file;
+      throw new Error('هذا المتصفح لا يستطيع تجهيز نسخة خفيفة من هذا الفيديو، والفيديو أكبر من أن يُرسل كما هو. جرّب Chrome حديثاً أو فيديو أقصر.');
+    }
   }
 }
 
@@ -43,7 +61,7 @@ function upload(blob: Blob, duration: number, onProgress: (p: AnalysisProgress) 
     xhr.responseType = 'json';
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress({ stage: 'upload', percent: Math.round((e.loaded / e.total) * 100) });
     xhr.upload.onload = () => onProgress({ stage: 'thinking' });
-    xhr.onerror = () => reject(new Error('تعذر الاتصال بالخادم.'));
+    xhr.onerror = () => connectionError().then(reject);
     xhr.onload = () => {
       if (xhr.status === 404 || xhr.status === 405) return reject(new Error('تحليل الفيديو يعمل على الموقع الكامل فقط.'));
       if (xhr.status === 503) return reject(new Error('تحليل الفيديو يحتاج مفتاح OpenRouter في إعدادات الخادم.'));
@@ -59,7 +77,7 @@ function upload(blob: Blob, duration: number, onProgress: (p: AnalysisProgress) 
     };
     const form = new FormData();
     form.append('duration', String(duration));
-    form.append('video', blob, 'proxy.mp4');
+    form.append('video', blob, blob.type === 'video/webm' ? 'proxy.webm' : 'proxy.mp4');
     xhr.send(form);
   });
 }
