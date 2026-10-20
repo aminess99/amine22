@@ -6,6 +6,7 @@ import multer from "multer";
 import OpenAI from "openai";
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import dotenv from "dotenv";
 import os from "os";
 import { execFile, execSync } from "child_process";
@@ -477,6 +478,33 @@ async function startServer() {
     }
   });
 
+  // Long AI jobs (planning, video analysis) run in the background: the request returns a job id at
+  // once and the browser polls it, so a dropped connection (phone screen off, network switch, proxy
+  // timeout) doesn't lose the result.
+  type Job = { status: "running" | "done" | "error"; result?: unknown; at: number };
+  const jobs = new Map<string, Job>();
+  const startJob = (run: () => Promise<unknown>) => {
+    const now = Date.now();
+    for (const [id, j] of jobs) if (now - j.at > 30 * 60_000) jobs.delete(id);
+    const id = crypto.randomUUID();
+    const job: Job = { status: "running", at: now };
+    jobs.set(id, job);
+    run()
+      .then((result) => Object.assign(job, { status: "done", result }))
+      .catch((error) => {
+        console.error("Job failed:", error);
+        job.status = "error";
+      });
+    return id;
+  };
+  app.get("/api/jobs/:id", (req, res) => {
+    const job = jobs.get(req.params.id);
+    if (!job) return res.status(404).json({ error: "Unknown job" });
+    if (job.status === "running") return res.status(202).json({ status: "running" });
+    if (job.status === "error") return res.status(502).json({ status: "error" });
+    res.json({ status: "done", result: job.result });
+  });
+
   // Auto edit: the AI plans a whole video from the analysed footage (and revises the plan on feedback).
   const planHits = new Map<string, number[]>();
   app.post("/api/auto-edit/plan", async (req, res) => {
@@ -500,7 +528,7 @@ async function startServer() {
 
     const parts = [`Brief:\n${brief}`, `Materials:\n${materials}`];
     if (previous) parts.push(`Your previous plan:\n${previous}`, `The user wants these changes (keep everything else): ${feedback || "improve it"}\nReturn the full updated plan.`);
-    try {
+    const job = startJob(async () => {
       const response = await client.chat.completions.create({
         model: process.env.PLAN_MODEL || "google/gemini-3.8-flash",
         temperature: 0.4,
@@ -512,11 +540,9 @@ async function startServer() {
         ],
       });
       const raw = response.choices[0]?.message?.content ?? "";
-      res.json(JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1)));
-    } catch (error) {
-      console.error("Auto edit plan failed:", error);
-      res.status(502).json({ error: "Plan failed" });
-    }
+      return JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
+    });
+    res.status(202).json({ job });
   });
 
   // Caption rewriting (translate, change dialect, fix spelling): lines in, the same number of lines out.
@@ -757,51 +783,51 @@ async function startServer() {
       return res.status(429).json({ error: "Too many requests" });
     }
     const duration = Number(req.body?.duration) || 0;
-    try {
-      const data = (await fs.promises.readFile(file.path)).toString("base64");
-      const mime = file.mimetype && file.mimetype.startsWith("video/") ? file.mimetype : "video/mp4";
-      const prompt = [
-        "Watch and listen to this video carefully. Return ONLY a JSON object with this shape:",
-        "{",
-        '  "summary": "2-3 sentences about the video",',
-        '  "language": "main spoken language code or none",',
-        '  "scenes": [{"start": s, "end": s, "description": "what is visible and happening", "quality": "good|blurry|dark|shaky|boring", "interest": 0-10}],',
-        '  "events": [{"time": s, "label": "short description", "kind": "cut|action|impact|expression|appear|text|gesture|speech"}],',
-        '  "subject": [{"time": s, "x": 0-1, "y": 0-1}],',
-        '  "highlights": [{"start": s, "end": s, "title": "catchy short title", "reason": "why it works", "score": 0-10}],',
-        '  "title": "video title", "description": "post description", "hashtags": ["#tag"], "thumbnail_time": s',
-        "}",
-        "Rules:",
-        "- Times are seconds from the start of THIS file, with decimals, as precise as you can.",
-        `- The video is ${duration ? duration.toFixed(2) : "unknown"} seconds long; never return times past the end.`,
-        "- scenes cover the whole video back to back; start a new scene at every camera cut or clear change of shot.",
-        "- events: 10-60 notable moments: actions (jump, throw, fall), impacts/sudden sounds, facial expressions (smile, laugh, surprise), objects or people appearing, on-screen text, gestures, and key spoken lines.",
-        "- subject: where the main subject (usually a person's face) is in the frame, once per second, x/y as fractions of width/height.",
-        "- highlights: 1-5 self-contained moments of 15-60 s that would work as TikTok/Reels shorts, best first. Start and end at sentence boundaries.",
-        "- Write summary, descriptions, labels, titles, description and reasons in the video's spoken language (Arabic if it is Arabic or there is no speech).",
-      ].join("\n");
-      const response = await client.chat.completions.create({
-        model: process.env.VISION_MODEL || "google/gemini-3.8-flash",
-        temperature: 0.2,
-        max_tokens: 12000,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: prompt },
-              { type: "video_url", video_url: { url: `data:${mime};base64,${data}` } },
-            ] as any,
-          },
-        ],
-      });
-      res.json(parseJsonReply(response.choices[0]?.message?.content ?? ""));
-    } catch (error) {
-      console.error("Video analysis failed:", error);
-      res.status(502).json({ error: "Analysis failed" });
-    } finally {
-      cleanup();
-    }
+    const job = startJob(async () => {
+      try {
+        const data = (await fs.promises.readFile(file.path)).toString("base64");
+        const mime = file.mimetype && file.mimetype.startsWith("video/") ? file.mimetype : "video/mp4";
+        const prompt = [
+          "Watch and listen to this video carefully. Return ONLY a JSON object with this shape:",
+          "{",
+          '  "summary": "2-3 sentences about the video",',
+          '  "language": "main spoken language code or none",',
+          '  "scenes": [{"start": s, "end": s, "description": "what is visible and happening", "quality": "good|blurry|dark|shaky|boring", "interest": 0-10}],',
+          '  "events": [{"time": s, "label": "short description", "kind": "cut|action|impact|expression|appear|text|gesture|speech"}],',
+          '  "subject": [{"time": s, "x": 0-1, "y": 0-1}],',
+          '  "highlights": [{"start": s, "end": s, "title": "catchy short title", "reason": "why it works", "score": 0-10}],',
+          '  "title": "video title", "description": "post description", "hashtags": ["#tag"], "thumbnail_time": s',
+          "}",
+          "Rules:",
+          "- Times are seconds from the start of THIS file, with decimals, as precise as you can.",
+          `- The video is ${duration ? duration.toFixed(2) : "unknown"} seconds long; never return times past the end.`,
+          "- scenes cover the whole video back to back; start a new scene at every camera cut or clear change of shot.",
+          "- events: 10-60 notable moments: actions (jump, throw, fall), impacts/sudden sounds, facial expressions (smile, laugh, surprise), objects or people appearing, on-screen text, gestures, and key spoken lines.",
+          "- subject: where the main subject (usually a person's face) is in the frame, once per second, x/y as fractions of width/height.",
+          "- highlights: 1-5 self-contained moments of 15-60 s that would work as TikTok/Reels shorts, best first. Start and end at sentence boundaries.",
+          "- Write summary, descriptions, labels, titles, description and reasons in the video's spoken language (Arabic if it is Arabic or there is no speech).",
+        ].join("\n");
+        const response = await client.chat.completions.create({
+          model: process.env.VISION_MODEL || "google/gemini-3.8-flash",
+          temperature: 0.2,
+          max_tokens: 12000,
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: prompt },
+                { type: "video_url", video_url: { url: `data:${mime};base64,${data}` } },
+              ] as any,
+            },
+          ],
+        });
+        return parseJsonReply(response.choices[0]?.message?.content ?? "");
+      } finally {
+        cleanup();
+      }
+    });
+    res.status(202).json({ job });
   });
 
   // Frame-level pick: for each question, numbered stills around a moment; the model names the frame.

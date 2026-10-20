@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { AUTO_STYLES, AutoEditBrief, AutoEditPlan } from '../../editor/autoEditSpec';
 import { MAX_AUTO_FOOTAGE, planDuration } from '../../editor/autoEdit';
+import { BatchStatus } from '../../editor/analysis';
 import { CAPTION_STYLES, FILTER_PRESETS, TRANSITIONS } from '../../editor/constants';
 import { fxDef } from '../../editor/proFxCatalog';
 import { TEXT_TEMPLATES } from '../../editor/textTemplates';
@@ -28,7 +29,7 @@ import { cn } from '../../lib/utils';
 
 export type AutoEditStage =
   | { step: 'brief' }
-  | { step: 'working'; status: string; progress: number | null }
+  | { step: 'working'; status: string; progress: number | null; files?: { asset: MediaAsset; status: BatchStatus }[] }
   | { step: 'plan'; plan: AutoEditPlan }
   | { step: 'error'; message: string };
 
@@ -45,6 +46,8 @@ interface Props {
   onRevise: (feedback: string) => void;
   onBuild: () => void;
   onBack: () => void;
+  /** Tries the last step again (files already watched are not watched again). */
+  onRetry?: () => void;
   onClose: () => void;
 }
 
@@ -56,6 +59,28 @@ const ASPECTS: { id: AutoEditBrief['aspect']; label: string; hint: string }[] = 
 ];
 const LENGTHS = [15, 30, 60, 90];
 const LANGUAGES = ['العربية الفصحى', 'الدارجة المغربية', 'اللهجة الخليجية', 'اللهجة المصرية', 'English', 'Français'];
+
+/** One file's line in the progress list. */
+function fileStatus(s: BatchStatus): string {
+  switch (s.stage) {
+    case 'waiting':
+      return 'في الانتظار';
+    case 'queued':
+      return s.at < 0.5 ? 'جاهز، ينتظر دوره عند الذكاء الاصطناعي' : 'شاهده الذكاء الاصطناعي، ينتظر تدقيق التوقيت';
+    case 'proxy':
+      return `تجهيز نسخة خفيفة... ${s.percent}%`;
+    case 'upload':
+      return `رفع... ${s.percent}%`;
+    case 'thinking':
+      return 'الذكاء الاصطناعي يشاهده الآن...';
+    case 'refine':
+      return `تدقيق التوقيت بالإطار... ${s.percent}%`;
+    case 'done':
+      return 'تمت المشاهدة';
+    case 'error':
+      return s.message;
+  }
+}
 
 const label = (list: { id: string; label: string }[], id: string | null | undefined) => list.find((x) => x.id === id)?.label ?? id ?? '';
 
@@ -85,7 +110,7 @@ const Chip: React.FC<{ active: boolean; onClick: () => void; children: React.Rea
 
 /** The auto edit ("مونتاج تلقائي") wizard: brief → AI watches and plans → review/revise → build. */
 export function AutoEditModal(props: Props) {
-  const { library, selected, onToggle, onAddFiles, loading, stage, notes, onPlan, onRevise, onBuild, onBack, onClose } = props;
+  const { library, selected, onToggle, onAddFiles, loading, stage, notes, onPlan, onRevise, onBuild, onBack, onRetry, onClose } = props;
   const hasAudio = library.some((a) => a.kind === 'audio' && selected.has(a.id));
   const [brief, setBrief] = useState<AutoEditBrief>({
     aspect: '9:16',
@@ -98,6 +123,18 @@ export function AutoEditModal(props: Props) {
     language: LANGUAGES[0],
   });
   const [feedback, setFeedback] = useState('');
+  // Keep a phone's screen on while the AI works, so the page isn't put to sleep mid-way.
+  const busy = stage.step === 'working';
+  useEffect(() => {
+    if (!busy) return;
+    let lock: { release: () => Promise<void> } | null = null;
+    const nav = navigator as Navigator & { wakeLock?: { request: (type: 'screen') => Promise<{ release: () => Promise<void> }> } };
+    nav.wakeLock?.request('screen').then((l) => (lock = l)).catch(() => {});
+    return () => {
+      lock?.release().catch(() => {});
+    };
+  }, [busy]);
+
   // Files picked on the home page finish loading after the wizard opens.
   useEffect(() => {
     if (hasAudio) setBrief((b) => (b.music === 'search' ? { ...b, music: 'library' } : b));
@@ -271,16 +308,49 @@ export function AutoEditModal(props: Props) {
                   <div className="h-full bg-gradient-to-l from-fuchsia-500 to-indigo-500 transition-all" style={{ width: `${Math.round(stage.progress * 100)}%` }} />
                 </div>
               )}
-              <p className="text-[11px] text-slate-500">لا تغلق الصفحة.</p>
+              {stage.files && stage.files.length > 0 && (
+                <ul className="w-full max-w-md space-y-1.5 text-right">
+                  {stage.files.map(({ asset, status }) => (
+                    <li key={asset.id} className="flex items-center gap-2.5 rounded-xl border border-white/5 bg-white/[0.03] p-1.5">
+                      <div className="h-10 w-10 shrink-0 overflow-hidden rounded-lg">
+                        <Thumb asset={asset} time={0} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[11px] text-slate-300">{asset.name}</p>
+                        <p className={cn('text-[11px] font-semibold', status.stage === 'done' ? 'text-emerald-300' : status.stage === 'error' ? 'text-red-300' : 'text-slate-100')}>
+                          {fileStatus(status)}
+                        </p>
+                      </div>
+                      {status.stage === 'done' ? (
+                        <Check className="h-4 w-4 shrink-0 text-emerald-400" />
+                      ) : status.stage === 'error' ? (
+                        <X className="h-4 w-4 shrink-0 text-red-400" />
+                      ) : status.stage === 'waiting' ? null : (
+                        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-fuchsia-300" />
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-[11px] text-slate-500">لا تغلق الصفحة. إذا انقطع الإنترنت لحظة يكمل وحده.</p>
             </div>
           )}
 
           {stage.step === 'error' && (
             <div className="space-y-3 py-10 text-center">
               <p className="text-sm text-red-300">{stage.message}</p>
-              <button type="button" onClick={onBack} className="rounded-xl bg-white/10 px-4 py-2 text-xs text-white">
-                رجوع
-              </button>
+              {notes.length > 0 && <p className="mx-auto max-w-md text-[11px] text-amber-200">{notes.join(' ')}</p>}
+              <div className="flex justify-center gap-2">
+                {onRetry && (
+                  <button type="button" onClick={onRetry} className="flex items-center gap-1.5 rounded-xl bg-gradient-to-l from-fuchsia-600 to-indigo-600 px-4 py-2 text-xs font-bold text-white">
+                    <RefreshCw className="h-3.5 w-3.5" /> حاول مرة أخرى
+                  </button>
+                )}
+                <button type="button" onClick={onBack} className="rounded-xl bg-white/10 px-4 py-2 text-xs text-white">
+                  رجوع للإعدادات
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-500">الفيديوهات التي شوهدت لا تُشاهد مرة أخرى.</p>
             </div>
           )}
 

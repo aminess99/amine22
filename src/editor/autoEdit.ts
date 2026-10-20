@@ -1,5 +1,6 @@
 import { AUTO_STYLES, AutoEditBrief, AutoEditPlan, PlanSegment, PlanText } from './autoEditSpec';
 import { EditAction } from './commandSpec';
+import { waitForJob } from './jobs';
 import { ExecuteHooks, executeActions } from './commands';
 import { CAPTION_STYLES, FILTER_PRESETS, MAX_IMAGE_DURATION, TEXT_PRESETS, TRANSITIONS, presetAdjustments } from './constants';
 import { isProFx, newFxLayer } from './proFxCatalog';
@@ -45,26 +46,26 @@ export function materialsContext(library: MediaAsset[]) {
 /** Asks the AI for a plan, or for a revised one when `previous` and `feedback` are given. */
 export async function requestPlan(brief: AutoEditBrief, library: MediaAsset[], previous?: AutoEditPlan, feedback?: string): Promise<AutoEditPlan> {
   const style = AUTO_STYLES.find((s) => s.id === brief.style);
-  let res: Response;
-  try {
-    res = await fetch('/api/auto-edit/plan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        brief: { ...brief, style: style ? `${style.id}: ${style.hint}` : brief.style },
-        materials: materialsContext(library),
-        previous,
-        feedback,
-      }),
-    });
-  } catch {
-    throw new Error('تعذر الاتصال بالخادم. تحقق من الإنترنت.');
+  const body = JSON.stringify({
+    brief: { ...brief, style: style ? `${style.id}: ${style.hint}` : brief.style },
+    materials: materialsContext(library),
+    previous,
+    feedback,
+  });
+  let res: Response | null = null;
+  // Starting the job is quick; retry it once if the network blinks.
+  for (let attempt = 0; attempt < 2 && !res; attempt++) {
+    res = await fetch('/api/auto-edit/plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).catch(() => null);
+    if (!res && attempt === 0) await new Promise((r) => setTimeout(r, 2000));
   }
+  if (!res) throw new Error('تعذر الاتصال بالخادم. تحقق من الإنترنت ثم اضغط «حاول مرة أخرى».');
   if (res.status === 404 || res.status === 405) throw new Error('المونتاج التلقائي يعمل على الموقع الكامل فقط.');
   if (res.status === 503) throw new Error('المونتاج التلقائي يحتاج مفتاح OpenRouter في إعدادات الخادم.');
   if (res.status === 429) throw new Error('طلبات كثيرة. انتظر دقيقة ثم حاول.');
   if (!res.ok) throw new Error('تعذر إعداد الخطة الآن. حاول مرة أخرى.');
-  const plan = validatePlan(await res.json(), brief, library);
+  const data = await res.json();
+  const raw = res.status === 202 && data.job ? await waitForJob(data.job) : data;
+  const plan = validatePlan(raw, brief, library);
   if (!plan.segments.length) throw new Error('لم يتمكن الذكاء الاصطناعي من اختيار مشاهد من ملفاتك. أضف فيديوهات أو صوراً وحاول مرة أخرى.');
   return plan;
 }
