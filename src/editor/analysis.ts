@@ -1,3 +1,4 @@
+import { waitForJob } from './jobs';
 import { ALL_FORMATS, BlobSource, BufferTarget, Conversion, Input, Mp4OutputFormat, Output, QUALITY_VERY_LOW } from 'mediabunny';
 import { aiPickFrames, refineCut, refineMotion, refineOnset, snapToFrame, snapToSilence, videoFps } from './refine';
 import { MediaAsset, VideoAnalysis, VideoEvent, VideoScene } from './types';
@@ -49,6 +50,8 @@ function upload(blob: Blob, duration: number, onProgress: (p: AnalysisProgress) 
       if (xhr.status === 429) return reject(new Error('حللت فيديوهات كثيرة في وقت قصير. انتظر قليلاً ثم حاول.'));
       if (xhr.status === 413) return reject(new Error('الفيديو كبير جداً للتحليل.'));
       if (xhr.status < 200 || xhr.status >= 300 || !xhr.response) return reject(new Error('تعذر تحليل الفيديو الآن. حاول مرة أخرى.'));
+      // The server watches the video in the background; wait for the result.
+      if (xhr.status === 202 && xhr.response.job) return resolve(waitForJob(xhr.response.job));
       resolve(xhr.response);
     };
     const form = new FormData();

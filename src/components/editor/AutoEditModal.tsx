@@ -45,6 +45,8 @@ interface Props {
   onRevise: (feedback: string) => void;
   onBuild: () => void;
   onBack: () => void;
+  /** Tries the last step again (files already watched are not watched again). */
+  onRetry?: () => void;
   onClose: () => void;
 }
 
@@ -85,7 +87,7 @@ const Chip: React.FC<{ active: boolean; onClick: () => void; children: React.Rea
 
 /** The auto edit ("مونتاج تلقائي") wizard: brief → AI watches and plans → review/revise → build. */
 export function AutoEditModal(props: Props) {
-  const { library, selected, onToggle, onAddFiles, loading, stage, notes, onPlan, onRevise, onBuild, onBack, onClose } = props;
+  const { library, selected, onToggle, onAddFiles, loading, stage, notes, onPlan, onRevise, onBuild, onBack, onRetry, onClose } = props;
   const hasAudio = library.some((a) => a.kind === 'audio' && selected.has(a.id));
   const [brief, setBrief] = useState<AutoEditBrief>({
     aspect: '9:16',
@@ -98,6 +100,18 @@ export function AutoEditModal(props: Props) {
     language: LANGUAGES[0],
   });
   const [feedback, setFeedback] = useState('');
+  // Keep a phone's screen on while the AI works, so the page isn't put to sleep mid-way.
+  const busy = stage.step === 'working';
+  useEffect(() => {
+    if (!busy) return;
+    let lock: { release: () => Promise<void> } | null = null;
+    const nav = navigator as Navigator & { wakeLock?: { request: (type: 'screen') => Promise<{ release: () => Promise<void> }> } };
+    nav.wakeLock?.request('screen').then((l) => (lock = l)).catch(() => {});
+    return () => {
+      lock?.release().catch(() => {});
+    };
+  }, [busy]);
+
   // Files picked on the home page finish loading after the wizard opens.
   useEffect(() => {
     if (hasAudio) setBrief((b) => (b.music === 'search' ? { ...b, music: 'library' } : b));
@@ -271,16 +285,25 @@ export function AutoEditModal(props: Props) {
                   <div className="h-full bg-gradient-to-l from-fuchsia-500 to-indigo-500 transition-all" style={{ width: `${Math.round(stage.progress * 100)}%` }} />
                 </div>
               )}
-              <p className="text-[11px] text-slate-500">لا تغلق الصفحة.</p>
+              <p className="text-[11px] text-slate-500">لا تغلق الصفحة. إذا انقطع الإنترنت لحظة يكمل وحده.</p>
             </div>
           )}
 
           {stage.step === 'error' && (
             <div className="space-y-3 py-10 text-center">
               <p className="text-sm text-red-300">{stage.message}</p>
-              <button type="button" onClick={onBack} className="rounded-xl bg-white/10 px-4 py-2 text-xs text-white">
-                رجوع
-              </button>
+              {notes.length > 0 && <p className="mx-auto max-w-md text-[11px] text-amber-200">{notes.join(' ')}</p>}
+              <div className="flex justify-center gap-2">
+                {onRetry && (
+                  <button type="button" onClick={onRetry} className="flex items-center gap-1.5 rounded-xl bg-gradient-to-l from-fuchsia-600 to-indigo-600 px-4 py-2 text-xs font-bold text-white">
+                    <RefreshCw className="h-3.5 w-3.5" /> حاول مرة أخرى
+                  </button>
+                )}
+                <button type="button" onClick={onBack} className="rounded-xl bg-white/10 px-4 py-2 text-xs text-white">
+                  رجوع للإعدادات
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-500">الفيديوهات التي شوهدت لا تُشاهد مرة أخرى.</p>
             </div>
           )}
 

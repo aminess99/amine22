@@ -1952,6 +1952,7 @@ export function VideoEditor({ onBack, initialFiles, autoEdit }: VideoEditorProps
           onRevise={reviseAutoEdit}
           onBuild={buildAutoEdit}
           onBack={() => setAutoStage({ step: 'brief' })}
+          onRetry={() => autoBrief.current && planAutoEdit(autoBrief.current)}
           onClose={() => {
             if (autoStage.step === 'working') return;
             setAutoOpen(false);
