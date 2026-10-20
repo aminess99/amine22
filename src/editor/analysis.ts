@@ -51,7 +51,10 @@ function upload(blob: Blob, duration: number, onProgress: (p: AnalysisProgress) 
       if (xhr.status === 413) return reject(new Error('الفيديو كبير جداً للتحليل.'));
       if (xhr.status < 200 || xhr.status >= 300 || !xhr.response) return reject(new Error('تعذر تحليل الفيديو الآن. حاول مرة أخرى.'));
       // The server watches the video in the background; wait for the result.
-      if (xhr.status === 202 && xhr.response.job) return resolve(waitForJob(xhr.response.job));
+      if (xhr.status === 202 && xhr.response.job) {
+        onProgress({ stage: 'thinking' });
+        return resolve(waitForJob(xhr.response.job));
+      }
       resolve(xhr.response);
     };
     const form = new FormData();
@@ -166,30 +169,100 @@ async function refine(asset: MediaAsset, a: VideoAnalysis, onProgress: (p: numbe
   return { ...a, scenes, events: events.sort((x, y) => x.time - y.time), highlights, thumbnailTime: snap(a.thumbnailTime) };
 }
 
-/** Analyses a video with the vision model and refines the result to frames. */
-export async function analyzeVideo(asset: MediaAsset, onProgress: (p: AnalysisProgress) => void): Promise<VideoAnalysis> {
-  if (asset.kind !== 'video') throw new Error('التحليل للفيديو فقط.');
-  if (asset.duration > MAX_ANALYSIS_SECONDS) throw new Error(`تحليل الفيديو متاح حتى ${MAX_ANALYSIS_SECONDS / 60} دقيقة.`);
-  onProgress({ stage: 'proxy', percent: 0 });
-  const proxy = await makeProxy(asset, (percent) => onProgress({ stage: 'proxy', percent }));
-  onProgress({ stage: 'upload', percent: 0 });
-  const raw = await upload(proxy, asset.duration, onProgress);
-  const analysis = normalize(raw, asset.duration);
-  if (!analysis.scenes.length && !analysis.events.length) throw new Error('لم يتمكن الذكاء الاصطناعي من فهم هذا الفيديو. حاول مرة أخرى.');
-  onProgress({ stage: 'refine', percent: 0 });
-  return refine(asset, analysis, (percent) => onProgress({ stage: 'refine', percent }));
+/** Where one file is in a batch analysis. */
+export type BatchStatus =
+  | { stage: 'waiting' }
+  /** Between steps, waiting for its turn; `at` is how far it got (0..1). */
+  | { stage: 'queued'; at: number }
+  | { stage: 'proxy' | 'upload' | 'refine'; percent: number }
+  | { stage: 'thinking' }
+  | { stage: 'done' }
+  | { stage: 'error'; message: string };
+
+/** Runs at most `limit` tasks at a time. */
+function limiter(limit: number) {
+  let active = 0;
+  const queue: (() => void)[] = [];
+  return async <T>(task: () => Promise<T>): Promise<T> => {
+    if (active >= limit) await new Promise<void>((r) => queue.push(r));
+    active++;
+    try {
+      return await task();
+    } finally {
+      active--;
+      queue.shift()?.();
+    }
+  };
 }
 
-/** Progress as a short Arabic status line and a 0..1 bar position. */
-export function progressText(p: AnalysisProgress): { text: string; bar: number | null } {
-  switch (p.stage) {
+/** Videos the AI watches at the same time. */
+const AI_PARALLEL = 3;
+
+/**
+ * Analyses several videos as a pipeline: the phone prepares and checks one video
+ * at a time (that work is heavy), while the AI watches up to three at once (that
+ * part is only waiting). One failed file doesn't stop the others.
+ */
+export async function analyzeMany(
+  assets: MediaAsset[],
+  onStatus: (assetId: string, status: BatchStatus) => void,
+  onDone: (asset: MediaAsset, analysis: VideoAnalysis) => void | Promise<void>
+): Promise<{ done: number; errors: { asset: MediaAsset; message: string }[] }> {
+  const device = limiter(1);
+  const ai = limiter(AI_PARALLEL);
+  const errors: { asset: MediaAsset; message: string }[] = [];
+  let done = 0;
+  assets.forEach((a) => onStatus(a.id, { stage: 'waiting' }));
+  await Promise.all(
+    assets.map(async (asset) => {
+      try {
+        if (asset.kind !== 'video') throw new Error('التحليل للفيديو فقط.');
+        if (asset.duration > MAX_ANALYSIS_SECONDS) throw new Error(`التحليل متاح حتى ${MAX_ANALYSIS_SECONDS / 60} دقيقة.`);
+        const proxy = await device(() => {
+          onStatus(asset.id, { stage: 'proxy', percent: 0 });
+          return makeProxy(asset, (percent) => onStatus(asset.id, { stage: 'proxy', percent }));
+        });
+        onStatus(asset.id, { stage: 'queued', at: 0.2 });
+        const raw = await ai(() => {
+          onStatus(asset.id, { stage: 'upload', percent: 0 });
+          return upload(proxy, asset.duration, (p) => onStatus(asset.id, p.stage === 'thinking' ? p : { stage: 'upload', percent: p.percent }));
+        });
+        const analysis = normalize(raw, asset.duration);
+        if (!analysis.scenes.length && !analysis.events.length) throw new Error('لم يتمكن الذكاء الاصطناعي من فهم هذا الفيديو.');
+        onStatus(asset.id, { stage: 'queued', at: 0.8 });
+        const refined = await device(() => {
+          onStatus(asset.id, { stage: 'refine', percent: 0 });
+          return refine(asset, analysis, (percent) => onStatus(asset.id, { stage: 'refine', percent }));
+        });
+        await onDone(asset, refined);
+        done++;
+        onStatus(asset.id, { stage: 'done' });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'تعذر التحليل.';
+        errors.push({ asset, message });
+        onStatus(asset.id, { stage: 'error', message });
+      }
+    })
+  );
+  return { done, errors };
+}
+
+/** Share of one file's analysis that is complete (0..1), for an overall bar. */
+export function batchFraction(s: BatchStatus): number {
+  switch (s.stage) {
+    case 'waiting':
+      return 0;
+    case 'queued':
+      return s.at;
     case 'proxy':
-      return { text: `تجهيز نسخة خفيفة من الفيديو... ${p.percent}%`, bar: p.percent / 400 };
+      return (s.percent / 100) * 0.2;
     case 'upload':
-      return { text: `رفع الفيديو... ${p.percent}%`, bar: 0.25 + p.percent / 400 };
+      return 0.2 + (s.percent / 100) * 0.15;
     case 'thinking':
-      return { text: 'الذكاء الاصطناعي يشاهد الفيديو... قد يأخذ دقيقة.', bar: 0.6 };
+      return 0.45;
     case 'refine':
-      return { text: `تدقيق التوقيت على مستوى الإطار... ${p.percent}%`, bar: 0.75 + p.percent / 400 };
+      return 0.8 + (s.percent / 100) * 0.2;
+    default:
+      return 1;
   }
 }

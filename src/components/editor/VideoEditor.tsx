@@ -64,7 +64,7 @@ import {
   textProgress,
   textTransformAt,
 } from '../../editor/timeline';
-import { AspectRatio, AudioClip, EffectItem, MainClip, MediaAsset, OverlayClip, Project, Selection, TextClip, TransitionType } from '../../editor/types';
+import { AspectRatio, AudioClip, EffectItem, MainClip, MediaAsset, OverlayClip, Project, Selection, TextClip, TransitionType, VideoAnalysis } from '../../editor/types';
 import { emojiFor, generateCaptions } from '../../editor/autoCaptions';
 import { clearAll, loadSaved, saveAsset, saveProject } from '../../editor/persistence';
 import { audioFromRanges, clipsFromRanges, findSpeechRanges } from '../../editor/silence';
@@ -74,7 +74,7 @@ import { commandContext, executeActions, requestCommand } from '../../editor/com
 import { synthesizeSpeech } from '../../editor/tts';
 import { autoSfxTimes, sfxFile } from '../../editor/sfx';
 import { fxDef, newFxLayer } from '../../editor/proFx';
-import { MAX_ANALYSIS_SECONDS, analyzeVideo, progressText } from '../../editor/analysis';
+import { BatchStatus, MAX_ANALYSIS_SECONDS, analyzeMany, batchFraction } from '../../editor/analysis';
 import { MAX_AUTO_FOOTAGE, buildFromPlan, requestPlan } from '../../editor/autoEdit';
 import { AutoEditBrief, AutoEditPlan } from '../../editor/autoEditSpec';
 import { AutoEditModal, AutoEditStage } from './AutoEditModal';
@@ -1208,21 +1208,35 @@ export function VideoEditor({ onBack, initialFiles, autoEdit }: VideoEditorProps
   const mainVideos = useMemo(() => [...new Map(layout.filter((l) => l.asset.kind === 'video').map((l) => [l.asset.id, l.asset])).values()], [layout]);
   /** Analyses the main-track videos that haven't been yet; returns them updated, by id. */
   const analyzeMissing = (onProgress: (status: string, progress: number | null) => void) => analyzeAssets(mainVideos.filter((a) => !a.analysis), onProgress);
-  /** Analyses the given videos; returns them updated, by id. */
+  /** Saves a finished analysis on its asset. */
+  const storeAnalysis = async (asset: MediaAsset, analysis: VideoAnalysis) => {
+    const updated = { ...asset, analysis, fps: await videoFps(asset) };
+    setAssetList((list) => list.map((x) => (x.id === asset.id ? updated : x)));
+    saveAsset(updated).catch(() => {});
+    return updated;
+  };
+  /** Analyses the given videos (several at once); returns them updated, by id. Throws if any failed. */
   const analyzeAssets = async (targets: MediaAsset[], onProgress: (status: string, progress: number | null) => void) => {
     const done = new Map<string, MediaAsset>();
-    for (let i = 0; i < targets.length; i++) {
-      const asset = targets[i];
-      const part = targets.length > 1 ? ` (${i + 1} من ${targets.length})` : '';
-      const result = await analyzeVideo(asset, (p) => {
-        const { text, bar } = progressText(p);
-        onProgress(text + part, bar === null ? null : (i + bar) / targets.length);
-      });
-      const updated = { ...asset, analysis: result, fps: await videoFps(asset) };
-      setAssetList((list) => list.map((x) => (x.id === asset.id ? updated : x)));
-      saveAsset(updated).catch(() => {});
-      done.set(asset.id, updated);
-    }
+    const states = new Map<string, BatchStatus>();
+    const report = () => {
+      const list = [...states.values()];
+      const watching = list.filter((x) => x.stage === 'thinking' || x.stage === 'upload').length;
+      const finished = list.filter((x) => x.stage === 'done').length;
+      const status = targets.length > 1 ? `تحليل ${targets.length} فيديوهات معاً: انتهى ${finished}${watching ? ` · يشاهد ${watching} الآن` : ''}` : 'الذكاء الاصطناعي يشاهد الفيديو...';
+      onProgress(status, list.reduce((sum, x) => sum + batchFraction(x), 0) / Math.max(1, targets.length));
+    };
+    const { errors } = await analyzeMany(
+      targets,
+      (id, st) => {
+        states.set(id, st);
+        report();
+      },
+      async (asset, analysis) => {
+        done.set(asset.id, await storeAnalysis(asset, analysis));
+      }
+    );
+    if (errors.length) throw new Error(errors[0].message);
     return done;
   };
   const analyzeVideos = async () => {
@@ -1253,23 +1267,40 @@ export function VideoEditor({ onBack, initialFiles, autoEdit }: VideoEditorProps
     autoBrief.current = brief;
     const notes: string[] = [];
     let chosen = assetList.filter((a) => autoSelected.has(a.id));
-    // Watch every chosen video once (within the footage limit); a failure skips that file only.
+    // Watch every chosen video once (within the footage limit), several at a time; a failure skips that file only.
     let budget = MAX_AUTO_FOOTAGE;
-    const todo = chosen.filter((a) => a.kind === 'video' && !a.analysis);
-    for (const [i, asset] of todo.entries()) {
+    const todo: MediaAsset[] = [];
+    for (const asset of chosen.filter((a) => a.kind === 'video' && !a.analysis)) {
       if (asset.duration > MAX_ANALYSIS_SECONDS || asset.duration > budget) {
         notes.push(`«${asset.name}» أطول من حد التحليل، فاستُخدم بدون مشاهدة.`);
         continue;
       }
       budget -= asset.duration;
-      try {
-        const done = await analyzeAssets([asset], (status, progress) =>
-          working(`الذكاء الاصطناعي يشاهد «${asset.name}» (${i + 1} من ${todo.length})\n${status}`, progress === null ? null : (i + progress) / todo.length)
-        );
-        chosen = chosen.map((a) => done.get(a.id) ?? a);
-      } catch (err) {
-        notes.push(`تعذر تحليل «${asset.name}»: ${err instanceof Error ? err.message : ''}`);
-      }
+      todo.push(asset);
+    }
+    if (todo.length) {
+      const states = new Map<string, BatchStatus>(todo.map((a) => [a.id, { stage: 'waiting' }]));
+      const show = () =>
+        setAutoStage({
+          step: 'working',
+          status: todo.length > 1 ? `الذكاء الاصطناعي يشاهد ${todo.length} فيديوهات معاً` : 'الذكاء الاصطناعي يشاهد الفيديو',
+          progress: [...states.values()].reduce((sum, x) => sum + batchFraction(x), 0) / todo.length,
+          files: todo.map((asset) => ({ asset, status: states.get(asset.id)! })),
+        });
+      show();
+      const updated = new Map<string, MediaAsset>();
+      const { errors } = await analyzeMany(
+        todo,
+        (id, st) => {
+          states.set(id, st);
+          show();
+        },
+        async (asset, analysis) => {
+          updated.set(asset.id, await storeAnalysis(asset, analysis));
+        }
+      );
+      chosen = chosen.map((a) => updated.get(a.id) ?? a);
+      for (const e of errors) notes.push(`تعذر تحليل «${e.asset.name}»: ${e.message}`);
     }
     autoChosen.current = chosen;
     setAutoNotes(notes);

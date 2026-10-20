@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { AUTO_STYLES, AutoEditBrief, AutoEditPlan } from '../../editor/autoEditSpec';
 import { MAX_AUTO_FOOTAGE, planDuration } from '../../editor/autoEdit';
+import { BatchStatus } from '../../editor/analysis';
 import { CAPTION_STYLES, FILTER_PRESETS, TRANSITIONS } from '../../editor/constants';
 import { fxDef } from '../../editor/proFxCatalog';
 import { TEXT_TEMPLATES } from '../../editor/textTemplates';
@@ -28,7 +29,7 @@ import { cn } from '../../lib/utils';
 
 export type AutoEditStage =
   | { step: 'brief' }
-  | { step: 'working'; status: string; progress: number | null }
+  | { step: 'working'; status: string; progress: number | null; files?: { asset: MediaAsset; status: BatchStatus }[] }
   | { step: 'plan'; plan: AutoEditPlan }
   | { step: 'error'; message: string };
 
@@ -58,6 +59,28 @@ const ASPECTS: { id: AutoEditBrief['aspect']; label: string; hint: string }[] = 
 ];
 const LENGTHS = [15, 30, 60, 90];
 const LANGUAGES = ['العربية الفصحى', 'الدارجة المغربية', 'اللهجة الخليجية', 'اللهجة المصرية', 'English', 'Français'];
+
+/** One file's line in the progress list. */
+function fileStatus(s: BatchStatus): string {
+  switch (s.stage) {
+    case 'waiting':
+      return 'في الانتظار';
+    case 'queued':
+      return s.at < 0.5 ? 'جاهز، ينتظر دوره عند الذكاء الاصطناعي' : 'شاهده الذكاء الاصطناعي، ينتظر تدقيق التوقيت';
+    case 'proxy':
+      return `تجهيز نسخة خفيفة... ${s.percent}%`;
+    case 'upload':
+      return `رفع... ${s.percent}%`;
+    case 'thinking':
+      return 'الذكاء الاصطناعي يشاهده الآن...';
+    case 'refine':
+      return `تدقيق التوقيت بالإطار... ${s.percent}%`;
+    case 'done':
+      return 'تمت المشاهدة';
+    case 'error':
+      return s.message;
+  }
+}
 
 const label = (list: { id: string; label: string }[], id: string | null | undefined) => list.find((x) => x.id === id)?.label ?? id ?? '';
 
@@ -284,6 +307,30 @@ export function AutoEditModal(props: Props) {
                 <div className="h-2 w-64 overflow-hidden rounded-full bg-white/10">
                   <div className="h-full bg-gradient-to-l from-fuchsia-500 to-indigo-500 transition-all" style={{ width: `${Math.round(stage.progress * 100)}%` }} />
                 </div>
+              )}
+              {stage.files && stage.files.length > 0 && (
+                <ul className="w-full max-w-md space-y-1.5 text-right">
+                  {stage.files.map(({ asset, status }) => (
+                    <li key={asset.id} className="flex items-center gap-2.5 rounded-xl border border-white/5 bg-white/[0.03] p-1.5">
+                      <div className="h-10 w-10 shrink-0 overflow-hidden rounded-lg">
+                        <Thumb asset={asset} time={0} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[11px] text-slate-300">{asset.name}</p>
+                        <p className={cn('text-[11px] font-semibold', status.stage === 'done' ? 'text-emerald-300' : status.stage === 'error' ? 'text-red-300' : 'text-slate-100')}>
+                          {fileStatus(status)}
+                        </p>
+                      </div>
+                      {status.stage === 'done' ? (
+                        <Check className="h-4 w-4 shrink-0 text-emerald-400" />
+                      ) : status.stage === 'error' ? (
+                        <X className="h-4 w-4 shrink-0 text-red-400" />
+                      ) : status.stage === 'waiting' ? null : (
+                        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-fuchsia-300" />
+                      )}
+                    </li>
+                  ))}
+                </ul>
               )}
               <p className="text-[11px] text-slate-500">لا تغلق الصفحة. إذا انقطع الإنترنت لحظة يكمل وحده.</p>
             </div>
