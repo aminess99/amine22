@@ -764,7 +764,9 @@ async function startServer() {
     visionHits.set(ip, hits);
     return false;
   };
-  const visionUpload = multer({ dest: path.join(os.tmpdir(), "uploads"), limits: { fileSize: 80 * 1024 * 1024 } });
+  // The browser sends a small copy (a few MB). The whole file is read and base64-encoded for the
+  // model, several copies in memory at once, so a large upload could exhaust a small instance.
+  const visionUpload = multer({ dest: path.join(os.tmpdir(), "uploads"), limits: { fileSize: 25 * 1024 * 1024 } });
   const parseJsonReply = (raw: string) => JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
 
   app.post("/api/analyze", visionUpload.single("video"), async (req, res) => {
@@ -1728,7 +1730,8 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
     if (res.headersSent) {
       return next(err);
     }
-    res.status(err.status || 500).json({
+    // Upload limits answer with 413 so the browser can say the file is too big.
+    res.status(err?.code === "LIMIT_FILE_SIZE" ? 413 : err.status || 500).json({
       error: err.message || "حدث خطأ أثناء معالجة الطلب في الخادم."
     });
   });

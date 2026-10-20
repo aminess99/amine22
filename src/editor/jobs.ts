@@ -28,3 +28,25 @@ export async function waitForJob<T>(id: string, onTick?: (seconds: number) => vo
     return (await res.json()).result as T;
   }
 }
+
+/** Whether the server answers at all (used to explain a failed request). */
+export async function serverAlive(): Promise<boolean> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6000);
+  try {
+    return (await fetch('/api/health', { cache: 'no-store', signal: ctrl.signal })).ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The message for a request that failed without an answer. */
+export async function connectionError(): Promise<Error> {
+  return new Error(
+    (await serverAlive())
+      ? 'انقطع الاتصال أثناء الإرسال. تحقق من الإنترنت ثم اضغط «حاول مرة أخرى».'
+      : 'الخادم لا يستجيب الآن (ربما يُعاد تشغيله). انتظر دقيقة ثم اضغط «حاول مرة أخرى».'
+  );
+}
