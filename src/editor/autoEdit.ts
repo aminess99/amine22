@@ -1,10 +1,11 @@
-import { AUTO_STYLES, AutoEditBrief, AutoEditPlan, PlanSegment, PlanText } from './autoEditSpec';
+import { AUTO_STYLES, AutoEditBrief, AutoEditPlan, PlanSegment, PlanText, REVIEW_BLOCKED_OPS, ReviewResult } from './autoEditSpec';
 import { EditAction } from './commandSpec';
 import { waitForJob } from './jobs';
-import { ExecuteHooks, executeActions } from './commands';
+import { ExecuteHooks, commandContext, executeActions } from './commands';
+import { exportProject } from './exporter';
 import { CAPTION_STYLES, FILTER_PRESETS, MAX_IMAGE_DURATION, TEXT_PRESETS, TRANSITIONS, presetAdjustments } from './constants';
 import { isProFx, newFxLayer } from './proFxCatalog';
-import { snapToSilence } from './refine';
+import { fileSpeech, fitToSpeech } from './silence';
 import { SFX_LIST, freesoundFile, searchFreesound } from './sfx';
 import { TEXT_TEMPLATES, templateTexts } from './textTemplates';
 import { createAudioClip, createMainClip, layoutMainTrack, uid } from './timeline';
@@ -170,16 +171,21 @@ export async function buildFromPlan(
   // 1. Shots. Spoken footage is cut in pauses so no word is clipped.
   hooks.onStatus('ترتيب المشاهد...', 0.05);
   const clips: MainClip[] = [];
-  for (const [i, s] of plan.segments.entries()) {
+  // Seconds of quiet at each shot's start and end (timeline time), so transitions stay in the pauses.
+  const quiet: { head: number; tail: number }[] = [];
+  let wordCuts = 0;
+  for (const s of plan.segments) {
     const asset = library[s.media - 1];
     const clip = createMainClip(asset);
+    let head = Infinity;
+    let tail = Infinity;
     if (asset.kind === 'image') clip.outPoint = Math.min(MAX_IMAGE_DURATION, s.end);
     else {
       let { start, end } = s;
       if (plan.original_audio === 'keep' && asset.hasAudio) {
-        start = await snapToSilence(asset, start).catch(() => start);
-        end = await snapToSilence(asset, end).catch(() => end);
-        if (end - start < 0.3) ({ start, end } = s);
+        const fit = fitToSpeech(start, end, await fileSpeech(asset), asset.duration);
+        ({ start, end, head, tail } = fit);
+        if (fit.cutsWord) wordCuts++;
       }
       clip.inPoint = start;
       clip.outPoint = end;
@@ -191,10 +197,19 @@ export async function buildFromPlan(
       clip.filterId = plan.filter;
       clip.adjust = presetAdjustments(plan.filter);
     }
-    if (i > 0 && plan.transition !== 'none') clip.transition = { type: plan.transition as TransitionType, duration: fast ? 0.3 : 0.5 };
     if (s.effect) clip.fx = [newFxLayer(s.effect, 0.7)];
+    quiet.push({ head: head / clip.speed, tail: tail / clip.speed });
     clips.push(clip);
   }
+  // A transition spans half its length on each side of the cut: it must fit in the quiet there.
+  // Where people talk right up to the cut, a straight cut is cleaner than an effect over the words.
+  clips.forEach((clip, i) => {
+    if (i === 0 || plan.transition === 'none') return;
+    const room = 2 * Math.min(quiet[i - 1].tail, quiet[i].head);
+    const duration = Math.min(fast ? 0.3 : 0.5, room);
+    if (duration >= 0.2) clip.transition = { type: plan.transition as TransitionType, duration };
+  });
+  if (wordCuts) notes.push(`لم أجد صمتاً قريباً في ${wordCuts} ${wordCuts === 1 ? 'مشهد' : 'مشاهد'}، فقد تنقطع كلمة هناك.`);
   let project: Project = { aspect: brief.aspect as AspectRatio, background: '#000000', clips, texts: [], audios: [], overlays: [], effects: [] };
   const layout = layoutMainTrack(clips, assets);
   const total = layout.length ? layout[layout.length - 1].end : 0;
@@ -262,4 +277,62 @@ export async function buildFromPlan(
   if (plan.voiceover && voice && voice.start + voice.outPoint - voice.inPoint > total + 0.5)
     notes.push('التعليق الصوتي أطول من الفيديو قليلاً: قصّره من خصائص الصوت أو اطلب «اجعل الفيديو أطول».');
   return { project: res.project, notes: [...notes, ...res.notes] };
+}
+
+/**
+ * The AI reviewer: renders a light copy of the edit (360p, 2 fps, full sound),
+ * lets the vision model watch it with the plan and the timeline, and returns
+ * its verdict with fixes as editing actions.
+ */
+export async function reviewEdit(
+  project: Project,
+  assets: Map<string, MediaAsset>,
+  library: MediaAsset[],
+  plan: AutoEditPlan,
+  brief: AutoEditBrief,
+  onStatus: (status: string, progress: number | null) => void
+): Promise<ReviewResult & { actions: EditAction[] }> {
+  onStatus('تجهيز نسخة معاينة من المونتاج...', 0);
+  const { blob, extension } = await exportProject(
+    project,
+    assets,
+    { resolution: 360, fps: 2, quality: 'preview' },
+    (p) => onStatus('تجهيز نسخة معاينة من المونتاج...', p * 0.5),
+    { cancelled: false }
+  );
+  onStatus('المراجع الذكي يشاهد المونتاج...', 0.55);
+  const form = new FormData();
+  form.append('video', blob, `review.${extension}`);
+  form.append(
+    'context',
+    JSON.stringify({
+      brief: { ...brief, style: AUTO_STYLES.find((x) => x.id === brief.style)?.hint ?? brief.style },
+      plan: { title: plan.title, idea: plan.idea, hook: plan.hook, segments: plan.segments.map((x) => ({ why: x.why, text: x.text })) },
+      timeline: commandContext(project, assets, library, 0, null),
+    })
+  );
+  let res: Response | null = null;
+  for (let attempt = 0; attempt < 2 && !res; attempt++) {
+    res = await fetch('/api/auto-edit/review', { method: 'POST', body: form }).catch(() => null);
+    if (!res && attempt === 0) await new Promise((r) => setTimeout(r, 2000));
+  }
+  if (!res) throw new Error('تعذر الاتصال بالخادم للمراجعة.');
+  if (res.status === 503) throw new Error('المراجعة تحتاج مفتاح OpenRouter في إعدادات الخادم.');
+  if (res.status === 429) throw new Error('طلبات كثيرة. انتظر دقيقة ثم أعد المراجعة.');
+  if (!res.ok) throw new Error('تعذرت المراجعة الآن.');
+  const data = await res.json();
+  const raw = (res.status === 202 && data.job ? await waitForJob(data.job) : data) as Record<string, any>;
+  const actions = (Array.isArray(raw?.actions) ? raw.actions : [])
+    .filter((a: unknown) => !!a && typeof a === 'object' && typeof (a as { op?: unknown }).op === 'string' && !REVIEW_BLOCKED_OPS.has((a as { op: string }).op))
+    .slice(0, 30) as EditAction[];
+  return {
+    score: clamp(num(raw?.score, 0), 0, 10),
+    ready: !!raw?.ready,
+    summary: str(raw?.summary, 600),
+    issues: (Array.isArray(raw?.issues) ? raw.issues : [])
+      .slice(0, 20)
+      .map((x: any) => ({ time: Math.max(0, num(x?.time, 0)), problem: str(x?.problem, 200), fix: str(x?.fix, 200) }))
+      .filter((x: { problem: string }) => x.problem),
+    actions,
+  };
 }

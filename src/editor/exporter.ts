@@ -11,6 +11,7 @@ import {
   Output,
   QUALITY_HIGH,
   QUALITY_MEDIUM,
+  QUALITY_VERY_LOW,
   QUALITY_VERY_HIGH,
   Quality,
   WebMOutputFormat,
@@ -27,9 +28,10 @@ import { curveRate, overlayEnd, getMainFrameState, layoutMainTrack, projectDurat
 import { LaidOutClip, MediaAsset, Project } from './types';
 
 export interface ExportOptions {
-  resolution: 720 | 1080;
-  fps: 24 | 30 | 60;
-  quality: 'medium' | 'high' | 'very-high';
+  /** 360 and 2 fps with 'preview' quality make a light copy for the AI review. */
+  resolution: 360 | 720 | 1080;
+  fps: 2 | 24 | 30 | 60;
+  quality: 'preview' | 'medium' | 'high' | 'very-high';
 }
 
 export interface ExportResult {
@@ -40,6 +42,7 @@ export interface ExportResult {
 const SAMPLE_RATE = 48000;
 
 const QUALITY: Record<ExportOptions['quality'], Quality> = {
+  preview: QUALITY_VERY_LOW,
   medium: QUALITY_MEDIUM,
   high: QUALITY_HIGH,
   'very-high': QUALITY_VERY_HIGH,
@@ -229,7 +232,7 @@ export async function exportProject(
       { numberOfChannels: 2, sampleRate: SAMPLE_RATE }
     );
     if (audioCodec) {
-      audioSource = new AudioBufferSource({ codec: audioCodec, bitrate: 192_000 });
+      audioSource = new AudioBufferSource({ codec: audioCodec, bitrate: options.quality === 'preview' ? 48_000 : 192_000 });
       output.addAudioTrack(audioSource);
     }
   }

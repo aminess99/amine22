@@ -1,4 +1,4 @@
-import { findSpeechRanges } from './silence';
+import { fileSpeech } from './silence';
 import { layoutMainTrack, timelineTimeOf } from './timeline';
 import { AudioClip, MediaAsset, Project } from './types';
 
@@ -29,12 +29,10 @@ export function onSpeechReady(fn: () => void) {
 function loadSpeech(asset: MediaAsset): Promise<void> {
   const known = pending.get(asset.id);
   if (known) return known;
-  const job = findSpeechRanges(asset, 0, asset.duration)
-    .catch(() => [] as [number, number][])
-    .then((ranges) => {
-      speech.set(asset.id, ranges);
-      listeners.forEach((fn) => fn());
-    });
+  const job = fileSpeech(asset).then((ranges) => {
+    speech.set(asset.id, ranges);
+    listeners.forEach((fn) => fn());
+  });
   pending.set(asset.id, job);
   return job;
 }
