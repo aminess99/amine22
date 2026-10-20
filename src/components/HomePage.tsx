@@ -25,6 +25,8 @@ import { BRAND } from '../brand';
 interface HomePageProps {
   onStart: () => void;
   onStartWithFiles: (files: File[]) => void;
+  /** Opens the editor with these files in the auto edit (montage) wizard. */
+  onAutoEdit: (files: File[]) => void;
 }
 
 // The live previews use the editor's renderer, so they load after the page shows.
@@ -141,7 +143,32 @@ function FaqItem({ q, a }: { key?: React.Key; q: string; a: string }) {
   );
 }
 
-export function HomePage({ onStart, onStartWithFiles }: HomePageProps) {
+export function HomePage({ onStart, onStartWithFiles, onAutoEdit }: HomePageProps) {
+  const auto = (big: boolean) => (
+    <label
+      className={`group relative flex cursor-pointer items-center gap-3 overflow-hidden rounded-2xl border border-fuchsia-400/40 bg-gradient-to-l from-fuchsia-600/25 via-indigo-600/20 to-cyan-500/10 text-right shadow-lg shadow-fuchsia-900/30 hover:border-fuchsia-300 ${big ? 'p-4' : 'px-5 py-3.5'}`}
+    >
+      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-fuchsia-600 to-indigo-500 shadow-md">
+        <Clapperboard className="h-5 w-5 text-white" />
+      </span>
+      <span className="flex-1">
+        <span className="block text-sm font-extrabold text-white">مونتاج تلقائي بالذكاء الاصطناعي</span>
+        <span className="block text-xs text-slate-300">ارفع فيديوهاتك، يشاهدها ويكتب خطة، ثم يُمَنتِج الفيديو كاملاً</span>
+      </span>
+      <Upload className="h-4 w-4 shrink-0 text-fuchsia-200" />
+      <input
+        type="file"
+        multiple
+        accept="video/*,image/*,audio/*"
+        className="absolute inset-0 cursor-pointer opacity-0"
+        onChange={(e) => {
+          const files: File[] = e.target.files ? Array.from(e.target.files) : [];
+          if (files.length) onAutoEdit(files);
+          e.target.value = '';
+        }}
+      />
+    </label>
+  );
   const pick = (
     <label className="relative flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-white/15 bg-white/5 px-6 py-3.5 text-sm font-bold text-white hover:bg-white/10">
       <Upload className="h-4 w-4" />
@@ -186,7 +213,8 @@ export function HomePage({ onStart, onStartWithFiles }: HomePageProps) {
           <p className="mx-auto mt-5 max-w-xl text-base leading-relaxed text-slate-300 md:mx-0">
             محرر فيديو كامل في المتصفح: كابشن تلقائي، تأثيرات احترافية، إزالة الخلفية، مقاطع قصيرة، وأوامر بالعربية تنفّذ المونتاج عنك.
           </p>
-          <div className="mt-8 flex flex-col items-stretch gap-3 sm:flex-row sm:justify-center md:justify-start">
+          <div className="mx-auto mt-8 max-w-xl md:mx-0">{auto(true)}</div>
+          <div className="mt-3 flex flex-col items-stretch gap-3 sm:flex-row sm:justify-center md:justify-start">
             {start}
             {pick}
           </div>
@@ -222,6 +250,31 @@ export function HomePage({ onStart, onStartWithFiles }: HomePageProps) {
               </div>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* Auto edit */}
+      <section className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
+        <div className="rounded-3xl border border-fuchsia-500/20 bg-gradient-to-br from-fuchsia-950/40 via-slate-900 to-indigo-950/40 p-6 sm:p-10">
+          <h2 className="text-center text-2xl font-extrabold text-white sm:text-3xl">مونتاج كامل بضغطة: أنت المخرج، والذكاء الاصطناعي يُنفّذ</h2>
+          <p className="mx-auto mt-3 max-w-2xl text-center text-sm leading-relaxed text-slate-300">
+            ارفع كل لقطاتك ودع الذكاء الاصطناعي يشاهدها: يختار أقوى اللحظات، يرتبها في قصة، ويضيف النصوص والكابشن والموسيقى والانتقالات، وتعليقاً صوتياً إن أردت. وقبل أن يلمس أي شيء يعرض عليك خطة تراجعها وتعدّلها بكلامك.
+          </p>
+          <div className="mt-8 grid gap-3 sm:grid-cols-4">
+            {[
+              ['ارفع لقطاتك', 'فيديوهات وصور وموسيقى إن أردت، واختر المنصة والأسلوب والمدة.'],
+              ['يشاهد ويفهم', 'يحلل كل فيديو: المشاهد وجودتها واللحظات المميزة.'],
+              ['خطة للمراجعة', 'ترتيب المشاهد والنصوص والموسيقى. عدّلها بكلامك: «اجعله أقصر».'],
+              ['مونتاج جاهز', 'يُبنى على الخط الزمني، وتعدّل ما شئت ثم تصدّر.'],
+            ].map(([t, d], i) => (
+              <div key={t} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <span className="text-xs font-bold text-fuchsia-300">{i + 1}</span>
+                <h3 className="mt-1 text-sm font-bold text-white">{t}</h3>
+                <p className="mt-1 text-xs leading-relaxed text-slate-400">{d}</p>
+              </div>
+            ))}
+          </div>
+          <div className="mx-auto mt-6 max-w-xl">{auto(false)}</div>
         </div>
       </section>
 

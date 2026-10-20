@@ -242,10 +242,10 @@ export interface FreesoundHit {
 }
 
 /** Searches Freesound (CC0 sounds only) through the site's server. */
-export async function searchFreesound(query: string): Promise<FreesoundHit[]> {
+export async function searchFreesound(query: string, kind: 'sfx' | 'music' = 'sfx'): Promise<FreesoundHit[]> {
   let res: Response;
   try {
-    res = await fetch(`/api/sfx/search?q=${encodeURIComponent(query)}`);
+    res = await fetch(`/api/sfx/search?q=${encodeURIComponent(query)}${kind === 'music' ? '&kind=music' : ''}`);
   } catch {
     throw new Error('تعذر الاتصال بالخادم.');
   }

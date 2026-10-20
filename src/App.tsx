@@ -30,6 +30,7 @@ function MainApp() {
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [currentPage, setCurrentPage] = useState<PageTab>('home');
   const [initialFiles, setInitialFiles] = useState<File[] | undefined>();
+  const [autoEdit, setAutoEdit] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateType>('hormozi');
   const [isSavedProjectsOpen, setIsSavedProjectsOpen] = useState<boolean>(false);
   const [loadedProject, setLoadedProject] = useState<SavedProject | null>(null);
@@ -56,8 +57,10 @@ function MainApp() {
       <Suspense fallback={<Loading />}>
       <VideoEditor
         initialFiles={initialFiles}
+        autoEdit={autoEdit}
         onBack={() => {
           setInitialFiles(undefined);
+          setAutoEdit(false);
           setCurrentPage('home');
         }}
       />
@@ -113,6 +116,12 @@ function MainApp() {
             onStart={() => handleNavigate('editor')}
             onStartWithFiles={(files) => {
               setInitialFiles(files);
+              setAutoEdit(false);
+              handleNavigate('editor');
+            }}
+            onAutoEdit={(files) => {
+              setInitialFiles(files);
+              setAutoEdit(true);
               handleNavigate('editor');
             }}
           />

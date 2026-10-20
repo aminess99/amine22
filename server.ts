@@ -12,6 +12,7 @@ import { execFile, execSync } from "child_process";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import { commandSystemPrompt } from "./src/editor/commandSpec";
+import { autoEditSystemPrompt } from "./src/editor/autoEditSpec";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
@@ -476,6 +477,48 @@ async function startServer() {
     }
   });
 
+  // Auto edit: the AI plans a whole video from the analysed footage (and revises the plan on feedback).
+  const planHits = new Map<string, number[]>();
+  app.post("/api/auto-edit/plan", async (req, res) => {
+    const client = getOpenRouterClient();
+    if (!client) {
+      return res.status(503).json({ error: "OPENROUTER_API_KEY is not set" });
+    }
+    const brief = JSON.stringify(req.body?.brief ?? {});
+    const materials = JSON.stringify(req.body?.materials ?? []);
+    const previous = req.body?.previous ? JSON.stringify(req.body.previous) : "";
+    const feedback = typeof req.body?.feedback === "string" ? req.body.feedback.trim().slice(0, 600) : "";
+    if (brief.length > 3000 || materials.length > 150_000 || previous.length > 30_000) {
+      return res.status(400).json({ error: "Invalid request" });
+    }
+    const ip = req.ip || "unknown";
+    const now = Date.now();
+    const hits = (planHits.get(ip) ?? []).filter((t) => now - t < 60_000);
+    if (hits.length >= 10) return res.status(429).json({ error: "Too many requests" });
+    hits.push(now);
+    planHits.set(ip, hits);
+
+    const parts = [`Brief:\n${brief}`, `Materials:\n${materials}`];
+    if (previous) parts.push(`Your previous plan:\n${previous}`, `The user wants these changes (keep everything else): ${feedback || "improve it"}\nReturn the full updated plan.`);
+    try {
+      const response = await client.chat.completions.create({
+        model: process.env.PLAN_MODEL || "google/gemini-3.8-flash",
+        temperature: 0.4,
+        max_tokens: 8000,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: autoEditSystemPrompt() },
+          { role: "user", content: parts.join("\n\n") },
+        ],
+      });
+      const raw = response.choices[0]?.message?.content ?? "";
+      res.json(JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1)));
+    } catch (error) {
+      console.error("Auto edit plan failed:", error);
+      res.status(502).json({ error: "Plan failed" });
+    }
+  });
+
   // Caption rewriting (translate, change dialect, fix spelling): lines in, the same number of lines out.
   const rewriteHits = new Map<string, number[]>();
   app.post("/api/caption-rewrite", async (req, res) => {
@@ -635,7 +678,10 @@ async function startServer() {
       const query = await toEnglishKeywords(q);
       const url = new URL("https://freesound.org/apiv2/search/text/");
       url.searchParams.set("query", query);
-      url.searchParams.set("filter", 'license:"Creative Commons 0" duration:[0 TO 30]');
+      // Music beds (auto edit) are longer, tagged pieces; effects are short.
+      const music = req.query.kind === "music";
+      url.searchParams.set("filter", music ? 'license:"Creative Commons 0" duration:[20 TO 600] tag:music' : 'license:"Creative Commons 0" duration:[0 TO 30]');
+      if (music) url.searchParams.set("sort", "rating_desc");
       url.searchParams.set("fields", "id,name,duration,username");
       url.searchParams.set("page_size", "24");
       url.searchParams.set("token", key);

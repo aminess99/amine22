@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeftRight,
   ArrowRight,
+  Clapperboard,
   Copy,
   Download,
   Film,
@@ -73,7 +74,10 @@ import { commandContext, executeActions, requestCommand } from '../../editor/com
 import { synthesizeSpeech } from '../../editor/tts';
 import { autoSfxTimes, sfxFile } from '../../editor/sfx';
 import { fxDef, newFxLayer } from '../../editor/proFx';
-import { analyzeVideo, progressText } from '../../editor/analysis';
+import { MAX_ANALYSIS_SECONDS, analyzeVideo, progressText } from '../../editor/analysis';
+import { MAX_AUTO_FOOTAGE, buildFromPlan, requestPlan } from '../../editor/autoEdit';
+import { AutoEditBrief, AutoEditPlan } from '../../editor/autoEditSpec';
+import { AutoEditModal, AutoEditStage } from './AutoEditModal';
 import { videoFps } from '../../editor/refine';
 import { EditAction } from '../../editor/commandSpec';
 import {
@@ -120,9 +124,11 @@ interface VideoEditorProps {
   onBack?: () => void;
   /** Files picked on the home page, added to the timeline once the saved project loads. */
   initialFiles?: File[];
+  /** Open the auto edit with the initial files instead of putting them on the timeline. */
+  autoEdit?: boolean;
 }
 
-export function VideoEditor({ onBack, initialFiles }: VideoEditorProps) {
+export function VideoEditor({ onBack, initialFiles, autoEdit }: VideoEditorProps) {
   const { state: project, update: rawUpdate, undo, redo, reset, canUndo, canRedo } = useHistory<Project>(INITIAL_PROJECT);
   // Every edit goes through here: when clips change, auto captions follow their speech.
   const assetsForCaptions = useRef<Map<string, MediaAsset>>(new Map());
@@ -656,8 +662,8 @@ export function VideoEditor({ onBack, initialFiles }: VideoEditorProps) {
   );
 
   const addFiles = useCallback(
-    async (files: File[], addToTimeline: boolean) => {
-      if (!files.length) return;
+    async (files: File[], addToTimeline: boolean): Promise<MediaAsset[]> => {
+      if (!files.length) return [];
       setLoading((n) => n + files.length);
       const loaded: MediaAsset[] = [];
       for (const file of files) {
@@ -672,7 +678,7 @@ export function VideoEditor({ onBack, initialFiles }: VideoEditorProps) {
           setLoading((n) => n - 1);
         }
       }
-      if (!addToTimeline || !loaded.length) return;
+      if (!addToTimeline || !loaded.length) return loaded;
       const visuals = loaded.filter((a) => a.kind !== 'audio');
       const sounds = loaded.filter((a) => a.kind === 'audio');
       update((p) => ({
@@ -687,6 +693,7 @@ export function VideoEditor({ onBack, initialFiles }: VideoEditorProps) {
         const aspect: AspectRatio = r > 1.2 ? '16:9' : r < 0.85 ? '9:16' : '1:1';
         update((p) => ({ ...p, aspect }), 'auto-aspect');
       }
+      return loaded;
     },
     [update, project.clips.length]
   );
@@ -695,6 +702,11 @@ export function VideoEditor({ onBack, initialFiles }: VideoEditorProps) {
   useEffect(() => {
     if (!restored || initialAdded.current || !initialFiles?.length) return;
     initialAdded.current = true;
+    if (autoEdit) {
+      openAutoEdit([]);
+      addFiles(initialFiles, false).then((loaded) => setAutoSelected(new Set(loaded.map((a) => a.id))));
+      return;
+    }
     if (project.clips.length) setNotice('أُضيفت ملفاتك إلى نهاية مشروعك الحالي. لبدء مشروع جديد استخدم "مشروع جديد".');
     addFiles(initialFiles, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1195,8 +1207,9 @@ export function VideoEditor({ onBack, initialFiles }: VideoEditorProps) {
   const [analysis, setAnalysis] = useState<{ busy: boolean; status: string | null; progress: number | null; error: string | null }>({ busy: false, status: null, progress: null, error: null });
   const mainVideos = useMemo(() => [...new Map(layout.filter((l) => l.asset.kind === 'video').map((l) => [l.asset.id, l.asset])).values()], [layout]);
   /** Analyses the main-track videos that haven't been yet; returns them updated, by id. */
-  const analyzeMissing = async (onProgress: (status: string, progress: number | null) => void) => {
-    const targets = mainVideos.filter((a) => !a.analysis);
+  const analyzeMissing = (onProgress: (status: string, progress: number | null) => void) => analyzeAssets(mainVideos.filter((a) => !a.analysis), onProgress);
+  /** Analyses the given videos; returns them updated, by id. */
+  const analyzeAssets = async (targets: MediaAsset[], onProgress: (status: string, progress: number | null) => void) => {
     const done = new Map<string, MediaAsset>();
     for (let i = 0; i < targets.length; i++) {
       const asset = targets[i];
@@ -1221,6 +1234,87 @@ export function VideoEditor({ onBack, initialFiles }: VideoEditorProps) {
       setAnalysis({ busy: false, status: null, progress: null, error: err instanceof Error ? err.message : 'تعذر تحليل الفيديو.' });
     }
   };
+  // ---------- auto edit (montage) ----------
+  const [autoOpen, setAutoOpen] = useState(false);
+  const [autoStage, setAutoStage] = useState<AutoEditStage>({ step: 'brief' });
+  const [autoSelected, setAutoSelected] = useState<Set<string>>(new Set());
+  const [autoNotes, setAutoNotes] = useState<string[]>([]);
+  const autoBrief = useRef<AutoEditBrief | null>(null);
+  const autoChosen = useRef<MediaAsset[]>([]);
+  const openAutoEdit = (ids?: string[]) => {
+    pause();
+    setAutoSelected(new Set(ids ?? assetList.map((a) => a.id)));
+    setAutoStage({ step: 'brief' });
+    setAutoNotes([]);
+    setAutoOpen(true);
+  };
+  const working = (status: string, progress: number | null = null) => setAutoStage({ step: 'working', status, progress });
+  const planAutoEdit = async (brief: AutoEditBrief) => {
+    autoBrief.current = brief;
+    const notes: string[] = [];
+    let chosen = assetList.filter((a) => autoSelected.has(a.id));
+    // Watch every chosen video once (within the footage limit); a failure skips that file only.
+    let budget = MAX_AUTO_FOOTAGE;
+    const todo = chosen.filter((a) => a.kind === 'video' && !a.analysis);
+    for (const [i, asset] of todo.entries()) {
+      if (asset.duration > MAX_ANALYSIS_SECONDS || asset.duration > budget) {
+        notes.push(`«${asset.name}» أطول من حد التحليل، فاستُخدم بدون مشاهدة.`);
+        continue;
+      }
+      budget -= asset.duration;
+      try {
+        const done = await analyzeAssets([asset], (status, progress) =>
+          working(`الذكاء الاصطناعي يشاهد «${asset.name}» (${i + 1} من ${todo.length})\n${status}`, progress === null ? null : (i + progress) / todo.length)
+        );
+        chosen = chosen.map((a) => done.get(a.id) ?? a);
+      } catch (err) {
+        notes.push(`تعذر تحليل «${asset.name}»: ${err instanceof Error ? err.message : ''}`);
+      }
+    }
+    autoChosen.current = chosen;
+    setAutoNotes(notes);
+    try {
+      working('المخرج الذكي يكتب خطة الفيديو...');
+      const plan = await requestPlan(brief, chosen);
+      setAutoStage({ step: 'plan', plan });
+    } catch (err) {
+      setAutoStage({ step: 'error', message: err instanceof Error ? err.message : 'تعذر إعداد الخطة.' });
+    }
+  };
+  const reviseAutoEdit = async (feedback: string) => {
+    if (autoStage.step !== 'plan' || !autoBrief.current) return;
+    const previous = autoStage.plan;
+    working('يعدّل الخطة حسب طلبك...');
+    try {
+      setAutoStage({ step: 'plan', plan: await requestPlan(autoBrief.current, autoChosen.current, previous, feedback) });
+    } catch (err) {
+      setAutoStage({ step: 'plan', plan: previous });
+      setAutoNotes((n) => [...n, err instanceof Error ? err.message : 'تعذر تعديل الخطة.']);
+    }
+  };
+  const buildAutoEdit = async () => {
+    if (autoStage.step !== 'plan' || !autoBrief.current) return;
+    if (!isEmpty && !window.confirm('سيحل المونتاج الجديد محل ما في الخط الزمني الآن (يمكنك التراجع). متابعة؟')) return;
+    const plan: AutoEditPlan = autoStage.plan;
+    try {
+      const res = await buildFromPlan(plan, autoBrief.current, autoChosen.current, {
+        onStatus: (status, progress) => working(`ينفّذ المونتاج: ${status}`, progress),
+        registerAsset,
+        saveAsset: (asset) => {
+          setAssetList((list) => list.map((x) => (x.id === asset.id ? asset : x)));
+          saveAsset(asset).catch(() => {});
+        },
+      });
+      update(() => res.project);
+      setSelection(null);
+      setAutoOpen(false);
+      setNotice(res.notes.length ? [...new Set(res.notes)].join(' ') : `جاهز: «${plan.title}». شغّله، وعدّل ما تريد يدوياً أو بالأوامر.`);
+      seek(0);
+    } catch (err) {
+      setAutoStage({ step: 'error', message: err instanceof Error ? err.message : 'تعذر تنفيذ المونتاج.' });
+    }
+  };
+
   const badScenesRef = useRef<[number, number][]>([]);
   // Analysis results moved onto the timeline (only the parts the clips use).
   const aiState = useMemo<AiPanelState>(() => {
@@ -1594,6 +1688,15 @@ export function VideoEditor({ onBack, initialFiles }: VideoEditorProps) {
         </div>
         <button
           type="button"
+          onClick={() => openAutoEdit()}
+          className="flex items-center gap-1.5 rounded-lg bg-gradient-to-l from-fuchsia-600 to-indigo-600 px-2.5 py-1.5 text-xs font-bold text-white shadow-lg shadow-fuchsia-600/20 hover:brightness-110 sm:px-3 sm:py-2"
+        >
+          <Clapperboard className="h-4 w-4" />
+          <span className="hidden sm:inline">مونتاج تلقائي</span>
+          <span className="sm:hidden">مونتاج</span>
+        </button>
+        <button
+          type="button"
           disabled={duration <= 0}
           onClick={() => {
             pause();
@@ -1829,6 +1932,32 @@ export function VideoEditor({ onBack, initialFiles }: VideoEditorProps) {
       )}
 
       {exporting && <EditorExportModal project={project} assets={assets} onClose={() => setExporting(false)} />}
+      {autoOpen && (
+        <AutoEditModal
+          library={assetList}
+          selected={autoSelected}
+          onToggle={(id) =>
+            setAutoSelected((sel) => {
+              const next = new Set(sel);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              return next;
+            })
+          }
+          onAddFiles={(files) => addFiles(files, false).then((loaded) => setAutoSelected((sel) => new Set([...sel, ...loaded.map((a) => a.id)])))}
+          loading={loading > 0}
+          stage={autoStage}
+          notes={autoNotes}
+          onPlan={planAutoEdit}
+          onRevise={reviseAutoEdit}
+          onBuild={buildAutoEdit}
+          onBack={() => setAutoStage({ step: 'brief' })}
+          onClose={() => {
+            if (autoStage.step === 'working') return;
+            setAutoOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

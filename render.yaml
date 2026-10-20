@@ -18,6 +18,9 @@ services:
       # Model for editing commands typed in the editor.
       - key: COMMAND_MODEL
         value: google/gemini-2.5-flash
+      # Model that plans a whole video for the auto edit (montage).
+      - key: PLAN_MODEL
+        value: google/gemini-3.8-flash
       # Text-to-speech model (returns PCM; the server wraps it as WAV).
       - key: TTS_MODEL
         value: google/gemini-3.8-flash-lite-tts
