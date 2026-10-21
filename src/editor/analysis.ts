@@ -193,6 +193,8 @@ export type BatchStatus =
   /** Between steps, waiting for its turn; `at` is how far it got (0..1). */
   | { stage: 'queued'; at: number }
   | { stage: 'proxy' | 'upload' | 'refine'; percent: number }
+  /** Speech to text, after the AI watched it (auto edit). */
+  | { stage: 'transcribe'; percent: number }
   | { stage: 'thinking' }
   | { stage: 'done' }
   | { stage: 'error'; message: string };
@@ -279,7 +281,9 @@ export function batchFraction(s: BatchStatus): number {
     case 'thinking':
       return 0.45;
     case 'refine':
-      return 0.8 + (s.percent / 100) * 0.2;
+      return 0.8 + (s.percent / 100) * 0.1;
+    case 'transcribe':
+      return 0.9 + (s.percent / 100) * 0.1;
     default:
       return 1;
   }

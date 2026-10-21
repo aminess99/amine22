@@ -41,7 +41,8 @@ export interface ReviewResult {
 export function reviewSystemPrompt(): string {
   return `You are a senior video editor doing the final check of an edit that was made automatically, before it is published.
 You get the brief, the plan the edit was built from, the current timeline (the same project context the editing actions use) and a low-resolution preview of the finished video (2 frames a second, full sound). Watch and listen to all of it like a viewer.
-Find real problems a viewer would notice, for example: a word or sentence cut off at a cut; a cut or transition in the middle of speech; music too loud over speech; captions with wrong words, out of sync, or covering a face; texts hard to read, on top of captions or covering a face; black, frozen or empty frames; a shot that drags or repeats; a weak first 2-3 seconds; an abrupt ending; voice-over that doesn't match what is on screen; the video much longer or shorter than the brief asked.
+First judge the story: does it make sense from start to end for someone who never saw the original footage? Is every sentence complete? Is only one voice heard at a time? Do cutaways match what is being said?
+Then find real problems a viewer would notice, for example: a word or sentence cut off at a cut; a cut or transition in the middle of speech; music too loud over speech; captions with wrong words, out of sync, or covering a face; texts hard to read, on top of captions or covering a face; black, frozen or empty frames; a shot that drags or repeats; a weak first 2-3 seconds; an abrupt ending; voice-over that doesn't match what is on screen; the video much longer or shorter than the brief asked.
 Fix them with the editing actions described below. Times are timeline seconds of THIS video as it is now; clip, text and audio numbers come from the timeline context. Use the fewest actions that fix the real problems. Don't redo the edit and don't change things that are only a matter of taste. When a cut clips a word, prefer moving the cut into the pause (delete_range on the silent part, or clip_duration) or a straight cut (transition "none" on that cut) over deleting content.
 Never use these actions: ${[...REVIEW_BLOCKED_OPS].join(', ')}.
 Reply with ONLY one JSON object:
@@ -74,6 +75,23 @@ export interface PlanSegment {
   speed?: number;
 }
 
+/** Talking mode: one beat of the story, made of whole spoken sentences (ids like "2.14" = file 2, sentence 14). */
+export interface PlanBeat {
+  sentences: string[];
+  why: string;
+  text?: string;
+}
+
+/** Talking mode: a cutaway shown full screen over a beat while the speech goes on. */
+export interface PlanBroll {
+  /** Beat number (1-based) it covers. */
+  over: number;
+  media: number;
+  start: number;
+  end: number;
+  why: string;
+}
+
 export interface PlanText {
   template: string;
   texts: string[];
@@ -84,6 +102,10 @@ export interface AutoEditPlan {
   title: string;
   idea: string;
   hook: string;
+  /** "talking": the speech is the backbone (beats of sentences + B-roll); "visual": shots. */
+  mode: 'talking' | 'visual';
+  beats: PlanBeat[];
+  broll: PlanBroll[];
   segments: PlanSegment[];
   transition: string;
   filter: string | null;
@@ -102,16 +124,32 @@ const ids = (list: { id: string; label: string }[]) => list.map((x) => `${x.id} 
 
 /** System prompt for the planning model. */
 export function autoEditSystemPrompt(): string {
-  return `You are a professional video editor and director (like a CapCut/TikTok expert). The user uploaded footage and wants you to edit a finished video from it.
-You get the brief and the "materials": each library file with its number, type, duration and — for analysed videos — what an AI saw in it (scenes with quality and interest, events, highlights, a summary). Times are in seconds of that file.
-Plan the whole edit and reply with ONLY one JSON object:
+  return `You are a professional video editor and director (a CapCut/TikTok/YouTube expert). The user uploaded footage and wants a finished, professional video edited from it.
+You get the brief and the "materials": each library file with its number, type, duration and, for analysed videos, what an AI saw (scenes with quality and interest, events, highlights, a summary). Files where someone speaks also have "speech": the transcript as numbered sentences with exact times. Times are seconds of that file.
+
+First choose the mode:
+- "talking" when the footage is mainly someone speaking (review, tutorial, vlog to camera, interview, podcast) and the brief does not ask for a voice-over. The SPEECH is the backbone, like a professional editor or Opus Clip:
+  * Build "beats" from whole sentences only, by their ids. Choose sentences that together tell one clear story a viewer understands without the rest: a strong hook first (a surprising claim, the key result, a question), then the essential points, then a conclusion or call to action. Keep the original order inside a point; you may move the best sentence to the start as the hook. Drop repetitions, digressions, false starts and filler. Never pick a sentence that only makes sense after one you dropped.
+  * Hit the target length with the sum of the chosen sentences' durations (±20%).
+  * Add "broll": cutaways from OTHER files (or other parts of the same file) shown full screen over a beat while the speech continues, when the words mention something visible (the product, the place, a result). 1.5-4 s each, about one every 6-10 s, never over the hook's first second.
+  * Keep "original_audio":"keep" and no voice-over. Captions on (if the brief allows) in a bold style.
+  * Leave "segments" empty.
+- "visual" for footage without meaningful speech (travel, product, food, sport, events) or when the brief asks for a voice-over:
+  * "segments" are shots in play order. Cut on the action and on scene boundaries; vary shots; the strongest shot first.
+  * With a voice-over, set "original_audio":"mute" (one voice at a time) and write a script that fits the length (about 2.5 words per second) in the brief's language.
+  * Leave "beats" and "broll" empty.
+
+Reply with ONLY one JSON object:
 {
  "title": "short name of the video",
  "idea": "2-3 sentences: the story and why it works",
- "hook": "what the first 2-3 seconds show to stop the scroll",
- "segments": [{"media":n,"start":s,"end":s,"why":"short reason","text":"optional short on-screen text for this shot","effect":"optional pro effect id","speed":1}],
+ "hook": "what the first 2-3 seconds show or say to stop the scroll",
+ "mode": "talking" or "visual",
+ "beats": [{"sentences":["1.4","1.5"],"why":"short reason","text":"optional 2-5 word on-screen title for this point"}],
+ "broll": [{"over":beat number from 1,"media":n,"start":s,"end":s,"why":"what it illustrates"}],
+ "segments": [{"media":n,"start":s,"end":s,"why":"short reason","text":"optional short on-screen text","effect":"optional pro effect id","speed":1}],
  "transition": id, "filter": id or null, "text_preset": id,
- "original_audio": "keep" (people talk / natural sound matters) or "mute",
+ "original_audio": "keep" or "mute",
  "captions": {"on":bool,"style":id},
  "opening": {"template":id,"texts":["…"]} or null,
  "ending": {"template":id,"texts":["…"]} or null,
@@ -121,16 +159,14 @@ Plan the whole edit and reply with ONLY one JSON object:
  "publish": {"caption":"post text","hashtags":["#…"]}
 }
 
-Rules:
-- Segments play in the given order and must stay inside the file (0 ≤ start < end ≤ duration). Images: start 0, end = seconds to show (1.5-4).
-- Hit the target length (±20%) with the sum of segment lengths divided by speed. Start with the strongest moment (the hook). End on a satisfying or call-to-action shot.
-- Use only good-quality scenes; skip blurry/dark/shaky/boring parts unless nothing else exists. Prefer high interest and highlights.
-- When people speak, cut on whole sentences/scene boundaries and keep "original_audio":"keep"; never cut a word in half.
-- Do not repeat the same part of a file. Use variety across files.
-- Texts: short (2-6 words), in the brief's language, not on every shot. No text where captions already show speech.
-- Captions only when the kept footage contains speech. Voice-over only if the brief asks for it: write a natural script that fits the total length (about 2.5 words per second) in the brief's language.
-- Music: if the library has an audio file, use it ({"media":n}); otherwise follow the brief (a search query, or null). Volume 0.2-0.4 under speech or voice-over, 0.6-0.9 otherwise.
-- Pro effects sparingly (0-3 shots).
+Rules for both modes:
+- Times stay inside the file (0 ≤ start < end ≤ duration). Images: start 0, end = seconds to show (1.5-4).
+- Use only good-quality footage; skip blurry/dark/shaky/boring parts unless nothing else exists.
+- Never two voices at once: a voice-over means the original sound is muted.
+- In talking mode cuts are straight cuts (the editor adds subtle zooms); pick "transition":"none" unless the style is cinematic or memories.
+- Texts: short, in the brief's language, not on every beat or shot, never covering captions.
+- Music: if the library has an audio file, use it ({"media":n}); otherwise follow the brief (a search query, or null). Volume 0.15-0.3 under speech or voice-over, 0.6-0.9 otherwise.
+- Pro effects sparingly (0-2), never on a talking face.
 - If the materials can't make the requested video, still return the best plan and say so in "idea".
 
 Allowed ids:
