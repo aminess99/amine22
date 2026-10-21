@@ -23,6 +23,8 @@ export interface MediaAsset {
   fps?: number;
   /** What the vision model saw in a video (source seconds, refined to frames). */
   analysis?: VideoAnalysis;
+  /** Spoken words with their times (source seconds), once transcribed. */
+  transcript?: { text: string; start: number; end: number }[];
 }
 
 export interface VideoScene {

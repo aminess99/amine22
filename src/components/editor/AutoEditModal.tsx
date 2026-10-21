@@ -19,7 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import { AUTO_STYLES, AutoEditBrief, AutoEditPlan } from '../../editor/autoEditSpec';
-import { MAX_AUTO_FOOTAGE, planDuration } from '../../editor/autoEdit';
+import { FILLER, MAX_AUTO_FOOTAGE, beatSentences, planDuration } from '../../editor/autoEdit';
 import { BatchStatus } from '../../editor/analysis';
 import { CAPTION_STYLES, FILTER_PRESETS, TRANSITIONS } from '../../editor/constants';
 import { fxDef } from '../../editor/proFxCatalog';
@@ -96,6 +96,8 @@ function fileStatus(s: BatchStatus): string {
       return 'الذكاء الاصطناعي يشاهده الآن...';
     case 'refine':
       return `تدقيق التوقيت بالإطار... ${s.percent}%`;
+    case 'transcribe':
+      return s.percent < 100 ? `تفريغ الكلام كلمة بكلمة... ${s.percent}%` : 'تفريغ الكلام كلمة بكلمة...';
     case 'done':
       return 'تمت المشاهدة';
     case 'error':
@@ -467,8 +469,55 @@ export function AutoEditModal(props: Props) {
   );
 }
 
+/** Talking mode: the story as the sentences that will be heard, with the cutaways over each beat. */
+function BeatsView({ plan, library }: { plan: AutoEditPlan; library: MediaAsset[] }) {
+  return (
+    <div>
+      <h4 className="mb-1 text-xs font-bold text-slate-200">القصة كما ستُسمع</h4>
+      <p className="mb-2 text-[11px] text-slate-500">جمل كاملة من كلامك بهذا الترتيب؛ يُحذف الصمت الطويل و«اممم»، وتظهر لقطات توضيحية فوق الكلام.</p>
+      <ol className="space-y-2">
+        {plan.beats.map((b, i) => {
+          const sentences = beatSentences(b, library);
+          const asset = library[Number(b.sentences[0]?.split('.')[0]) - 1];
+          const cutaways = plan.broll.filter((x) => x.over === i + 1);
+          return (
+            <li key={i} className="rounded-xl border border-white/5 bg-white/[0.03] p-2.5">
+              <div className="mb-1.5 flex items-center gap-2 text-[11px] text-slate-400">
+                <span className="rounded bg-fuchsia-500/20 px-1.5 font-bold text-fuchsia-200">{i + 1}</span>
+                <span className="truncate">{asset?.name}</span>
+                {sentences[0] && (
+                  <span dir="ltr" className="shrink-0 tabular-nums">
+                    {formatTime(sentences[0].start)} → {formatTime(sentences[sentences.length - 1].end)}
+                  </span>
+                )}
+                <span className="flex-1 truncate text-left text-slate-500">{b.why}</span>
+              </div>
+              <p dir="auto" className="text-sm leading-relaxed text-slate-100">«{sentences.flatMap((x) => x.words).filter((w) => !FILLER.test(w.text.trim())).map((w) => w.text).join(' ')}»</p>
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {b.text && (
+                  <span className="flex items-center gap-1 rounded bg-fuchsia-500/15 px-1.5 py-0.5 text-[10px] text-fuchsia-200">
+                    <Type className="h-3 w-3" /> {b.text}
+                  </span>
+                )}
+                {cutaways.map((x, k) => (
+                  <span key={k} className="flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 py-0.5 text-[10px] text-cyan-200">
+                    <span className="inline-block h-4 w-6 overflow-hidden rounded-sm align-middle">
+                      <Thumb asset={library[x.media - 1]} time={(x.start + x.end) / 2} />
+                    </span>
+                    لقطة توضيحية: {x.why}
+                  </span>
+                ))}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
 function PlanView({ plan, library, notes }: { plan: AutoEditPlan; library: MediaAsset[]; notes: string[] }) {
-  const total = useMemo(() => planDuration(plan), [plan]);
+  const total = useMemo(() => planDuration(plan, library), [plan, library]);
   const [copied, setCopied] = useState(false);
   const publish = [plan.publish.caption, plan.publish.hashtags.join(' ')].filter(Boolean).join('\n\n');
   const tpl = (id?: string) => TEXT_TEMPLATES.find((t) => t.id === id)?.label;
@@ -477,7 +526,9 @@ function PlanView({ plan, library, notes }: { plan: AutoEditPlan; library: Media
       <div className="rounded-xl border border-fuchsia-500/30 bg-fuchsia-500/5 p-3">
         <div className="flex items-start justify-between gap-2">
           <h3 className="text-base font-extrabold text-white">{plan.title}</h3>
-          <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-slate-200">≈ {Math.round(total)} ثانية · {plan.segments.length} مشهد</span>
+          <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-slate-200">
+            ≈ {Math.round(total)} ثانية · {plan.mode === 'talking' ? `${plan.beats.length} فقرة من الكلام` : `${plan.segments.length} مشهد`}
+          </span>
         </div>
         {plan.idea && <p className="mt-1.5 text-xs leading-relaxed text-slate-300">{plan.idea}</p>}
         {plan.hook && (
@@ -489,7 +540,8 @@ function PlanView({ plan, library, notes }: { plan: AutoEditPlan; library: Media
       </div>
       {notes.length > 0 && <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">{notes.join(' ')}</p>}
 
-      <div>
+      {plan.mode === 'talking' && <BeatsView plan={plan} library={library} />}
+      <div className={plan.mode === 'talking' ? 'hidden' : ''}>
         <h4 className="mb-2 text-xs font-bold text-slate-200">ترتيب المشاهد</h4>
         <ol className="space-y-2">
           {plan.segments.map((s, i) => {

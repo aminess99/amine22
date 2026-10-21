@@ -497,6 +497,34 @@ async function startServer() {
       });
     return id;
   };
+  /**
+   * Lets a request handler run as a background job when the client asks for it (field async=1):
+   * the handler's response becomes the job's result. Older clients get the plain response.
+   */
+  const runAsJob =
+    (handler: (req: express.Request, res: express.Response) => unknown) =>
+    (req: express.Request, res: express.Response) => {
+      if (req.body?.async !== "1") return handler(req, res);
+      const job = startJob(
+        () =>
+          new Promise((resolve, reject) => {
+            let code = 200;
+            const fake: any = {
+              headersSent: false,
+              setTimeout: () => fake,
+              status: (c: number) => ((code = c), fake),
+              json: (body: any) => {
+                if (code < 300) resolve(body);
+                else reject(new Error(body?.error || `status ${code}`));
+                return fake;
+              },
+            };
+            Promise.resolve(handler(req, fake)).catch(reject);
+          })
+      );
+      res.status(202).json({ job });
+    };
+
   app.get("/api/jobs/:id", (req, res) => {
     const job = jobs.get(req.params.id);
     if (!job) return res.status(404).json({ error: "Unknown job" });
@@ -1071,7 +1099,7 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
     }
   });
 
-  app.post("/api/transcribe", upload.single("video"), async (req, res) => {
+  app.post("/api/transcribe", upload.single("video"), runAsJob(async (req, res) => {
     let storedVideoPath: string | null = null;
     let audioTempPath: string | null = null;
 
@@ -1300,7 +1328,7 @@ Sitemap: ${req.protocol}://${req.get('host')}/sitemap.xml
         try { fs.unlinkSync(req.file.path); } catch (e) {}
       }
     }
-  });
+  }));
 
   // Convert/Transcode video to standard web-compatible H.264 MP4 for preview
   const handleTranscodeRequest = async (req: express.Request, res: express.Response) => {

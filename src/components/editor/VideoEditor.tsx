@@ -76,6 +76,7 @@ import { autoSfxTimes, sfxFile } from '../../editor/sfx';
 import { fxDef, newFxLayer } from '../../editor/proFx';
 import { BatchStatus, MAX_ANALYSIS_SECONDS, analyzeMany, batchFraction } from '../../editor/analysis';
 import { MAX_AUTO_FOOTAGE, buildFromPlan, requestPlan, reviewEdit } from '../../editor/autoEdit';
+import { transcribeAsset } from '../../editor/autoCaptions';
 import { AutoEditBrief, AutoEditPlan } from '../../editor/autoEditSpec';
 import { AutoEditModal, AutoEditReport, AutoEditStage } from './AutoEditModal';
 import { videoFps } from '../../editor/refine';
@@ -1278,29 +1279,53 @@ export function VideoEditor({ onBack, initialFiles, autoEdit }: VideoEditorProps
       budget -= asset.duration;
       todo.push(asset);
     }
-    if (todo.length) {
-      const states = new Map<string, BatchStatus>(todo.map((a) => [a.id, { stage: 'waiting' }]));
+    // Videos where people may speak are also transcribed word by word: the plan is built from sentences.
+    const mayTalk = (a: MediaAsset) => a.kind === 'video' && a.hasAudio && !a.transcript && (!a.analysis || a.analysis.events.some((e) => e.kind === 'speech'));
+    const speechTodo = chosen.filter((a) => mayTalk(a) && a.duration <= MAX_ANALYSIS_SECONDS);
+    const shown = [...new Map([...todo, ...speechTodo].map((a) => [a.id, a])).values()];
+    if (shown.length) {
+      const states = new Map<string, BatchStatus>(shown.map((a) => [a.id, { stage: 'waiting' }]));
       const show = () =>
         setAutoStage({
           step: 'working',
-          status: todo.length > 1 ? `الذكاء الاصطناعي يشاهد ${todo.length} فيديوهات معاً` : 'الذكاء الاصطناعي يشاهد الفيديو',
-          progress: [...states.values()].reduce((sum, x) => sum + batchFraction(x), 0) / todo.length,
-          files: todo.map((asset) => ({ asset, status: states.get(asset.id)! })),
+          status: shown.length > 1 ? `الذكاء الاصطناعي يشاهد ${shown.length} فيديوهات معاً` : 'الذكاء الاصطناعي يشاهد الفيديو',
+          progress: [...states.values()].reduce((sum, x) => sum + batchFraction(x), 0) / shown.length,
+          files: shown.map((asset) => ({ asset, status: states.get(asset.id)! })),
         });
+      const set = (id: string, st: BatchStatus) => {
+        states.set(id, st);
+        show();
+      };
       show();
       const updated = new Map<string, MediaAsset>();
-      const { errors } = await analyzeMany(
-        todo,
-        (id, st) => {
-          states.set(id, st);
-          show();
-        },
-        async (asset, analysis) => {
+      if (todo.length) {
+        const { errors } = await analyzeMany(todo, set, async (asset, analysis) => {
           updated.set(asset.id, await storeAnalysis(asset, analysis));
+        });
+        for (const e of errors) notes.push(`تعذر تحليل «${e.asset.name}»: ${e.message}`);
+      }
+      // Two at a time; a video the AI found silent is skipped.
+      const pending = speechTodo.map((a) => updated.get(a.id) ?? a).filter(mayTalk);
+      for (const a of speechTodo) if (!pending.some((x) => x.id === a.id)) set(a.id, { stage: 'done' });
+      const worker = async () => {
+        for (let asset = pending.shift(); asset; asset = pending.shift()) {
+          const target = asset;
+          set(target.id, { stage: 'transcribe', percent: 0 });
+          try {
+            const words = await transcribeAsset(target, (percent) => set(target.id, { stage: 'transcribe', percent }), () => set(target.id, { stage: 'transcribe', percent: 100 }));
+            const withWords = { ...(updated.get(target.id) ?? target), transcript: words };
+            setAssetList((list) => list.map((x) => (x.id === target.id ? { ...x, transcript: words } : x)));
+            saveAsset(withWords).catch(() => {});
+            updated.set(target.id, withWords);
+            set(target.id, { stage: 'done' });
+          } catch (err) {
+            notes.push(`تعذر تفريغ كلام «${target.name}»: ${err instanceof Error ? err.message : ''}`);
+            set(target.id, { stage: 'error', message: err instanceof Error ? err.message : 'تعذر التفريغ.' });
+          }
         }
-      );
+      };
+      await Promise.all([worker(), worker()]);
       chosen = chosen.map((a) => updated.get(a.id) ?? a);
-      for (const e of errors) notes.push(`تعذر تحليل «${e.asset.name}»: ${e.message}`);
     }
     autoChosen.current = chosen;
     setAutoNotes(notes);
