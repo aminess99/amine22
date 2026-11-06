@@ -101,6 +101,9 @@ import { EditorTimeline } from './EditorTimeline';
 import { ToolButton } from './ui';
 import { frameAt } from './previews';
 
+/** Set to true to show the "auto edit" button in the editor toolbar again. */
+const SHOW_AUTO_EDIT_BUTTON = false;
+
 type PanelId = 'media' | 'ai' | 'effects' | 'audio' | 'text' | 'stickers' | 'filters' | 'transitions' | 'templates' | 'edit';
 
 const PANELS: { id: PanelId; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
@@ -1782,15 +1785,17 @@ export function VideoEditor({ onBack, initialFiles, autoEdit }: VideoEditorProps
             ))}
           </select>
         </div>
-        <button
-          type="button"
-          onClick={() => openAutoEdit()}
-          className="flex items-center gap-1.5 rounded-lg bg-gradient-to-l from-fuchsia-600 to-indigo-600 px-2.5 py-1.5 text-xs font-bold text-white shadow-lg shadow-fuchsia-600/20 hover:brightness-110 sm:px-3 sm:py-2"
-        >
-          <Clapperboard className="h-4 w-4" />
-          <span className="hidden sm:inline">مونتاج تلقائي</span>
-          <span className="sm:hidden">مونتاج</span>
-        </button>
+        {SHOW_AUTO_EDIT_BUTTON && (
+          <button
+            type="button"
+            onClick={() => openAutoEdit()}
+            className="flex items-center gap-1.5 rounded-lg bg-gradient-to-l from-fuchsia-600 to-indigo-600 px-2.5 py-1.5 text-xs font-bold text-white shadow-lg shadow-fuchsia-600/20 hover:brightness-110 sm:px-3 sm:py-2"
+          >
+            <Clapperboard className="h-4 w-4" />
+            <span className="hidden sm:inline">مونتاج تلقائي</span>
+            <span className="sm:hidden">مونتاج</span>
+          </button>
+        )}
         <button
           type="button"
           disabled={duration <= 0}
