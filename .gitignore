@@ -9,3 +9,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Generated montage media (test renders, voiceovers)
+montage/samples/
