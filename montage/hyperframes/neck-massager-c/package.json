@@ -1,0 +1,10 @@
+{
+  "name": "neck-massager-c",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx --yes hyperframes@0.9.9 preview",
+    "check": "npx --yes hyperframes@0.9.9 check",
+    "render": "npx --yes hyperframes@0.9.9 render"
+  }
+}

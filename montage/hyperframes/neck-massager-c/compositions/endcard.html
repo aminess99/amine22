@@ -1,0 +1,38 @@
+<template>
+  <style>
+    @font-face { font-family: "Cairo"; src: url("assets/fonts/Cairo.ttf") format("truetype"); font-weight: 700; }
+    #root { position: absolute; inset: 0; overflow: hidden; font-family: "Cairo", sans-serif; font-weight: 700;
+      background: linear-gradient(180deg, #082E22, #165E40); }
+    #ec-glow { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 45%, rgba(80, 190, 130, 0.35), transparent 60%); }
+    #ec-title, #ec-line { position: absolute; left: 0; width: 100%; display: flex; justify-content: center; direction: rtl; }
+    #ec-title { top: 120px; font-size: 86px; gap: 24px; }
+    #ec-line { top: 1640px; font-size: 46px; gap: 13px; }
+    #ec-subtitle { position: absolute; top: 250px; left: 0; width: 100%; text-align: center; color: #fff; font-size: 50px; }
+    #ec-card { position: absolute; left: 152px; top: 362px; width: 776px; height: 1016px; border-radius: 46px; background: #fff; padding: 8px; box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45); }
+    #ec-card-inner { width: 100%; height: 100%; border-radius: 40px; overflow: hidden; }
+    #ec-image { width: 100%; height: 100%; object-fit: cover; }
+    #ec-button-row, #ec-badge-row { position: absolute; left: 0; width: 100%; display: flex; justify-content: center; }
+    #ec-button-row { top: 1440px; }
+    #ec-button { background: #FFD60A; color: #111; font-size: 76px; padding: 14px 70px; border-radius: 999px; box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4); }
+    #ec-badge-row { top: 1745px; }
+    #ec-badge { background: #E11D48; color: #fff; font-size: 40px; padding: 6px 40px; border-radius: 999px; }
+    #ec-flash { position: absolute; inset: 0; background: #fff; opacity: 0; }
+  </style>
+  <div id="root" data-composition-id="endcard" data-width="1080" data-height="1920">
+    <div id="ec-glow"></div>
+    <div id="ec-title"><span style="color:#FFFFFF">مساج الرقبة</span><span style="color:#FFD60A">والكتف</span></div>
+    <div id="ec-subtitle">بأصابع تدليك وحرارة</div>
+    <div id="ec-card"><div id="ec-card-inner"><img id="ec-image" src="assets/product.jpg" alt="" /></div></div>
+    <div id="ec-button-row"><div id="ec-button">اطلبه الحين</div></div>
+    <div id="ec-line"><span style="color:#FFFFFF">التوصيل</span><span style="color:#FFD60A">مجاني</span><span style="color:#FFFFFF">•</span><span style="color:#FFFFFF">الدفع عند</span><span style="color:#FFD60A">الاستلام</span></div>
+    <div id="ec-badge-row"><div id="ec-badge">الكمية محدودة</div></div>
+    <div id="ec-flash"></div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#ec-image", { scale: 1 }, { scale: 1.08, duration: 4.63, ease: "none" }, 0);
+    tl.fromTo("#ec-button", { scale: 1 }, { scale: 1.05, duration: 0.3125, ease: "sine.inOut", yoyo: true, repeat: 13 }, 0);
+    tl.fromTo("#ec-flash", { opacity: 1 }, { opacity: 0, duration: 0.12, ease: "none" }, 0);
+    window.__timelines["endcard"] = tl;
+  </script>
+</template>

@@ -1,0 +1,95 @@
+<template>
+  <style>
+    @font-face { font-family: "Cairo"; src: url("assets/fonts/Cairo.ttf") format("truetype"); font-weight: 700; }
+    #root { position: absolute; inset: 0; overflow: visible; font-family: "Cairo", sans-serif; font-weight: 700; }
+    .group { position: absolute; left: 0; width: 100%; height: 0; overflow: visible; }
+    .cap-text {
+      position: absolute; left: 0; width: 100%; top: -55px; transform-origin: 50% 50%;
+      display: flex; justify-content: center; gap: 22px; direction: rtl;
+      font-size: 84px; line-height: 1.25; color: #FFFFFF;
+      -webkit-text-stroke: 16px #000; paint-order: stroke fill;
+      text-shadow: 0 6px 10px rgba(0, 0, 0, 0.45);
+    }
+  </style>
+  <div id="root" data-composition-id="captions" data-width="1080" data-height="1920">
+    <div id="cap1" class="clip group" data-start="0" data-duration="1.06" style="top:1215px"><div id="cap1-text" class="cap-text"><span id="cap1-w1" class="w">رقبتك</span><span id="cap1-w2" class="w">تعبانة</span></div></div>
+    <div id="cap2" class="clip group" data-start="1.06" data-duration="1" style="top:1215px"><div id="cap2-text" class="cap-text"><span id="cap2-w1" class="w">من</span><span id="cap2-w2" class="w">الجوال</span><span id="cap2-w3" class="w">والدوام؟</span></div></div>
+    <div id="cap3" class="clip group" data-start="2.06" data-duration="1.2" style="top:1215px"><div id="cap3-text" class="cap-text"><span id="cap3-w1" class="w">شوف</span><span id="cap3-w2" class="w">هذا</span><span id="cap3-w3" class="w">المساج</span></div></div>
+    <div id="cap4" class="clip group" data-start="3.26" data-duration="1.5" style="top:1215px"><div id="cap4-text" class="cap-text"><span id="cap4-w1" class="w">أصابعه</span><span id="cap4-w2" class="w">مثل</span><span id="cap4-w3" class="w">اليد!</span></div></div>
+    <div id="cap5" class="clip group" data-start="4.76" data-duration="1.38" style="top:1215px"><div id="cap5-text" class="cap-text"><span id="cap5-w1" class="w">يعجن</span><span id="cap5-w2" class="w">رقبتك</span></div></div>
+    <div id="cap6" class="clip group" data-start="6.14" data-duration="1.2" style="top:1215px"><div id="cap6-text" class="cap-text"><span id="cap6-w1" class="w">ويفك</span><span id="cap6-w2" class="w">الشد</span><span id="cap6-w3" class="w">كله</span></div></div>
+    <div id="cap7" class="clip group" data-start="7.34" data-duration="1.26" style="top:1215px"><div id="cap7-text" class="cap-text"><span id="cap7-w1" class="w">وفيه</span><span id="cap7-w2" class="w">حرارة</span><span id="cap7-w3" class="w">دافية</span></div></div>
+    <div id="cap8" class="clip group" data-start="8.6" data-duration="0.9" style="top:1215px"><div id="cap8-text" class="cap-text"><span id="cap8-w1" class="w">تريّح</span><span id="cap8-w2" class="w">العضلات</span></div></div>
+    <div id="cap9" class="clip group" data-start="9.5" data-duration="1.08" style="top:1215px"><div id="cap9-text" class="cap-text"><span id="cap9-w1" class="w">تحطه</span><span id="cap9-w2" class="w">على</span><span id="cap9-w3" class="w">رقبتك</span></div></div>
+    <div id="cap10" class="clip group" data-start="10.58" data-duration="1.04" style="top:1215px"><div id="cap10-text" class="cap-text"><span id="cap10-w1" class="w">بثواني</span><span id="cap10-w2" class="w">وترتاح</span></div></div>
+    <div id="cap11" class="clip group" data-start="11.62" data-duration="1.32" style="top:1215px"><div id="cap11-text" class="cap-text"><span id="cap11-w1" class="w">استخدمه</span><span id="cap11-w2" class="w">بالبيت</span></div></div>
+    <div id="cap12" class="clip group" data-start="12.94" data-duration="0.76" style="top:1215px"><div id="cap12-text" class="cap-text"><span id="cap12-w1" class="w">بالمكتب</span></div></div>
+    <div id="cap13" class="clip group" data-start="13.7" data-duration="0.98" style="top:1215px"><div id="cap13-text" class="cap-text"><span id="cap13-w1" class="w">أو</span><span id="cap13-w2" class="w">بالسيارة</span></div></div>
+    <div id="cap14" class="clip group" data-start="14.68" data-duration="1.46" style="top:960px"><div id="cap14-text" class="cap-text"><span id="cap14-w1" class="w">وينفع</span><span id="cap14-w2" class="w">كمان</span><span id="cap14-w3" class="w">للظهر</span></div></div>
+    <div id="cap15" class="clip group" data-start="16.14" data-duration="0.72" style="top:960px"><div id="cap15-text" class="cap-text"><span id="cap15-w1" class="w">والرجلين</span><span id="cap15-w2" class="w">بعد</span></div></div>
+    <div id="cap16" class="clip group" data-start="16.86" data-duration="1.28" style="top:1215px"><div id="cap16-text" class="cap-text"><span id="cap16-w1" class="w">التوصيل</span><span id="cap16-w2" class="w">مجاني</span></div></div>
+    <div id="cap17" class="clip group" data-start="18.14" data-duration="1.06" style="top:1215px"><div id="cap17-text" class="cap-text"><span id="cap17-w1" class="w">والدفع</span><span id="cap17-w2" class="w">عند</span><span id="cap17-w3" class="w">الاستلام</span></div></div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#cap1-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 0).to("#cap1-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 0.09);
+    tl.set("#cap1-w1", { color: "#FFD60A" }, 0).set("#cap1-w1", { color: "#FFFFFF" }, 0.52);
+    tl.set("#cap1-w2", { color: "#FFD60A" }, 0.52).set("#cap1-w2", { color: "#FFFFFF" }, 1.06);
+    tl.fromTo("#cap2-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 1.06).to("#cap2-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 1.15);
+    tl.set("#cap2-w1", { color: "#FFD60A" }, 1.06).set("#cap2-w1", { color: "#FFFFFF" }, 1.12);
+    tl.set("#cap2-w2", { color: "#FFD60A" }, 1.12).set("#cap2-w2", { color: "#FFFFFF" }, 1.54);
+    tl.set("#cap2-w3", { color: "#FFD60A" }, 1.54).set("#cap2-w3", { color: "#FFFFFF" }, 2.06);
+    tl.fromTo("#cap3-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 2.06).to("#cap3-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 2.15);
+    tl.set("#cap3-w1", { color: "#FFD60A" }, 2.06).set("#cap3-w1", { color: "#FFFFFF" }, 2.64);
+    tl.set("#cap3-w2", { color: "#FFD60A" }, 2.64).set("#cap3-w2", { color: "#FFFFFF" }, 2.82);
+    tl.set("#cap3-w3", { color: "#FFD60A" }, 2.82).set("#cap3-w3", { color: "#FFFFFF" }, 3.26);
+    tl.fromTo("#cap4-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 3.26).to("#cap4-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 3.35);
+    tl.set("#cap4-w1", { color: "#FFD60A" }, 3.26).set("#cap4-w1", { color: "#FFFFFF" }, 4.18);
+    tl.set("#cap4-w2", { color: "#FFD60A" }, 4.18).set("#cap4-w2", { color: "#FFFFFF" }, 4.46);
+    tl.set("#cap4-w3", { color: "#FFD60A" }, 4.46).set("#cap4-w3", { color: "#FFFFFF" }, 4.76);
+    tl.fromTo("#cap5-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 4.76).to("#cap5-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 4.85);
+    tl.set("#cap5-w1", { color: "#FFD60A" }, 4.76).set("#cap5-w1", { color: "#FFFFFF" }, 5.6);
+    tl.set("#cap5-w2", { color: "#FFD60A" }, 5.6).set("#cap5-w2", { color: "#FFFFFF" }, 6.14);
+    tl.fromTo("#cap6-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 6.14).to("#cap6-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 6.23);
+    tl.set("#cap6-w1", { color: "#FFD60A" }, 6.14).set("#cap6-w1", { color: "#FFFFFF" }, 6.48);
+    tl.set("#cap6-w2", { color: "#FFD60A" }, 6.48).set("#cap6-w2", { color: "#FFFFFF" }, 6.9);
+    tl.set("#cap6-w3", { color: "#FFD60A" }, 6.9).set("#cap6-w3", { color: "#FFFFFF" }, 7.34);
+    tl.fromTo("#cap7-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 7.34).to("#cap7-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 7.43);
+    tl.set("#cap7-w1", { color: "#FFD60A" }, 7.34).set("#cap7-w1", { color: "#FFFFFF" }, 7.68);
+    tl.set("#cap7-w2", { color: "#FFD60A" }, 7.68).set("#cap7-w2", { color: "#FFFFFF" }, 8.14);
+    tl.set("#cap7-w3", { color: "#FFD60A" }, 8.14).set("#cap7-w3", { color: "#FFFFFF" }, 8.6);
+    tl.fromTo("#cap8-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 8.6).to("#cap8-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 8.69);
+    tl.set("#cap8-w1", { color: "#FFD60A" }, 8.6).set("#cap8-w1", { color: "#FFFFFF" }, 9);
+    tl.set("#cap8-w2", { color: "#FFD60A" }, 9).set("#cap8-w2", { color: "#FFFFFF" }, 9.5);
+    tl.fromTo("#cap9-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 9.5).to("#cap9-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 9.59);
+    tl.set("#cap9-w1", { color: "#FFD60A" }, 9.5).set("#cap9-w1", { color: "#FFFFFF" }, 9.94);
+    tl.set("#cap9-w2", { color: "#FFD60A" }, 9.94).set("#cap9-w2", { color: "#FFFFFF" }, 10.1);
+    tl.set("#cap9-w3", { color: "#FFD60A" }, 10.1).set("#cap9-w3", { color: "#FFFFFF" }, 10.58);
+    tl.fromTo("#cap10-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 10.58).to("#cap10-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 10.67);
+    tl.set("#cap10-w1", { color: "#FFD60A" }, 10.58).set("#cap10-w1", { color: "#FFFFFF" }, 11.1);
+    tl.set("#cap10-w2", { color: "#FFD60A" }, 11.1).set("#cap10-w2", { color: "#FFFFFF" }, 11.62);
+    tl.fromTo("#cap11-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 11.62).to("#cap11-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 11.71);
+    tl.set("#cap11-w1", { color: "#FFD60A" }, 11.62).set("#cap11-w1", { color: "#FFFFFF" }, 12.32);
+    tl.set("#cap11-w2", { color: "#FFD60A" }, 12.32).set("#cap11-w2", { color: "#FFFFFF" }, 12.94);
+    tl.fromTo("#cap12-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 12.94).to("#cap12-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 13.03);
+    tl.set("#cap12-w1", { color: "#FFD60A" }, 12.94).set("#cap12-w1", { color: "#FFFFFF" }, 13.7);
+    tl.fromTo("#cap13-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 13.7).to("#cap13-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 13.79);
+    tl.set("#cap13-w1", { color: "#FFD60A" }, 13.7).set("#cap13-w1", { color: "#FFFFFF" }, 13.9);
+    tl.set("#cap13-w2", { color: "#FFD60A" }, 13.9).set("#cap13-w2", { color: "#FFFFFF" }, 14.68);
+    tl.fromTo("#cap14-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 14.68).to("#cap14-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 14.77);
+    tl.set("#cap14-w1", { color: "#FFD60A" }, 14.68).set("#cap14-w1", { color: "#FFFFFF" }, 15.36);
+    tl.set("#cap14-w2", { color: "#FFD60A" }, 15.36).set("#cap14-w2", { color: "#FFFFFF" }, 15.66);
+    tl.set("#cap14-w3", { color: "#FFD60A" }, 15.66).set("#cap14-w3", { color: "#FFFFFF" }, 16.14);
+    tl.fromTo("#cap15-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 16.14).to("#cap15-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 16.23);
+    tl.set("#cap15-w1", { color: "#FFD60A" }, 16.14).set("#cap15-w1", { color: "#FFFFFF" }, 16.64);
+    tl.set("#cap15-w2", { color: "#FFD60A" }, 16.64).set("#cap15-w2", { color: "#FFFFFF" }, 16.86);
+    tl.fromTo("#cap16-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 16.86).to("#cap16-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 16.95);
+    tl.set("#cap16-w1", { color: "#FFD60A" }, 16.86).set("#cap16-w1", { color: "#FFFFFF" }, 17.64);
+    tl.set("#cap16-w2", { color: "#FFD60A" }, 17.64).set("#cap16-w2", { color: "#FFFFFF" }, 18.14);
+    tl.fromTo("#cap17-text", { scale: 0.78 }, { scale: 1.06, duration: 0.09, ease: "power2.out" }, 18.14).to("#cap17-text", { scale: 1, duration: 0.07, ease: "power1.out" }, 18.23);
+    tl.set("#cap17-w1", { color: "#FFD60A" }, 18.14).set("#cap17-w1", { color: "#FFFFFF" }, 18.64);
+    tl.set("#cap17-w2", { color: "#FFD60A" }, 18.64).set("#cap17-w2", { color: "#FFFFFF" }, 18.74);
+    tl.set("#cap17-w3", { color: "#FFD60A" }, 18.74).set("#cap17-w3", { color: "#FFFFFF" }, 19.2);
+    window.__timelines["captions"] = tl;
+  </script>
+</template>

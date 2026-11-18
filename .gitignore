@@ -13,3 +13,6 @@ coverage/
 # Generated montage media (test renders, voiceovers)
 montage/samples/
 montage/projects/*/out/
+
+# HyperFrames caches and check artifacts
+montage/hyperframes/*/.hyperframes/
