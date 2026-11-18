@@ -40,21 +40,17 @@ t = lambda i: words[i]["s"]
 # grid  : ("grid", start, end, [(src, in, appear_word), ...x4])          RTL order: TR, TL, BR, BL
 # Rules: one complete action per shot, kept inside its source scene (last field = scene time left);
 # clean backgrounds only. c3 and c4 (shop footage, 576p, shaky, cluttered) are excluded.
+# Every shot 2-3 s (hook and end card excepted), one complete action, no scene used twice.
 SHOTS = [
-    ("one", 0.00, t(8), "c5", 3.50, ("push", 1.32, 1.42, 0.50, 0.66), 2.88),   # hands to a tired neck, puts it on
-    ("one", t(8), t(11), "c1", 1.00, ("dolly", 1.30, 0.50, 0.45), 0.95),     # reveal: product, heat pads glowing
-    ("one", t(11), t(13), "c2", 1.95, ("dolly", 1.35, 0.50, 0.45), 1.46),    # fingers moving
-    ("one", t(13), t(17), "c5", 9.10, ("kb", 1.00, 1.06), 3.05),             # kneads like a masseur (peak 10.7)
-    ("one", t(17), t(20), "c5", 6.45, ("push", 1.08, 1.14, 0.50, 0.68), 2.30),  # kneads neck & shoulders (poster cropped out)
-    ("one", t(20), t(24), "c2", 7.92, ("kb", 1.00, 1.06)),                 # kneading continues: any window is a full move
-    ("one", t(24), t(27), "c1", 1.99, ("dolly", 1.45, 0.50, 0.60), 1.02),    # heat glow
-    ("one", t(27), t(29), "c1", 10.59, ("kb", 1.00, 1.05), 1.09),            # relaxed, lying down
-    ("one", t(29), t(33), "c5", 0.10, ("kb", 1.00, 1.05), 1.95),             # puts it on in seconds (whole action)
-    ("one", t(33), t(35), "c1", 5.05, ("kb", 1.05, 1.00), 1.23),             # relaxing
-    ("one", t(35), t(38), "c1", 11.72, ("dolly", 1.25, 0.50, 0.55), 0.89),  # at home or at the desk
-    ("split", t(38), t(44), ("c5", 12.22, 0.55, 1.88), ("c2", 4.45, 0.50, 3.40)),  # back / legs
-    ("one", t(44), t(46), "c5", 2.10, ("kb", 1.00, 1.06), 1.35),             # free delivery
-    ("one", t(46), END_CARD, "c1", 14.02, ("kb", 1.00, 1.06), 1.03),         # cash on delivery
+    ("one", 0.00, t(8), "c5", 3.50, ("push", 1.32, 1.42, 0.50, 0.66), 2.88),    # 3.5 s  hands to a tired neck, puts it on
+    ("one", t(8), t(14), "c5", 6.45, ("push", 1.15, 1.32, 0.62, 0.68), 2.30),   # 2.9 s  "شوف هذا المساج، أصابعه تتحرك مثل"
+    ("one", t(14), t(19), "c2", 7.92, ("kb", 1.00, 1.06), 2.63),                # 2.4 s  "يد المدلّك بالضبط! يعجن الرقبة"
+    ("one", t(19), t(24), "c2", 1.95, ("dolly", 1.30, 0.50, 0.45), 1.46),       # 2.1 s  "والكتوف، ويفك الشد اللي فيها"
+    ("one", t(24), t(29), "c5", 9.10, ("dolly", 1.30, 0.45, 0.55), 3.05),       # 2.3 s  "وفيه حرارة دافية تريّح العضلات" (red glow)
+    ("one", t(29), t(34), "c5", 0.10, ("kb", 1.00, 1.05), 1.95),                # 2.4 s  "تحطه على رقبتك بثواني، وترتاح"
+    ("one", t(34), t(39), "c1", 9.35, ("kb", 1.00, 1.06), 1.20),                # 2.2 s  "وأنت بالبيت أو بالمكتب. وتقدر"
+    ("split", t(39), t(44), ("c1", 5.05, 0.50, 1.23), ("c2", 4.45, 0.50, 2.00)),  # 2.0 s  "تستخدمه على الظهر والرجلين بعد"
+    ("one", t(44), END_CARD, "c5", 12.22, ("push", 1.32, 1.45, 0.58, 0.72), 1.88),   # 2.8 s  "التوصيل مجاني، والدفع عند الاستلام"
 ]
 SPLIT_TIMES = [(x[1], x[2]) for x in SHOTS if x[0] in ("split", "grid")]
 
