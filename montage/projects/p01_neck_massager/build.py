@@ -15,8 +15,6 @@ UP = "/root/.claude/uploads/9dbe307d-529d-547b-9933-313f1c4066df"
 SRC = {
     "c1": f"{UP}/085914c0-TikDownloader.io_7613881382707809544_hd.mp4",
     "c2": f"{UP}/0038ac36-TikDownloader.io_7584457909514390814_hd.mp4",
-    "c3": f"{UP}/cd3f6bea-download_1.mp4",
-    "c4": f"{UP}/da4ac898-TikDownloader.io_7627082649663753490.mp4",
     "c5": f"{UP}/f9cca6d8-TikDownloader.io_7660454460392557854.mp4",
 }
 OUT = os.path.join(HERE, "out"); TMP = os.path.join(OUT, "tmp")
@@ -39,19 +37,23 @@ t = lambda i: words[i]["s"]
 # single: ("one", start, end, src, in, zoom) with zoom = ("kb", from, to) or ("dolly", max, fx, fy)
 # split : ("split", start, end, (src, in, fy), (src, in, fy))          top / bottom
 # grid  : ("grid", start, end, [(src, in, appear_word), ...x4])          RTL order: TR, TL, BR, BL
+# Rules: one complete action per shot, kept inside its source scene (last field = scene time left);
+# clean backgrounds only. c3 and c4 (shop footage, 576p, shaky, cluttered) are excluded.
 SHOTS = [
-    ("one", 0.00, 1.30, "c4", 15.10, ("dolly", 1.40, 0.45, 0.58)),   # hook: fingers at camera
-    ("one", 1.30, t(6), "c5", 3.85, ("kb", 1.00, 1.07)),             # placing it on a tense neck
-    ("one", t(6), t(9), "c3", 16.40, ("dolly", 1.30, 0.50, 0.45)),   # product reveal
-    ("one", t(9), t(13), "c4", 0.05, ("kb", 1.04, 1.00)),            # kneading like hands
-    ("one", t(13), t(16), "c2", 1.95, ("dolly", 1.40, 0.50, 0.45)),  # silicone fingers
-    ("split", t(16), t(20), ("c2", 7.95, 0.45), ("c3", 28.20, 0.40)),  # kneading, two angles
-    ("one", t(20), t(23), "c1", 1.97, ("dolly", 1.45, 0.50, 0.60), 1.03),  # heat glow (scene is 1.07 s)
-    ("one", t(23), t(27), "c5", 9.00, ("kb", 1.06, 1.00)),           # lying down, relaxing
-    ("one", t(27), t(29), "c3", 26.00, ("kb", 1.00, 1.06)),          # strapping it on
-    ("split", t(29), t(33), ("c1", 9.35, 0.45), ("c3", 30.40, 0.35)),  # home / out
-    ("grid", t(33), t(38), [("c4", 5.00, 33), ("c3", 36.30, 34), ("c5", 12.40, 35), ("c2", 4.60, 36)]),
-    ("one", t(38), END_CARD, "c4", 5.90, ("dolly", 1.30, 0.50, 0.55)),  # on the neck
+    ("one", 0.00, t(6), "c5", 3.50, ("push", 1.32, 1.42, 0.50, 0.66), 2.88),  # hands to the neck, puts it on (poster cropped out)
+    ("one", t(6), t(9), "c1", 1.00, ("dolly", 1.25, 0.50, 0.45), 0.95),   # product, heat pads glowing
+    ("one", t(9), t(13), "c2", 7.92, ("kb", 1.00, 1.06), 2.63),           # kneading the neck
+    ("one", t(13), t(16), "c2", 1.95, ("dolly", 1.30, 0.50, 0.45), 1.46), # silicone fingers
+    ("split", t(16), t(20), ("c5", 9.00, 0.45, 3.15), ("c5", 6.45, 0.68, 2.30)),  # kneading, two angles (poster cropped out)
+    ("one", t(20), t(23), "c1", 1.99, ("dolly", 1.45, 0.50, 0.60), 1.02), # heat glow
+    ("one", t(23), t(25), "c1", 10.59, ("kb", 1.00, 1.05), 1.09),         # lying down, relaxed
+    ("one", t(25), t(27), "c1", 5.05, ("kb", 1.05, 1.00), 1.23),          # bare back, relaxed
+    ("one", t(27), t(30), "c5", 0.10, ("kb", 1.00, 1.05), 1.95),          # puts it on, whole action
+    ("split", t(30), t(33), ("c1", 9.35, 0.40, 1.20), ("c1", 11.72, 0.55, 0.89)),  # home / office
+    ("grid", t(33), t(38), [("c1", 4.09, 33, 0.92), ("c1", 3.05, 34, 1.00),
+                            ("c5", 12.22, 35, 1.88), ("c2", 4.60, 36, 3.25)]),
+    ("one", t(38), t(40), "c2", 3.45, ("dolly", 1.25, 0.50, 0.50), 0.90),  # product on the arm
+    ("one", t(40), END_CARD, "c1", 14.02, ("kb", 1.00, 1.06), 1.03),      # on the leg at the desk
 ]
 SPLIT_TIMES = [(x[1], x[2]) for x in SHOTS if x[0] in ("split", "grid")]
 
@@ -72,6 +74,8 @@ def zoom_chain(pw, ph, zoom, d):
     """Cover pw x ph, then Ken Burns or an eased dolly-in onto a focus point."""
     if zoom[0] == "kb":
         z, fx, fy = f"({zoom[1]}+({zoom[2]}-{zoom[1]})*t/{d:.3f})", 0.5, 0.5
+    elif zoom[0] == "push":  # tight framing on a focus point, slow push-in
+        z, fx, fy = f"({zoom[1]}+({zoom[2]}-{zoom[1]})*t/{d:.3f})", zoom[3], zoom[4]
     else:
         T = min(1.1, d * 0.75)
         z, fx, fy = f"(1+({zoom[1]}-1)*(1-pow(1-min(1,t/{T:.3f}),3)))", zoom[2], zoom[3]
@@ -97,8 +101,8 @@ def render_shot(i, shot):
         fc = f"{base_chain(0, sp, d)},{zoom_chain(W, H, zoom, d)},{LOOK}[v]"
     elif kind == "split":
         inp, parts = [], []
-        for k, (src, sin, fy) in enumerate(shot[3:5]):
-            a_, sp = src_in(src, sin, d); inp += a_
+        for k, (src, sin, fy, ml) in enumerate(shot[3:5]):
+            a_, sp = src_in(src, sin, d, ml); inp += a_
             parts.append(f"{base_chain(k, sp, d)},{panel_chain(W, H // 2, fy)}[p{k}]")
         fc = ";".join(parts) + f";[p0][p1]vstack,drawbox=x=0:y={H // 2 - 4}:w={W}:h=8:color=white:t=fill,{LOOK}[v]"
     else:  # grid: panels appear one by one with their word
@@ -106,11 +110,12 @@ def render_shot(i, shot):
         pos = [(W // 2, 0), (0, 0), (W // 2, H // 2), (0, H // 2)]
         last = "[bg]"
         parts.append(f"color=c=#101010:s={W}x{H}:r={FPS}:d={d:.3f}[bg]")
-        for k, (src, sin, wi) in enumerate(shot[3]):
-            a_, sp = src_in(src, sin, d); inp += a_
-            at = max(0.0, words[wi]["s"] - s)
-            parts.append(f"{base_chain(k, sp, d)},{panel_chain(W // 2, H // 2, 0.5)},"
-                         f"fade=in:st={at:.3f}:d=0.08:color=white[p{k}]")
+        for k, (src, sin, wi, ml) in enumerate(shot[3]):
+            at = max(0.0, words[wi]["s"] - s); vis = d - at
+            inp += ["-ss", f"{sin}", "-t", f"{ml:.3f}", "-i", SRC[src]]
+            parts.append(f"[{k}:v]setpts=PTS-STARTPTS,fps={FPS},{panel_chain(W // 2, H // 2, 0.5)},"
+                         f"tpad=stop_mode=clone:stop_duration={vis + 1:.3f},trim=duration={vis:.3f},"
+                         f"setpts=PTS-STARTPTS+{at:.3f}/TB,fade=in:st={at:.3f}:d=0.08:color=white[p{k}]")
             parts.append(f"{last}[p{k}]overlay={pos[k][0]}:{pos[k][1]}:enable='gte(t,{at:.3f})'[g{k}]")
             last = f"[g{k}]"
         fc = ";".join(parts) + (f";{last}drawbox=x={W // 2 - 4}:y=0:w=8:h={H}:color=white:t=fill,"
@@ -206,14 +211,16 @@ def end_card():
     btn = capsule("اطلبه الحين", 76, YELLOW, "#111111", pad=(70, 22), icon="dot")
     btnp = save(btn, "end_btn")
     out = f"{TMP}/endcard.mp4"
-    fc = (f"[1:v]setpts=PTS-STARTPTS,fps={FPS},scale=760:-2,crop=760:1000,eq=saturation=1.12,format=rgba[cv];"
+    fc = (f"[1:v]trim=end_frame=1,loop=loop=-1:size=1,setpts=N/{FPS}/TB,fps={FPS},trim=duration={d:.3f},"
+          f"scale=w='2*trunc(760*(1.0+0.08*t/{d:.3f})/2)':h=-2:eval=frame,crop=760:1000:x=(iw-760)/2:y=(ih-1000)/2+60,"
+          f"eq=saturation=1.12,format=rgba[cv];"
           f"[2:v]format=gray[m];[cv][m]alphamerge[card];"
           f"[0:v][card]overlay=160:370[a];"
           f"[3:v]format=rgba,scale=w='2*trunc(iw*(1+0.05*sin(2*PI*1.6*t))/2)':h=-2:eval=frame[b];"
           f"[a][b]overlay=x='(W-w)/2':y='1500-h/2':eval=frame,"
           f"fade=in:st=0:d=0.12:color=white,format=yuv420p[v]")
     sh(["ffmpeg", "-v", "error", "-y", "-loop", "1", "-t", f"{d:.3f}", "-i", bgp,
-        "-ss", "14.8", "-t", f"{d:.3f}", "-i", SRC["c4"], "-loop", "1", "-t", f"{d:.3f}", "-i", maskp,
+        "-ss", "1.30", "-i", SRC["c1"], "-loop", "1", "-t", f"{d:.3f}", "-i", maskp,
         "-loop", "1", "-t", f"{d:.3f}", "-i", btnp, "-filter_complex", fc, "-map", "[v]",
         "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", out])
     return out
@@ -260,7 +267,7 @@ def sfx():
         elif x[1] > 0 and x[0] == "one":
             hits.append((f("click"), x[1], GAIN["click"] * 0.6))           # plain cuts: soft tick
         if x[0] == "grid":
-            hits += [(f("pop"), words[wi]["s"], GAIN["pop"] * 0.8) for _, _, wi in x[3]]
+            hits += [(f("pop"), words[wi]["s"], GAIN["pop"] * 0.8) for _, _, wi, _ in x[3]]
             hits += [(f("ding"), words[x[3][-1][2]]["s"] + 0.05, GAIN["ding"])]
     hits += [(f("impact"), END_CARD, GAIN["impact"]), (f("pop"), END_CARD + 0.05, GAIN["pop"]),
              (f("ding"), END_CARD + 0.35, GAIN["ding"])]
