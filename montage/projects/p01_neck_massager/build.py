@@ -35,44 +35,87 @@ def sh(cmd):
     subprocess.run(cmd, check=True)
 
 # ---------------------------------------------------------------- shots
-# (timeline start, end, source, source in-point, zoom from, zoom to)
 t = lambda i: words[i]["s"]
+# single: ("one", start, end, src, in, zoom) with zoom = ("kb", from, to) or ("dolly", max, fx, fy)
+# split : ("split", start, end, (src, in, fy), (src, in, fy))          top / bottom
+# grid  : ("grid", start, end, [(src, in, appear_word), ...x4])          RTL order: TR, TL, BR, BL
 SHOTS = [
-    (0.00, 1.30, "c4", 15.10, 1.10, 1.02),   # hook: fingers wiggling at camera
-    (1.30, t(6), "c5", 3.85, 1.00, 1.07),    # placing it on a tense neck
-    (t(6), t(9), "c3", 16.40, 1.00, 1.08),   # product reveal (pink pads)
-    (t(9), t(13), "c4", 0.05, 1.04, 1.00),   # kneading the neck like hands
-    (t(13), t(16), "c2", 1.95, 1.00, 1.08),  # silicone fingers close-up
-    (t(16), t(20), "c2", 7.95, 1.06, 1.00),  # kneading, relaxed
-    (t(20), t(23), "c1", 1.97, 1.00, 1.10),  # heat glow
-    (t(23), t(27), "c5", 9.00, 1.06, 1.00),  # lying down, relaxing
-    (t(27), t(29), "c3", 26.00, 1.00, 1.06), # strapping it on
-    (t(29), t(31), "c1", 9.35, 1.00, 1.06),  # at home
-    (t(31), t(33), "c3", 30.40, 1.05, 1.00), # on the go
-    (t(33), t(34), "c4", 5.00, 1.00, 1.05),  # neck
-    (t(34), t(35), "c3", 36.30, 1.00, 1.05), # shoulder
-    (t(35), t(36), "c5", 12.40, 1.00, 1.05), # back
-    (t(36), t(38), "c2", 4.60, 1.00, 1.06),  # legs
-    (t(38), END_CARD, "c4", 5.90, 1.00, 1.08),  # on the neck, logo side
+    ("one", 0.00, 1.30, "c4", 15.10, ("dolly", 1.40, 0.45, 0.58)),   # hook: fingers at camera
+    ("one", 1.30, t(6), "c5", 3.85, ("kb", 1.00, 1.07)),             # placing it on a tense neck
+    ("one", t(6), t(9), "c3", 16.40, ("dolly", 1.30, 0.50, 0.45)),   # product reveal
+    ("one", t(9), t(13), "c4", 0.05, ("kb", 1.04, 1.00)),            # kneading like hands
+    ("one", t(13), t(16), "c2", 1.95, ("dolly", 1.40, 0.50, 0.45)),  # silicone fingers
+    ("split", t(16), t(20), ("c2", 7.95, 0.45), ("c3", 28.20, 0.40)),  # kneading, two angles
+    ("one", t(20), t(23), "c1", 1.97, ("dolly", 1.45, 0.50, 0.60), 1.03),  # heat glow (scene is 1.07 s)
+    ("one", t(23), t(27), "c5", 9.00, ("kb", 1.06, 1.00)),           # lying down, relaxing
+    ("one", t(27), t(29), "c3", 26.00, ("kb", 1.00, 1.06)),          # strapping it on
+    ("split", t(29), t(33), ("c1", 9.35, 0.45), ("c3", 30.40, 0.35)),  # home / out
+    ("grid", t(33), t(38), [("c4", 5.00, 33), ("c3", 36.30, 34), ("c5", 12.40, 35), ("c2", 4.60, 36)]),
+    ("one", t(38), END_CARD, "c4", 5.90, ("dolly", 1.30, 0.50, 0.55)),  # on the neck
 ]
+SPLIT_TIMES = [(x[1], x[2]) for x in SHOTS if x[0] in ("split", "grid")]
 
 def dur(path):
     return float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                                           "-of", "csv=p=0", path]).decode())
 
-def render_shot(i, s, e, src, sin, z0, z1):
-    d = e - s
-    path = SRC[src]
-    avail = dur(path) - sin - 0.05
-    speed = min(1.0, avail / d)               # slow down only if the source is too short
+def src_in(src, sin, d, maxlen=None):
+    """Input args + the speed needed so the source (or its first maxlen s) covers d seconds."""
+    avail = dur(SRC[src]) - sin - 0.05
+    speed = min(1.0, min(avail, maxlen or avail) / d)
+    return ["-ss", f"{sin}", "-i", SRC[src]], speed
+
+def base_chain(k, speed, d):
+    return f"[{k}:v]setpts=(PTS-STARTPTS)/{speed:.4f},fps={FPS},trim=duration={d:.3f},setpts=PTS-STARTPTS"
+
+def zoom_chain(pw, ph, zoom, d):
+    """Cover pw x ph, then Ken Burns or an eased dolly-in onto a focus point."""
+    if zoom[0] == "kb":
+        z, fx, fy = f"({zoom[1]}+({zoom[2]}-{zoom[1]})*t/{d:.3f})", 0.5, 0.5
+    else:
+        T = min(1.1, d * 0.75)
+        z, fx, fy = f"(1+({zoom[1]}-1)*(1-pow(1-min(1,t/{T:.3f}),3)))", zoom[2], zoom[3]
+    return (f"scale={pw}:{ph}:force_original_aspect_ratio=increase,crop={pw}:{ph},"
+            f"scale=w='2*trunc({pw}*{z}/2)':h='2*trunc({ph}*{z}/2)':eval=frame,"
+            f"crop={pw}:{ph}:x='max(0,min(iw-{pw},{fx}*iw-{pw}/2))':y='max(0,min(ih-{ph},{fy}*ih-{ph}/2))'")
+
+def panel_chain(pw, ph, fy):
+    """Cover a panel, keeping the focus height fy of the source."""
+    return (f"scale={pw}:-2,scale={pw}:{ph}:force_original_aspect_ratio=increase,"
+            f"crop={pw}:{ph}:x=(iw-{pw})/2:y='max(0,min(ih-{ph},{fy}*ih-{ph}/2))'")
+
+LOOK = "eq=saturation=1.12:contrast=1.04"
+ENC = ["-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p"]
+
+def render_shot(i, shot):
+    kind, s, e = shot[0], shot[1], shot[2]
+    nf = round(e * FPS) - round(s * FPS); d = nf / FPS   # frame-exact cuts, no drift
     out = f"{TMP}/shot{i:02d}.mp4"
-    zoom = f"({z0}+({z1}-{z0})*t/{d:.3f})"
-    vf = (f"setpts=(PTS-STARTPTS)/{speed:.4f},fps={FPS},"
-          f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
-          f"scale=w='2*trunc({W}*{zoom}/2)':h='2*trunc({H}*{zoom}/2)':eval=frame,"
-          f"crop={W}:{H},eq=saturation=1.12:contrast=1.04,format=yuv420p")
-    sh(["ffmpeg", "-v", "error", "-y", "-ss", f"{sin}", "-i", path, "-t", f"{d:.3f}",
-        "-vf", vf, "-an", "-r", str(FPS), "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", out])
+    if kind == "one":
+        src, sin, zoom = shot[3:6]
+        inp, sp = src_in(src, sin, d, shot[6] if len(shot) > 6 else None)
+        fc = f"{base_chain(0, sp, d)},{zoom_chain(W, H, zoom, d)},{LOOK}[v]"
+    elif kind == "split":
+        inp, parts = [], []
+        for k, (src, sin, fy) in enumerate(shot[3:5]):
+            a_, sp = src_in(src, sin, d); inp += a_
+            parts.append(f"{base_chain(k, sp, d)},{panel_chain(W, H // 2, fy)}[p{k}]")
+        fc = ";".join(parts) + f";[p0][p1]vstack,drawbox=x=0:y={H // 2 - 4}:w={W}:h=8:color=white:t=fill,{LOOK}[v]"
+    else:  # grid: panels appear one by one with their word
+        inp, parts = [], []
+        pos = [(W // 2, 0), (0, 0), (W // 2, H // 2), (0, H // 2)]
+        last = "[bg]"
+        parts.append(f"color=c=#101010:s={W}x{H}:r={FPS}:d={d:.3f}[bg]")
+        for k, (src, sin, wi) in enumerate(shot[3]):
+            a_, sp = src_in(src, sin, d); inp += a_
+            at = max(0.0, words[wi]["s"] - s)
+            parts.append(f"{base_chain(k, sp, d)},{panel_chain(W // 2, H // 2, 0.5)},"
+                         f"fade=in:st={at:.3f}:d=0.08:color=white[p{k}]")
+            parts.append(f"{last}[p{k}]overlay={pos[k][0]}:{pos[k][1]}:enable='gte(t,{at:.3f})'[g{k}]")
+            last = f"[g{k}]"
+        fc = ";".join(parts) + (f";{last}drawbox=x={W // 2 - 4}:y=0:w=8:h={H}:color=white:t=fill,"
+                                f"drawbox=x=0:y={H // 2 - 4}:w={W}:h=8:color=white:t=fill,{LOOK}[v]")
+    sh(["ffmpeg", "-v", "error", "-y"] + inp + ["-filter_complex", fc, "-map", "[v]", "-frames:v", str(nf)] + ENC + [out])
     return out
 
 # ---------------------------------------------------------------- graphics
@@ -131,17 +174,6 @@ OV = []
 def add(im, name, s, e, y, x=None, anim="up"):
     OV.append((save(im, name), s, e, x, y, anim))
 
-hook = runs_image([("رقبتك", "white"), ("متشنجة؟", YELLOW)], 112, stroke=9)
-add(hook, "hook", 0.05, t(6), 330, anim="pop")
-add(capsule("تدليك يشبه اليد الحقيقية", 58, YELLOW, "#111111", icon="dot"), "b1", t(9) + .05, t(13), 300)
-add(capsule("سيليكون ناعم ومرن", 58, "white", DARK, icon="check"), "b2", t(13) + .05, t(20), 300)
-add(capsule("حرارة مريحة للعضلات", 58, ORANGE, "white", icon="fire"), "b3", t(20) + .05, t(27), 300)
-add(capsule("يُلبس في ثواني", 58, YELLOW, "#111111", icon="dot"), "b4", t(27) + .05, t(33), 300)
-for k, (lbl, wi) in enumerate([("الرقبة", 33), ("الكتوف", 34), ("الظهر", 35), ("الرجلين", 36)]):
-    im = capsule(lbl, 58, "white", GREEN, icon="check")
-    add(im, f"chk{k}", words[wi]["s"] + .03, t(38), 250 + k * 118, x=W - 70 - im.width, anim="left")
-add(capsule("توصيل مجاني", 56, GREEN, "white", icon="check"), "d1", t(38) + .05, END_CARD, 290)
-add(capsule("الدفع عند الاستلام", 56, YELLOW, "#111111", icon="check"), "d2", t(40) + .05, END_CARD, 420)
 
 # ---------------------------------------------------------------- end card
 def end_card():
@@ -210,7 +242,8 @@ def captions():
         shadow.putalpha(im.getchannel("A").point(lambda v: v * 0.5))
         out = Image.new("RGBA", (im.width + 12, im.height + 12), (0, 0, 0, 0))
         out.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(5)), (6, 10)); out.alpha_composite(im, (0, 0))
-        add(out, f"cap{k:02d}", st, e, 1215, anim="cap")
+        y = 960 if any(a0 - 0.01 <= st < b0 for a0, b0 in SPLIT_TIMES) else 1215
+        add(out, f"cap{k:02d}", st, e, y, anim="cap")
 
 # ---------------------------------------------------------------- sound effects
 def sfx():
@@ -221,14 +254,14 @@ def sfx():
         "vibrato=f=0.1,asetrate=48000*1.6,aresample=48000,afade=t=out:st=0.02:d=0.1,volume=0.9", pop])
     sh(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=1568:d=0.35", "-f", "lavfi", "-i", "sine=f=2093:d=0.35",
         "-filter_complex", "[0][1]amix=2,afade=t=out:st=0.01:d=0.33:curve=exp,volume=0.8", "-ar", "48000", ding])
-    hits = [(whoosh, x[1]) for x in OV if x[0].endswith(("b1.png", "b2.png", "b3.png", "b4.png", "d1.png", "d2.png"))]
-    hits += [(ding, x[1]) for x in OV if "chk" in x[0]]
-    hits += [(whoosh, t(6) - 0.12), (pop, END_CARD)]
+    hits = [(whoosh, max(0, x[1] - 0.12)) for x in SHOTS if x[0] == "split" or (x[0] == "one" and x[5][0] == "dolly" and x[1] > 0)]
+    hits += [(ding, words[wi]["s"]) for x in SHOTS if x[0] == "grid" for _, _, wi in x[3]]
+    hits += [(pop, END_CARD)]
     return hits
 
 # ---------------------------------------------------------------- build
 def main():
-    shots = [render_shot(i, *s) for i, s in enumerate(SHOTS)]
+    shots = [render_shot(i, x) for i, x in enumerate(SHOTS)]
     shots.append(end_card())
     lst = f"{TMP}/list.txt"; open(lst, "w").write("".join(f"file '{p}'\n" for p in shots))
     base = f"{TMP}/base.mp4"
