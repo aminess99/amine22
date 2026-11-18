@@ -246,18 +246,31 @@ def captions():
         add(out, f"cap{k:02d}", st, e, y, anim="cap")
 
 # ---------------------------------------------------------------- sound effects
+SFX = os.path.join(ROOT, "montage/sfx")
+GAIN = {"whoosh": 0.85, "riser": 0.40, "impact": 0.60, "pop": 0.50, "ding": 0.45, "click": 0.40}
+
 def sfx():
-    whoosh = f"{TMP}/whoosh.wav"; pop = f"{TMP}/pop.wav"; ding = f"{TMP}/ding.wav"
-    sh(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "anoisesrc=d=0.35:c=pink:a=0.6", "-af",
-        "highpass=f=600,lowpass=f=6000,afade=t=in:d=0.15:curve=exp,afade=t=out:st=0.15:d=0.2,volume=0.7", "-ar", "48000", whoosh])
-    sh(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=520:d=0.12", "-af",
-        "vibrato=f=0.1,asetrate=48000*1.6,aresample=48000,afade=t=out:st=0.02:d=0.1,volume=0.9", pop])
-    sh(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=1568:d=0.35", "-f", "lavfi", "-i", "sine=f=2093:d=0.35",
-        "-filter_complex", "[0][1]amix=2,afade=t=out:st=0.01:d=0.33:curve=exp,volume=0.8", "-ar", "48000", ding])
-    hits = [(whoosh, max(0, x[1] - 0.12)) for x in SHOTS if x[0] == "split" or (x[0] == "one" and x[5][0] == "dolly" and x[1] > 0)]
-    hits += [(ding, words[wi]["s"]) for x in SHOTS if x[0] == "grid" for _, _, wi in x[3]]
-    hits += [(pop, END_CARD)]
+    """(file, time, gain) for every effect, following the edit."""
+    f = lambda n: os.path.join(SFX, n + ".wav")
+    hits = [(f("impact"), 0.0, GAIN["impact"] * 0.7)]                       # hook lands
+    hits += [(f("riser"), max(0, t(6) - 0.8), GAIN["riser"])]              # build into the reveal
+    for x in SHOTS:
+        if x[0] == "split" or (x[0] == "one" and x[5][0] == "dolly" and x[1] > 0):
+            hits.append((f("whoosh"), max(0, x[1] - 0.15), GAIN["whoosh"]))
+        elif x[1] > 0 and x[0] == "one":
+            hits.append((f("click"), x[1], GAIN["click"] * 0.6))           # plain cuts: soft tick
+        if x[0] == "grid":
+            hits += [(f("pop"), words[wi]["s"], GAIN["pop"] * 0.8) for _, _, wi in x[3]]
+            hits += [(f("ding"), words[x[3][-1][2]]["s"] + 0.05, GAIN["ding"])]
+    hits += [(f("impact"), END_CARD, GAIN["impact"]), (f("pop"), END_CARD + 0.05, GAIN["pop"]),
+             (f("ding"), END_CARD + 0.35, GAIN["ding"])]
     return hits
+
+MUSICS = [  # (label, file, start) - one final video per track so the client can pick
+    ("m1", "m1_promo_energetic_123bpm.mp3", 61.37),
+    ("m2", "m2_upbeat_fun_118bpm.mp3", 44.68),
+    ("m3", "m3_promo_medium_103bpm.mp3", 1.76),
+]
 
 # ---------------------------------------------------------------- build
 def main():
@@ -293,21 +306,23 @@ def main():
     sh(args + ["-filter_complex", ";".join(fc), "-map", "[vout]", "-t", f"{TOTAL}", "-r", str(FPS),
                "-c:v", "libx264", "-preset", "medium", "-crf", "18", vid])
 
-    # audio: voice + ducked music, then sound effects
-    mix = f"{TMP}/mix.wav"
-    sh(["python3", f"{TOOLS}/mix.py", VOICE, MUSIC, mix, "--start", str(MUSIC_START), "--tail", f"{TOTAL - VO_END:.2f}"])
+    # audio: voice + ducked music (one version per track), then sound effects
     hits = sfx()
-    a = ["ffmpeg", "-v", "error", "-y", "-i", mix] + sum([["-i", h] for h, _ in hits], [])
-    fa = [f"[{i + 1}:a]adelay={int(s * 1000)}|{int(s * 1000)},volume=0.22[s{i}]" for i, (_, s) in enumerate(hits)]
-    fa.append("[0:a]" + "".join(f"[s{i}]" for i in range(len(hits))) + f"amix=inputs={len(hits) + 1}:normalize=0,"
-              f"alimiter=limit=0.89[a]")
-    aud = f"{TMP}/audio.wav"
-    sh(a + ["-filter_complex", ";".join(fa), "-map", "[a]", "-t", f"{TOTAL}", "-ar", "48000", aud])
-
-    final = f"{OUT}/final.mp4"
-    sh(["ffmpeg", "-v", "error", "-y", "-i", vid, "-i", aud, "-map", "0:v", "-map", "1:a", "-c:v", "copy",
-        "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-shortest", final])
-    print("done:", final, f"{TOTAL}s")
+    for label, mfile, mstart in MUSICS:
+        mix = f"{TMP}/mix_{label}.wav"
+        sh(["python3", f"{TOOLS}/mix.py", VOICE, os.path.join(ROOT, "montage/music", mfile), mix,
+            "--start", str(mstart), "--tail", f"{TOTAL - VO_END:.2f}", "--bed", "-7"])
+        a_ = ["ffmpeg", "-v", "error", "-y", "-i", mix] + sum([["-i", h] for h, _, _ in hits], [])
+        fa = [f"[{i + 1}:a]aresample=48000,adelay={int(s_ * 1000)}|{int(s_ * 1000)},volume={g}[s{i}]"
+              for i, (_, s_, g) in enumerate(hits)]
+        fa.append("[0:a]" + "".join(f"[s{i}]" for i in range(len(hits))) +
+                  f"amix=inputs={len(hits) + 1}:normalize=0,alimiter=limit=0.89[a]")
+        aud = f"{TMP}/audio_{label}.wav"
+        sh(a_ + ["-filter_complex", ";".join(fa), "-map", "[a]", "-t", f"{TOTAL}", "-ar", "48000", aud])
+        final = f"{OUT}/final_{label}.mp4"
+        sh(["ffmpeg", "-v", "error", "-y", "-i", vid, "-i", aud, "-map", "0:v", "-map", "1:a", "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-shortest", final])
+        print("done:", final)
 
 if __name__ == "__main__":
     main()
