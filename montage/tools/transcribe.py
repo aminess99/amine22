@@ -16,6 +16,7 @@ p.add_argument("inp"); p.add_argument("out")
 p.add_argument("--lang", default=None)
 p.add_argument("--model", default="small")
 p.add_argument("--prompt", default=None)
+p.add_argument("--no-vad", action="store_true", help="keep everything (VAD can drop a fast first sentence)")
 a = p.parse_args()
 
 # Decode with ffmpeg (avoids PyAV version issues): 16 kHz mono float32.
@@ -24,7 +25,7 @@ raw = subprocess.run(["ffmpeg", "-v", "error", "-i", a.inp, "-vn", "-ac", "1", "
 audio = np.frombuffer(raw, np.float32)
 
 m = WhisperModel(a.model, compute_type="int8")
-segs, info = m.transcribe(audio, language=a.lang, word_timestamps=True, vad_filter=True,
+segs, info = m.transcribe(audio, language=a.lang, word_timestamps=True, vad_filter=not a.no_vad,
                           initial_prompt=a.prompt)
 words, segments = [], []
 for s in segs:
