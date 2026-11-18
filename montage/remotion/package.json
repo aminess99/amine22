@@ -1,0 +1,24 @@
+{
+  "name": "montage-ads",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Product ad edits as Remotion compositions (one timeline.json per ad)",
+  "scripts": {
+    "dev": "remotion studio",
+    "render": "remotion render",
+    "still": "remotion still"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.539",
+    "@remotion/fonts": "4.0.539",
+    "@remotion/zod-types": "4.0.539",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.539",
+    "zod": "3.22.3"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "typescript": "5.6.3"
+  }
+}

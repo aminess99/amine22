@@ -1,0 +1,598 @@
+{
+ "id": "neck-massager-c",
+ "fps": 30,
+ "width": 1080,
+ "height": 1920,
+ "duration": 23.83,
+ "style": {
+  "font": "Cairo",
+  "captionSize": 84,
+  "stroke": 8,
+  "activeColor": "#FFD60A",
+  "textColor": "#FFFFFF",
+  "saturation": 1.12,
+  "contrast": 1.04
+ },
+ "shots": [
+  {
+   "type": "one",
+   "from": 0.0,
+   "to": 2.06,
+   "src": "projects/neck-massager-c/media/c5.mp4",
+   "srcIn": 3.5,
+   "speed": 1.394,
+   "zoom": {
+    "kind": "linear",
+    "from": 1.32,
+    "to": 1.42,
+    "fx": 0.5,
+    "fy": 0.66
+   }
+  },
+  {
+   "type": "one",
+   "from": 2.06,
+   "to": 4.76,
+   "src": "projects/neck-massager-c/media/c5.mp4",
+   "srcIn": 6.45,
+   "speed": 0.852,
+   "zoom": {
+    "kind": "linear",
+    "from": 1.15,
+    "to": 1.32,
+    "fx": 0.62,
+    "fy": 0.68
+   }
+  },
+  {
+   "type": "one",
+   "from": 4.76,
+   "to": 7.34,
+   "src": "projects/neck-massager-c/media/c5.mp4",
+   "srcIn": 9.1,
+   "speed": 1.188,
+   "zoom": {
+    "kind": "linear",
+    "from": 1.0,
+    "to": 1.06,
+    "fx": 0.5,
+    "fy": 0.5
+   }
+  },
+  {
+   "type": "one",
+   "from": 7.34,
+   "to": 9.5,
+   "src": "projects/neck-massager-c/media/c5.mp4",
+   "srcIn": 12.22,
+   "speed": 0.868,
+   "zoom": {
+    "kind": "linear",
+    "from": 1.32,
+    "to": 1.45,
+    "fx": 0.58,
+    "fy": 0.72
+   }
+  },
+  {
+   "type": "one",
+   "from": 9.5,
+   "to": 11.62,
+   "src": "projects/neck-massager-c/media/c5.mp4",
+   "srcIn": 0.1,
+   "speed": 0.914,
+   "zoom": {
+    "kind": "linear",
+    "from": 1.0,
+    "to": 1.05,
+    "fx": 0.5,
+    "fy": 0.5
+   }
+  },
+  {
+   "type": "one",
+   "from": 11.62,
+   "to": 14.68,
+   "src": "projects/neck-massager-c/media/c2.mp4",
+   "srcIn": 7.92,
+   "speed": 0.863,
+   "zoom": {
+    "kind": "linear",
+    "from": 1.0,
+    "to": 1.06,
+    "fx": 0.5,
+    "fy": 0.5
+   }
+  },
+  {
+   "type": "split",
+   "from": 14.68,
+   "to": 16.86,
+   "top": {
+    "src": "projects/neck-massager-c/media/c1.mp4",
+    "srcIn": 5.05,
+    "speed": 0.559,
+    "posY": 0.5
+   },
+   "bottom": {
+    "src": "projects/neck-massager-c/media/c2.mp4",
+    "srcIn": 4.45,
+    "speed": 0.909,
+    "posY": 0.5
+   }
+  },
+  {
+   "type": "one",
+   "from": 16.86,
+   "to": 19.2,
+   "src": "projects/neck-massager-c/media/c2.mp4",
+   "srcIn": 1.95,
+   "speed": 0.626,
+   "zoom": {
+    "kind": "dolly",
+    "from": 1.0,
+    "to": 1.3,
+    "fx": 0.5,
+    "fy": 0.45,
+    "seconds": 1.1
+   }
+  }
+ ],
+ "flash": {
+  "at": 2.06,
+  "seconds": 0.07
+ },
+ "captions": [
+  {
+   "from": 0.0,
+   "to": 1.06,
+   "y": 1215,
+   "words": [
+    {
+     "text": "رقبتك",
+     "from": 0.0,
+     "to": 0.52
+    },
+    {
+     "text": "تعبانة",
+     "from": 0.52,
+     "to": 1.06
+    }
+   ]
+  },
+  {
+   "from": 1.06,
+   "to": 2.06,
+   "y": 1215,
+   "words": [
+    {
+     "text": "من",
+     "from": 1.06,
+     "to": 1.12
+    },
+    {
+     "text": "الجوال",
+     "from": 1.12,
+     "to": 1.54
+    },
+    {
+     "text": "والدوام؟",
+     "from": 1.54,
+     "to": 2.06
+    }
+   ]
+  },
+  {
+   "from": 2.06,
+   "to": 3.26,
+   "y": 1215,
+   "words": [
+    {
+     "text": "شوف",
+     "from": 2.06,
+     "to": 2.64
+    },
+    {
+     "text": "هذا",
+     "from": 2.64,
+     "to": 2.82
+    },
+    {
+     "text": "المساج",
+     "from": 2.82,
+     "to": 3.26
+    }
+   ]
+  },
+  {
+   "from": 3.26,
+   "to": 4.76,
+   "y": 1215,
+   "words": [
+    {
+     "text": "أصابعه",
+     "from": 3.26,
+     "to": 4.18
+    },
+    {
+     "text": "مثل",
+     "from": 4.18,
+     "to": 4.46
+    },
+    {
+     "text": "اليد!",
+     "from": 4.46,
+     "to": 4.76
+    }
+   ]
+  },
+  {
+   "from": 4.76,
+   "to": 6.14,
+   "y": 1215,
+   "words": [
+    {
+     "text": "يعجن",
+     "from": 4.76,
+     "to": 5.6
+    },
+    {
+     "text": "رقبتك",
+     "from": 5.6,
+     "to": 6.14
+    }
+   ]
+  },
+  {
+   "from": 6.14,
+   "to": 7.34,
+   "y": 1215,
+   "words": [
+    {
+     "text": "ويفك",
+     "from": 6.14,
+     "to": 6.48
+    },
+    {
+     "text": "الشد",
+     "from": 6.48,
+     "to": 6.9
+    },
+    {
+     "text": "كله",
+     "from": 6.9,
+     "to": 7.34
+    }
+   ]
+  },
+  {
+   "from": 7.34,
+   "to": 8.6,
+   "y": 1215,
+   "words": [
+    {
+     "text": "وفيه",
+     "from": 7.34,
+     "to": 7.68
+    },
+    {
+     "text": "حرارة",
+     "from": 7.68,
+     "to": 8.14
+    },
+    {
+     "text": "دافية",
+     "from": 8.14,
+     "to": 8.6
+    }
+   ]
+  },
+  {
+   "from": 8.6,
+   "to": 9.5,
+   "y": 1215,
+   "words": [
+    {
+     "text": "تريّح",
+     "from": 8.6,
+     "to": 9.0
+    },
+    {
+     "text": "العضلات",
+     "from": 9.0,
+     "to": 9.5
+    }
+   ]
+  },
+  {
+   "from": 9.5,
+   "to": 10.58,
+   "y": 1215,
+   "words": [
+    {
+     "text": "تحطه",
+     "from": 9.5,
+     "to": 9.94
+    },
+    {
+     "text": "على",
+     "from": 9.94,
+     "to": 10.1
+    },
+    {
+     "text": "رقبتك",
+     "from": 10.1,
+     "to": 10.58
+    }
+   ]
+  },
+  {
+   "from": 10.58,
+   "to": 11.62,
+   "y": 1215,
+   "words": [
+    {
+     "text": "بثواني",
+     "from": 10.58,
+     "to": 11.1
+    },
+    {
+     "text": "وترتاح",
+     "from": 11.1,
+     "to": 11.62
+    }
+   ]
+  },
+  {
+   "from": 11.62,
+   "to": 12.94,
+   "y": 1215,
+   "words": [
+    {
+     "text": "استخدمه",
+     "from": 11.62,
+     "to": 12.32
+    },
+    {
+     "text": "بالبيت",
+     "from": 12.32,
+     "to": 12.94
+    }
+   ]
+  },
+  {
+   "from": 12.94,
+   "to": 13.7,
+   "y": 1215,
+   "words": [
+    {
+     "text": "بالمكتب",
+     "from": 12.94,
+     "to": 13.7
+    }
+   ]
+  },
+  {
+   "from": 13.7,
+   "to": 14.68,
+   "y": 1215,
+   "words": [
+    {
+     "text": "أو",
+     "from": 13.7,
+     "to": 13.9
+    },
+    {
+     "text": "بالسيارة",
+     "from": 13.9,
+     "to": 14.68
+    }
+   ]
+  },
+  {
+   "from": 14.68,
+   "to": 16.14,
+   "y": 960,
+   "words": [
+    {
+     "text": "وينفع",
+     "from": 14.68,
+     "to": 15.36
+    },
+    {
+     "text": "كمان",
+     "from": 15.36,
+     "to": 15.66
+    },
+    {
+     "text": "للظهر",
+     "from": 15.66,
+     "to": 16.14
+    }
+   ]
+  },
+  {
+   "from": 16.14,
+   "to": 16.86,
+   "y": 960,
+   "words": [
+    {
+     "text": "والرجلين",
+     "from": 16.14,
+     "to": 16.64
+    },
+    {
+     "text": "بعد",
+     "from": 16.64,
+     "to": 16.86
+    }
+   ]
+  },
+  {
+   "from": 16.86,
+   "to": 18.14,
+   "y": 1215,
+   "words": [
+    {
+     "text": "التوصيل",
+     "from": 16.86,
+     "to": 17.64
+    },
+    {
+     "text": "مجاني",
+     "from": 17.64,
+     "to": 18.14
+    }
+   ]
+  },
+  {
+   "from": 18.14,
+   "to": 19.2,
+   "y": 1215,
+   "words": [
+    {
+     "text": "والدفع",
+     "from": 18.14,
+     "to": 18.64
+    },
+    {
+     "text": "عند",
+     "from": 18.64,
+     "to": 18.74
+    },
+    {
+     "text": "الاستلام",
+     "from": 18.74,
+     "to": 19.2
+    }
+   ]
+  }
+ ],
+ "audio": {
+  "voice": {
+   "src": "projects/neck-massager-c/media/voice.wav",
+   "volume": 1.0
+  },
+  "music": {
+   "src": "projects/neck-massager-c/media/music_m2.mp3",
+   "startAt": 44.68,
+   "underVoice": 0.32,
+   "betweenPhrases": 0.55,
+   "endCard": 0.85,
+   "fadeOut": 1.0
+  },
+  "speech": [
+   [
+    0.0,
+    21.1
+   ]
+  ],
+  "sfx": [
+   {
+    "src": "projects/neck-massager-c/media/sfx_impact.wav",
+    "at": 0.0,
+    "volume": 0.42
+   },
+   {
+    "src": "projects/neck-massager-c/media/sfx_riser.wav",
+    "at": 1.26,
+    "volume": 0.4
+   },
+   {
+    "src": "projects/neck-massager-c/media/sfx_click.wav",
+    "at": 2.06,
+    "volume": 0.24
+   },
+   {
+    "src": "projects/neck-massager-c/media/sfx_click.wav",
+    "at": 4.76,
+    "volume": 0.24
+   },
+   {
+    "src": "projects/neck-massager-c/media/sfx_click.wav",
+    "at": 7.34,
+    "volume": 0.24
+   },
+   {
+    "src": "projects/neck-massager-c/media/sfx_click.wav",
+    "at": 9.5,
+    "volume": 0.24
+   },
+   {
+    "src": "projects/neck-massager-c/media/sfx_click.wav",
+    "at": 11.62,
+    "volume": 0.24
+   },
+   {
+    "src": "projects/neck-massager-c/media/sfx_whoosh.wav",
+    "at": 14.53,
+    "volume": 0.85
+   },
+   {
+    "src": "projects/neck-massager-c/media/sfx_whoosh.wav",
+    "at": 16.71,
+    "volume": 0.85
+   },
+   {
+    "src": "projects/neck-massager-c/media/sfx_impact.wav",
+    "at": 19.2,
+    "volume": 0.6
+   },
+   {
+    "src": "projects/neck-massager-c/media/sfx_pop.wav",
+    "at": 19.25,
+    "volume": 0.5
+   },
+   {
+    "src": "projects/neck-massager-c/media/sfx_ding.wav",
+    "at": 19.55,
+    "volume": 0.45
+   }
+  ]
+ },
+ "endCard": {
+  "from": 19.2,
+  "title": [
+   {
+    "text": "مساج الرقبة",
+    "color": "#FFFFFF"
+   },
+   {
+    "text": "والكتف",
+    "color": "#FFD60A"
+   }
+  ],
+  "subtitle": "بأصابع تدليك وحرارة",
+  "image": "projects/neck-massager-c/media/product.jpg",
+  "button": "اطلبه الحين",
+  "line": [
+   {
+    "text": "التوصيل",
+    "color": "#FFFFFF"
+   },
+   {
+    "text": "مجاني",
+    "color": "#FFD60A"
+   },
+   {
+    "text": "•",
+    "color": "#FFFFFF"
+   },
+   {
+    "text": "الدفع عند",
+    "color": "#FFFFFF"
+   },
+   {
+    "text": "الاستلام",
+    "color": "#FFD60A"
+   }
+  ],
+  "badge": "الكمية محدودة",
+  "colors": {
+   "top": "#082E22",
+   "bottom": "#165E40",
+   "button": "#FFD60A",
+   "badge": "#E11D48"
+  }
+ }
+}
