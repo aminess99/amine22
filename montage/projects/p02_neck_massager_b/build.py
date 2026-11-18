@@ -45,12 +45,13 @@ SHOTS = [
     ("one", t(8), t(11), "c1", 1.00, ("dolly", 1.30, 0.50, 0.45), 0.95),     # reveal: product, heat pads glowing
     ("one", t(11), t(13), "c2", 1.95, ("dolly", 1.35, 0.50, 0.45), 1.46),    # fingers moving
     ("one", t(13), t(17), "c5", 9.10, ("kb", 1.00, 1.06), 3.05),             # kneads like a masseur (peak 10.7)
-    ("split", t(17), t(24), ("c2", 7.92, 0.45, 2.63), ("c5", 6.45, 0.68, 2.30)),  # neck & shoulders, two angles
+    ("one", t(17), t(20), "c5", 6.45, ("push", 1.08, 1.14, 0.50, 0.68), 2.30),  # kneads neck & shoulders (poster cropped out)
+    ("one", t(20), t(24), "c2", 7.92, ("kb", 1.00, 1.06)),                 # kneading continues: any window is a full move
     ("one", t(24), t(27), "c1", 1.99, ("dolly", 1.45, 0.50, 0.60), 1.02),    # heat glow
     ("one", t(27), t(29), "c1", 10.59, ("kb", 1.00, 1.05), 1.09),            # relaxed, lying down
     ("one", t(29), t(33), "c5", 0.10, ("kb", 1.00, 1.05), 1.95),             # puts it on in seconds (whole action)
     ("one", t(33), t(35), "c1", 5.05, ("kb", 1.05, 1.00), 1.23),             # relaxing
-    ("split", t(35), t(38), ("c1", 9.35, 0.40, 1.20), ("c1", 11.72, 0.55, 0.89)),  # home / office
+    ("one", t(35), t(38), "c1", 11.72, ("dolly", 1.25, 0.50, 0.55), 0.89),  # at home or at the desk
     ("split", t(38), t(44), ("c5", 12.22, 0.55, 1.88), ("c2", 4.45, 0.50, 3.40)),  # back / legs
     ("one", t(44), t(46), "c5", 2.10, ("kb", 1.00, 1.06), 1.35),             # free delivery
     ("one", t(46), END_CARD, "c1", 14.02, ("kb", 1.00, 1.06), 1.03),         # cash on delivery
@@ -293,10 +294,8 @@ def sfx():
              (f("ding"), END_CARD + 0.35, GAIN["ding"])]
     return hits
 
-MUSICS = [  # (label, file, start) - one final video per track so the client can pick
-    ("m1", "m1_promo_energetic_123bpm.mp3", 61.37),
+MUSICS = [  # client's default: m2
     ("m2", "m2_upbeat_fun_118bpm.mp3", 44.68),
-    ("m3", "m3_promo_medium_103bpm.mp3", 1.76),
 ]
 
 # ---------------------------------------------------------------- build
@@ -346,7 +345,16 @@ def main():
                   f"amix=inputs={len(hits) + 1}:normalize=0,alimiter=limit=0.89[a]")
         aud = f"{TMP}/audio_{label}.wav"
         sh(a_ + ["-filter_complex", ";".join(fa), "-map", "[a]", "-t", f"{TOTAL}", "-ar", "48000", aud])
-        final = f"{OUT}/final_{label}.mp4"
+        # two-pass loudness: measure, then apply the exact gain to land on -14 LUFS
+        import re as _re
+        meas = subprocess.run(["ffmpeg", "-nostats", "-i", aud, "-af", "ebur128", "-f", "null", "-"],
+                              capture_output=True, text=True).stderr
+        integ = float(_re.findall(r"I:\s+(-?[\d.]+) LUFS", meas)[-1])
+        aud_n = f"{TMP}/audio_{label}_n.wav"
+        sh(["ffmpeg", "-v", "error", "-y", "-i", aud, "-af", f"volume={-14 - integ:.2f}dB,alimiter=limit=0.89",
+            "-ar", "48000", aud_n])
+        aud = aud_n
+        final = f"{OUT}/final.mp4" if len(MUSICS) == 1 else f"{OUT}/final_{label}.mp4"
         sh(["ffmpeg", "-v", "error", "-y", "-i", vid, "-i", aud, "-map", "0:v", "-map", "1:a", "-c:v", "copy",
             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-shortest", final])
         print("done:", final)
