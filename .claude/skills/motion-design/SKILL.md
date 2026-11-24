@@ -141,7 +141,7 @@ Gate: approval. CTA: **Approve the stills, or tell me what to change.**
 
 ### Step 6 · Render
 
-`node scripts/render.mjs video page.html "out/<Brand> ad - 4K.mp4" --fps 25 --scale 2 [--gpu]`. Use 24 fps for
+`node scripts/render.mjs video page.html "out/<Brand> ad - 1080p.mp4" --fps 25 --scale 1 [--gpu]` (the user wants 1080p HD by default; use `--scale 2` for 4K only if they ask). Use 24 fps for
 posterised animation. Run one or two 4K renders at a time, as more can freeze the computer. Then make and look at a
 key-frame sheet: `ffmpeg -i ad.mp4 -vf "fps=2,scale=640:-1,tile=4x10" -frames:v 1 sheet.jpg`.
 
