@@ -1,0 +1,15 @@
+[
+ {"type":"bed","file":"OV Pad","at":0,"to":10,"db":-24,"from":2,"fade_in":1.0,"fade_out":1.5,"env":[[0,0],["final",3]]},
+ {"type":"bed","file":"OV Drone","at":0,"to":10,"db":-30,"from":5,"lp":3000,"fade_in":1.5,"fade_out":1.5},
+ {"event":"map.draw","file":"OV Swoosh","db":-24,"align":"start","pitch":0.8,"lp":5000},
+ {"event":"dots","file":"OV UI Click","db":-20},
+ {"event":"dots","offset":0.12,"file":"OV UI Click","db":-22,"pitch":1.15},
+ {"event":"zoom","offset":0.25,"file":"OV Deep Whoosh","db":-16,"align":"peak","dur":2.0},
+ {"event":"ring","file":"OV Soft Impact","db":-18,"dur":1.5,"hp":120},
+ {"event":"share","offset":0.5,"file":"OV UI Click","db":-21,"pitch":1.3},
+ {"event":"unroll","offset":0.4,"file":"OV Swipe","db":-18,"align":"peak"},
+ {"event":"count","offset":1.0,"file":"OV Car Pass","db":-17,"align":"peak","dur":3.2,"hp":80},
+ {"event":"count.land","file":"OV UI Click","db":-19,"pitch":0.85},
+ {"event":"final","file":"OV Riser","db":-20,"align":"end"},
+ {"event":"final","file":"OV Soft Impact","db":-9}
+]
