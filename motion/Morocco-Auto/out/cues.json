@@ -1,0 +1,17 @@
+[
+ {"type":"bed","file":"Air Bed","at":0,"to":10,"db":-30,"fade_in":0.8,"fade_out":1.2,"env":[[0,0],["final",4]]},
+ {"type":"bed","file":"Soft Hit","at":0,"to":10,"db":-34,"lp":400,"fade_in":1.0,"fade_out":1.5},
+ {"event":"map.draw","file":"Whoosh 3","db":-24,"align":"start"},
+ {"event":"title","file":"Tick","db":-24,"pitch":0.9},
+ {"event":"dots","file":"Pop","db":-20,"pitch":1.1},
+ {"event":"dots","offset":0.12,"file":"Pop","db":-22,"pitch":1.25},
+ {"event":"zoom","file":"Whoosh 2","db":-20,"align":"start"},
+ {"event":"ring","file":"Soft Hit","db":-14},
+ {"event":"share","file":"Tick","db":-20,"pitch":1.2},
+ {"event":"unroll","file":"Whoosh 1","db":-21,"align":"start"},
+ {"event":"count","file":"Shutter","db":-22},
+ {"event":"count.land","file":"Pop","db":-18,"pitch":0.85},
+ {"event":"out","file":"Riser","db":-20,"align":"end","dur":2.5,"offset":0.55},
+ {"event":"final","file":"Soft Hit","db":-11,"pitch":0.8},
+ {"event":"final","file":"Pop","db":-22,"pitch":0.7}
+]

@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ar"><head><meta charset="utf-8"><title>Morocco Auto</title>
+<style>
+  @font-face { font-family: Cairo; src: url("fonts/Cairo.ttf"); font-weight: 700; }
+  @font-face { font-family: Tajawal; src: url("fonts/Tajawal.ttf"); font-weight: 700; }
+  html,body{margin:0;background:#000;height:100%} body{display:flex;align-items:center;justify-content:center}
+  canvas{width:min(100vw,calc(100vh*16/9));aspect-ratio:16/9;display:block}
+</style></head><body><canvas id="c"></canvas>
+<script>
+// ---- BEATS (seconds): re-time the whole ad here -------------------------------------------------------------------
+const B = {
+  mapDraw: [0.15, 1.7],   // outline draws itself
+  title:   [0.5, 1.3],    // "صعود المغرب…" words fade up
+  dots:    1.35,          // factory cities light up
+  zoom:    [2.05, 3.05],  // dive into Kenitra: the dot becomes the ring
+  hollow:  [3.0, 3.45],   // disc -> ring
+  share:   [3.35, 4.4],   // ring settles to 33 %
+  shareTx: [3.6, 4.3],    // ring caption
+  unroll:  [5.35, 6.25],  // ring unrolls into a road
+  count:   [6.1, 7.9],    // counter + car drive
+  countTx: [6.3, 7.0],
+  out:     [7.95, 8.4],  // counter fades away
+  final:   [8.5, 9.3],   // closing line
+  END: 10,
+};
+window.EVENTS = [['map.draw', B.mapDraw[0]], ['title', B.title[0]], ['dots', B.dots], ['zoom', B.zoom[0]], ['ring', B.hollow[0]],
+  ['share', B.share[0]], ['unroll', B.unroll[0]], ['count', B.count[0]], ['count.land', B.count[1]], ['out', B.out[0]],
+  ['final', B.final[0]], ['end', B.END]].map(([name, t]) => ({ name, t }));
+
+const W = 1920, H = 1080, q = new URLSearchParams(location.search), SCALE = parseFloat(q.get('scale') || '1');
+const cv = document.getElementById('c'); cv.width = W * SCALE; cv.height = H * SCALE; const ctx = cv.getContext('2d');
+const C = { bg0: '#0B0F16', bg1: '#030406', red: '#D3263A', redHi: '#FF4D5E', green: '#14A05C', gold: '#E9B949', ink: '#F4F1EA', mute: 'rgba(244,241,234,0.16)' };
+const clamp01 = v => Math.max(0, Math.min(1, v)), lerp = (a, b, k) => a + (b - a) * k, prog = (t, a, b) => clamp01((t - a) / (b - a));
+const outExpo = k => (k = clamp01(k)) >= 1 ? 1 : 1 - Math.pow(2, -10 * k), inOutCubic = k => { k = clamp01(k); return k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2; };
+const sine = k => 0.5 - 0.5 * Math.cos(Math.PI * clamp01(k)), outCubic = k => 1 - Math.pow(1 - clamp01(k), 3);
+let MAP = null;
+
+// words fade up from blurred to sharp with a small rise, right-to-left (Arabic)
+function words(text, x, y, size, t0, t1, t, opts = {}) {
+  const ws = text.split(' '), font = `700 ${size}px ${opts.font || 'Cairo'}`; ctx.font = font;
+  const sp = ctx.measureText(' ').width, wd = ws.map(w => ctx.measureText(w).width), total = wd.reduce((a, b) => a + b, 0) + sp * (ws.length - 1);
+  let cx = x + total / 2; const n = ws.length, out = opts.out ? 1 - sine(prog(t, opts.out[0], opts.out[1])) : 1;
+  ws.forEach((w, i) => {
+    const a = t0 + (t1 - t0) * (n > 1 ? i / (n - 1) : 0) * 0.6, k = outCubic(prog(t, a, a + (t1 - t0) * 0.55)) * out;
+    if (k > 0.002) {
+      ctx.save(); ctx.globalAlpha = k * (opts.alpha ?? 1); ctx.filter = `blur(${(1 - k) * 10 * SCALE}px)`; ctx.font = font; ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.direction = 'rtl';
+      const yy = y + (1 - k) * size * 0.35, g = ctx.createLinearGradient(0, yy - size * 0.1, 0, yy + size * 0.6);   // subtle gradient on the lower half
+      g.addColorStop(0, opts.color || C.ink); g.addColorStop(1, opts.color2 || opts.color || '#CFC8BA'); ctx.fillStyle = g; ctx.fillText(w, cx, yy); ctx.restore();
+    }
+    cx -= wd[i] + sp;
+  });
+}
+function car(x, y, s, a) {   // a small side-view car, nose to the right, sitting on y
+  ctx.save(); ctx.globalAlpha = a; ctx.translate(x, y); ctx.scale(-s, s); ctx.fillStyle = C.ink;
+  ctx.beginPath(); ctx.moveTo(-60, -10); ctx.lineTo(-58, -26); ctx.quadraticCurveTo(-56, -30, -48, -31); ctx.lineTo(-34, -31);
+  ctx.quadraticCurveTo(-22, -50, 2, -50); ctx.quadraticCurveTo(22, -50, 34, -33); ctx.quadraticCurveTo(56, -30, 60, -22); ctx.lineTo(62, -10); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#0B0F16'; ctx.beginPath(); ctx.moveTo(-26, -33); ctx.quadraticCurveTo(-16, -45, 0, -45); ctx.lineTo(0, -33); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(5, -33); ctx.lineTo(5, -45); ctx.quadraticCurveTo(20, -45, 28, -33); ctx.closePath(); ctx.fill();
+  for (const wx of [-36, 38]) { ctx.fillStyle = '#0B0F16'; ctx.beginPath(); ctx.arc(wx, -10, 13, 0, 7); ctx.fill(); ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(wx, -10, 9, 0, 7); ctx.fill();
+    ctx.fillStyle = '#0B0F16'; ctx.beginPath(); ctx.arc(wx, -10, 3.5, 0, 7); ctx.fill(); }
+  ctx.fillStyle = C.gold; ctx.beginPath(); ctx.ellipse(58, -24, 3, 2, 0, 0, 7); ctx.fill(); ctx.restore();
+}
+
+function render(t) {
+  ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0); ctx.globalAlpha = 1; ctx.filter = 'none';
+  const bg = ctx.createRadialGradient(W / 2, H * 0.45, 50, W / 2, H / 2, W * 0.75); bg.addColorStop(0, C.bg0); bg.addColorStop(1, C.bg1); ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  // drifting dot field: something always moves
+  ctx.fillStyle = 'rgba(244,241,234,0.05)'; const dr = t * 14;
+  for (let gx = -1; gx < 26; gx++) for (let gy = -1; gy < 15; gy++) { ctx.beginPath(); ctx.arc(gx * 80 + (dr % 80), gy * 80 + ((dr * 0.4) % 80), 1.6, 0, 7); ctx.fill(); }
+
+  // global slow push, one direction, the whole ad
+  const push = 1 + 0.045 * sine(t / B.END);
+  ctx.translate(W / 2, H / 2); ctx.scale(push, push);
+
+  // ---------- shot 1: the map, then a dive into Kenitra ----------
+  const zk = inOutCubic(prog(t, ...B.zoom)), base = 0.92 + 0.05 * sine(prog(t, 0, B.zoom[0]));
+  const kp = MAP.cities.kenitra, R = 210, endZoom = R / 7;   // dot radius 7 -> ring radius R
+  const zoom = Math.exp(lerp(Math.log(base), Math.log(endZoom), zk));
+  if (t < B.hollow[1]) {
+    ctx.save(); const a = 1 - (base / zoom) * (1 - zk);   // the dot drifts to dead centre in screen space as we dive
+    ctx.translate(-kp[0] * a * zoom, -kp[1] * a * zoom); ctx.scale(zoom, zoom);
+    const mapA = 1 - prog(zoom, 3, 9);
+    if (mapA > 0) {
+      const pts = MAP.outline, d = outExpo(prog(t, ...B.mapDraw)), n = Math.max(2, Math.floor(pts.length * d));
+      ctx.globalAlpha = mapA * 0.16 * prog(t, 0.9, 1.9); ctx.fillStyle = C.red; ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.fill();
+      ctx.globalAlpha = mapA; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.strokeStyle = C.ink; ctx.lineWidth = 3 / zoom; ctx.shadowColor = 'rgba(211,38,58,0.8)'; ctx.shadowBlur = 18 * SCALE;
+      ctx.beginPath(); for (let i = 0; i < n; i++) i ? ctx.lineTo(pts[i][0], pts[i][1]) : ctx.moveTo(pts[0][0], pts[0][1]);
+      if (d < 1) { const f = pts.length * d - n + 1, a = pts[n - 1], b = pts[Math.min(n, pts.length - 1)]; ctx.lineTo(lerp(a[0], b[0], f), lerp(a[1], b[1], f)); } ctx.stroke(); ctx.shadowBlur = 0;
+      // factory cities
+      [['tanger', 0], ['casa', 0.12]].forEach(([c, dl]) => { const p = MAP.cities[c], k = outCubic(prog(t, B.dots + dl, B.dots + dl + 0.4)); if (!k) return;
+        const pulse = prog((t - B.dots - dl) % 1.2, 0, 1.2); ctx.globalAlpha = mapA * k * (1 - pulse) * 0.6; ctx.strokeStyle = C.red; ctx.lineWidth = 2 / zoom; ctx.beginPath(); ctx.arc(p[0], p[1], (6 + 22 * pulse), 0, 7); ctx.stroke();
+        ctx.globalAlpha = mapA * k; ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(p[0], p[1], 4.5 * k, 0, 7); ctx.fill(); });
+    }
+    // Kenitra: the dot that becomes everything
+    const kd = outCubic(prog(t, B.dots + 0.06, B.dots + 0.5)); ctx.globalAlpha = 1; ctx.fillStyle = C.red; ctx.shadowColor = C.red; ctx.shadowBlur = 24 * SCALE * (1 - zk);
+    if (kd > 0) { ctx.beginPath(); ctx.arc(kp[0], kp[1], 7 * kd * (1 - 0.08 * Math.sin(Math.PI * prog(t, B.zoom[0] - 0.12, B.zoom[0] + 0.05))), 0, 7);   // anticipation squash
+      const hol = outCubic(prog(t, ...B.hollow)); if (hol > 0) { ctx.moveTo(kp[0] + 7 * (1 - 0.1 * (1 - hol)) * hol * 0.86, kp[1]); ctx.arc(kp[0], kp[1], 7 * (1 - 0.1 * (1 - hol)) * hol * 0.86, 0, 7, true); } ctx.fill('evenodd'); }
+    ctx.restore();
+  }
+  ctx.shadowBlur = 0;
+  words('صعود المغرب في صناعة السيارات', 0, 455, 58, B.title[0], B.title[1], t, { out: [B.zoom[0] - 0.1, B.zoom[0] + 0.35] });
+
+  // ---------- shot 2: ring -> 33 % share ----------
+  const ringW = R * 0.14, share = lerp(1, 0.33, outExpo(prog(t, ...B.share)));
+  const un = inOutCubic(prog(t, ...B.unroll)), L = 1240, N = 220;
+  const fill = t < B.count[0] ? share : lerp(0.33, 1, outExpo(prog(t, B.count[0] + 0.1, B.count[1])));
+  const lineY = lerp(0, 60, un), shrink = inOutCubic(prog(t, B.out[0], B.final[0] + 0.2)), Lf = lerp(L, 420, shrink), yF = lerp(lineY, 125, shrink);
+  if (t >= B.hollow[1] - 0.001) {
+    const pt = u => { const th = -Math.PI / 2 - 2 * Math.PI * u;   // counter-clockwise from the top (reads right-to-left in Arabic)
+      const cx = R * Math.cos(th), cy = R * Math.sin(th) + R, lx = Lf / 2 - Lf * u, ly = 0;   // circle hangs from the line's start point
+      return [lerp(cx, lx, un), lerp(cy - R, ly, un) + yF]; };
+    const width = lerp(ringW, 10, un);
+    ctx.lineCap = 'round'; ctx.lineWidth = width;
+    ctx.strokeStyle = 'rgba(244,241,234,0.13)'; ctx.beginPath(); for (let i = 0; i <= N; i++) { const p = pt(i / N); i ? ctx.lineTo(...p) : ctx.moveTo(...p); } ctx.stroke();
+    const g = ctx.createLinearGradient(Lf / 2, 0, -Lf / 2, 0); g.addColorStop(0, C.red); g.addColorStop(1, C.redHi);
+    ctx.strokeStyle = un > 0.5 ? g : C.red; ctx.shadowColor = C.red; ctx.shadowBlur = 20 * SCALE;
+    ctx.beginPath(); const m = Math.max(1, Math.round(N * fill)); for (let i = 0; i <= m; i++) { const p = pt(i / N * fill / (m / N)); i ? ctx.lineTo(...p) : ctx.moveTo(...p); } ctx.stroke(); ctx.shadowBlur = 0;
+    // shot 2 text: 33 %
+    const a2 = (1 - prog(t, B.unroll[0] - 0.1, B.unroll[0] + 0.25));
+    if (a2 > 0) { const k = outCubic(prog(t, B.share[0], B.share[0] + 0.5)) * a2; ctx.save(); ctx.globalAlpha = k; ctx.filter = `blur(${(1 - k) * 8 * SCALE}px)`; ctx.fillStyle = C.ink;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = '700 150px Cairo'; ctx.fillText(Math.round(lerp(0, 33, outExpo(prog(t, B.share[0], B.share[1])))) + '%', 0, 6); ctx.restore();
+      words('السيارات أول قطاع تصدير في المغرب', 0, 330, 54, B.shareTx[0], B.shareTx[1], t, { out: [B.unroll[0] - 0.1, B.unroll[0] + 0.25] });
+      words('من إجمالي صادرات 2025', 0, 400, 34, B.shareTx[0] + 0.25, B.shareTx[1] + 0.25, t, { font: 'Tajawal', alpha: 0.6, out: [B.unroll[0] - 0.1, B.unroll[0] + 0.25] }); }
+    // shot 3: the road, the car, the counter
+    if (un > 0) {
+      const tip = Lf / 2 - Lf * fill, ca = prog(t, B.unroll[1] - 0.2, B.unroll[1] + 0.2) * (1 - prog(t, B.out[0], B.out[1]));
+      if (ca > 0) car(tip, yF - 8, 1.25, ca);   // the car leads the red line, driving right-to-left
+      const kk = prog(t, B.count[0], B.count[0] + 0.3) * (1 - sine(prog(t, ...B.out)));
+      if (kk > 0) { const v = Math.round(1e6 * outExpo(prog(t, B.count[0], B.count[1])) / 1000) * 1000; ctx.save(); ctx.globalAlpha = kk; ctx.filter = `blur(${(1 - kk) * 8 * SCALE}px)`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.font = '700 168px Cairo'; ctx.fillStyle = C.ink; ctx.fillText(v.toLocaleString('en-US'), 0, -62);
+        const nw = ctx.measureText('1,000,000').width; ctx.font = '700 110px Cairo'; ctx.fillStyle = C.gold; ctx.textAlign = 'right'; ctx.fillText('≈', -nw / 2 - 24, -78); ctx.restore(); }
+      words('طاقة إنتاجية تقارب مليون سيارة سنوياً', 0, 190, 50, B.countTx[0], B.countTx[1], t, { out: B.out });
+    }
+  }
+  // ---------- shot 4: the closing line sits on the shrunken road ----------
+  words('المغرب يصنع المستقبل', 0, 30, 110, B.final[0], B.final[1], t, { color: C.ink, color2: '#E9DCC0' });
+  const sa = prog(t, B.final[1] - 0.1, B.final[1] + 0.5);
+  if (sa > 0) { ctx.save(); ctx.globalAlpha = 0.42 * sa; ctx.font = '700 26px Tajawal'; ctx.fillStyle = C.ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('المصادر: بنك المغرب 2025، Morocco World News', 0, 440 / push); ctx.restore(); }
+}
+
+window.TOTAL = B.END; window.renderAt = t => render(t);
+window.ready = Promise.all([fetch('map.json').then(r => r.json()).then(m => MAP = m), document.fonts.load('700 50px Cairo'), document.fonts.load('700 50px Tajawal')])
+  .then(() => { if (q.has('t')) render(parseFloat(q.get('t'))); else (function tick(n) { render((n / 1000) % B.END); requestAnimationFrame(tick); })(0); return true; });
+</script></body></html>
